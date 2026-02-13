@@ -37,13 +37,25 @@ make install
 cmake .. -DBUILD_TESTING=ON
 make -j$(nproc)
 
-# Run tests
+# Run all tests
 ./src/test/unit_tests
 # or
 ctest
+
+# Run a single test by filter
+./src/test/unit_tests --gtest_filter=TestSuiteName.TestName
 ```
 
 Tests use Google Test and live in `src/test/`. The test binary links against the `game` library.
+
+### Windows build (Visual Studio)
+
+```powershell
+mkdir build && cd build
+cmake .. -G "Visual Studio 17 2022" -A x64 -DSCRIPTS=static -DMODULES=static -DTOOLS_BUILD=all
+# Then open AzerothCore.sln or build from CLI:
+cmake --build . --config RelWithDebInfo
+```
 
 ## Architecture
 
@@ -118,6 +130,19 @@ Type(Scope/Subscope): Short description (max 50 chars)
 
 ## PR Requirements
 
-- AI tool usage must be disclosed in PRs
+- AI tool usage must be disclosed in PRs (checkbox in PR template)
 - In-game testing expected
 - Changes to generic code require regression testing of related systems
+- Cherry-picks from other projects (TrinityCore, CMaNGOS, etc.) must use `--author` tag to credit original authors
+- Sources should be provided where possible (sniffs, live research, video evidence, Wowhead)
+
+## Nix Development Shell
+
+If using Nix, a `flake.nix` is provided with all dependencies (clang, cmake, mysql, openssl, boost, etc.):
+```bash
+nix develop
+```
+
+## Docker
+
+A `docker-compose.yml` is available for containerized development. See [wiki](http://www.azerothcore.org/wiki/installation) for Docker setup details.
