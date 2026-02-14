@@ -559,6 +559,8 @@ protected:
     float m_VisibleDistance;
     DynamicMapTree _dynamicTree;
     time_t _instanceResetPeriod; // pussywizard
+    std::string _metricMapIdStr;
+    std::string _metricInstanceIdStr;
 
     MapRefMgr m_mapRefMgr;
     MapRefMgr::iterator m_mapRefIter;

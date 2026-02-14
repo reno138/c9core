@@ -911,11 +911,12 @@ void WorldSession::HandleTimeSyncResp(WorldPacket& recvData)
     uint32 counter, clientTimestamp;
     recvData >> counter >> clientTimestamp;
 
-    if (_pendingTimeSyncRequests.count(counter) == 0)
+    auto it = _pendingTimeSyncRequests.find(counter);
+    if (it == _pendingTimeSyncRequests.end())
         return;
 
-    uint32 serverTimeAtSent = _pendingTimeSyncRequests.at(counter);
-    _pendingTimeSyncRequests.erase(counter);
+    uint32 serverTimeAtSent = it->second;
+    _pendingTimeSyncRequests.erase(it);
 
     // time it took for the request to travel to the client, for the client to process it and reply and for response to travel back to the server.
     // we are going to make 2 assumptions:
@@ -943,17 +944,21 @@ void WorldSession::ComputeNewClockDelta()
     // implementation of the technique described here: https://web.archive.org/web/20180430214420/http://www.mine-control.com/zack/timesync/timesync.html
     // to reduce the skew induced by dropped TCP packets that get resent.
 
-    std::vector<uint32> latencies;
-    std::vector<int64> clockDeltasAfterFiltering;
+    auto queueContent = _timeSyncClockDeltaQueue.content();
 
-    for (auto& pair : _timeSyncClockDeltaQueue.content())
+    std::vector<uint32> latencies;
+    latencies.reserve(queueContent.size());
+    std::vector<int64> clockDeltasAfterFiltering;
+    clockDeltasAfterFiltering.reserve(queueContent.size());
+
+    for (auto const& pair : queueContent)
         latencies.push_back(pair.second);
 
     uint32 latencyMedian = median(latencies);
     uint32 latencyStandardDeviation = standard_deviation(latencies);
 
     uint32 sampleSizeAfterFiltering = 0;
-    for (auto& pair : _timeSyncClockDeltaQueue.content())
+    for (auto const& pair : queueContent)
     {
         if (pair.second <= latencyMedian + latencyStandardDeviation)
         {

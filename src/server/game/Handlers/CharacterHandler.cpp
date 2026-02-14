@@ -2444,23 +2444,32 @@ void WorldSession::HandleCharFactionOrRaceChangeCallback(std::shared_ptr<Charact
                 trans->Append(stmt);
             }
 
-            // Reputation conversion
+            // Reputation conversion - fetch all reputations in a single query
+            std::unordered_map<uint32, int32> repStandings;
+            {
+                stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_REP_BY_GUID);
+                stmt->SetData(0, lowGuid);
+                PreparedQueryResult repResult = CharacterDatabase.Query(stmt);
+                if (repResult)
+                {
+                    do
+                    {
+                        Field* repFields = repResult->Fetch();
+                        repStandings[repFields[0].Get<uint32>()] = repFields[1].Get<int32>();
+                    } while (repResult->NextRow());
+                }
+            }
+
             for (auto const& [reputation_alliance, reputation_horde] : sObjectMgr->FactionChangeReputation)
             {
                 uint32 newReputation = (newTeam == TEAM_ALLIANCE) ? reputation_alliance : reputation_horde;
                 uint32 oldReputation = (newTeam == TEAM_ALLIANCE) ? reputation_horde : reputation_alliance;
 
-                // select old standing set in db
-                stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHAR_REP_BY_FACTION);
-                stmt->SetData(0, oldReputation);
-                stmt->SetData(1, lowGuid);
-
-                PreparedQueryResult result = CharacterDatabase.Query(stmt);
-                if (!result)
+                auto repItr = repStandings.find(oldReputation);
+                if (repItr == repStandings.end())
                     continue;
 
-                fields = result->Fetch();
-                int32 oldDBRep = fields[0].Get<int32>();
+                int32 oldDBRep = repItr->second;
                 FactionEntry const* factionEntry = sFactionStore.LookupEntry(oldReputation);
 
                 // old base reputation

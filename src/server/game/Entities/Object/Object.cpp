@@ -245,7 +245,8 @@ void Object::SendUpdateToPlayer(Player* player)
 
 void Object::BuildValuesUpdateBlockForPlayer(UpdateData* data, Player* target)
 {
-    ByteBuffer buf(500);
+    thread_local ByteBuffer buf(500);
+    buf.clear();
 
     buf << (uint8) UPDATETYPE_VALUES;
     buf << GetPackGUID();
@@ -533,15 +534,7 @@ void Object::ClearUpdateMask(bool remove)
 
 void Object::BuildFieldsUpdate(Player* player, UpdateDataMapType& data_map)
 {
-    UpdateDataMapType::iterator iter = data_map.find(player);
-
-    if (iter == data_map.end())
-    {
-        std::pair<UpdateDataMapType::iterator, bool> p = data_map.insert(UpdateDataMapType::value_type(player, UpdateData()));
-        ASSERT(p.second);
-        iter = p.first;
-    }
-
+    auto [iter, inserted] = data_map.try_emplace(player);
     BuildValuesUpdateBlockForPlayer(&iter->second, iter->first);
 }
 
@@ -1734,38 +1727,12 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool ignoreStealth, boo
     if (obj->IsAlwaysVisibleFor(this) || CanAlwaysSee(obj))
         return true;
 
-    // Creature scripts
-    if (Creature const* cObj = obj->ToCreature())
-    {
-        if (Player const* player = ToPlayer())
-        {
-            if (cObj->IsAIEnabled && !cObj->AI()->CanBeSeen(player))
-            {
-                return false;
-            }
-
-            ConditionList conditions = sConditionMgr->GetConditionsForNotGroupedEntry(CONDITION_SOURCE_TYPE_CREATURE_VISIBILITY, cObj->GetEntry());
-            if (!sConditionMgr->IsObjectMeetToConditions((WorldObject*)this, (WorldObject*)obj, conditions))
-            {
-                return false;
-            }
-        }
-    }
-
-    // Gameobject scripts
-    if (GameObject const* goObj = obj->ToGameObject())
-    {
-        if (ToPlayer() && !goObj->AI()->CanBeSeen(ToPlayer()))
-        {
-            return false;
-        }
-    }
-
     // pussywizard: arena spectator
     if (obj->IsPlayer())
         if (((Player const*)obj)->IsSpectator() && ((Player const*)obj)->FindMap()->IsBattleArena())
             return false;
 
+    // Distance check first — cheaply filters out most objects before expensive script/condition checks
     bool corpseVisibility = false;
     if (distanceCheck)
     {
@@ -1821,6 +1788,34 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool ignoreStealth, boo
         // Xinef: check reversely obj vs viewpoint, object could be a gameObject which overrides _IsWithinDist function to include gameobject size
         if (!corpseCheck && !viewpoint->IsWithinDist(obj, GetSightRange(obj), false))
             return false;
+    }
+
+    // Creature scripts — after distance check to avoid expensive work for out-of-range objects
+    if (Creature const* cObj = obj->ToCreature())
+    {
+        if (Player const* player = ToPlayer())
+        {
+            if (cObj->IsAIEnabled && !cObj->AI()->CanBeSeen(player))
+            {
+                return false;
+            }
+
+            if (cObj->GetCreatureTemplate()->hasVisibilityConditions)
+            {
+                ConditionList conditions = sConditionMgr->GetConditionsForNotGroupedEntry(CONDITION_SOURCE_TYPE_CREATURE_VISIBILITY, cObj->GetEntry());
+                if (!sConditionMgr->IsObjectMeetToConditions((WorldObject*)this, (WorldObject*)obj, conditions))
+                    return false;
+            }
+        }
+    }
+
+    // Gameobject scripts
+    if (GameObject const* goObj = obj->ToGameObject())
+    {
+        if (ToPlayer() && !goObj->AI()->CanBeSeen(ToPlayer()))
+        {
+            return false;
+        }
     }
 
     // GM visibility off or hidden NPC

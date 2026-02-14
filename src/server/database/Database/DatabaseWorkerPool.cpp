@@ -34,6 +34,7 @@
 #include <limits>
 #include <mysqld_error.h>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 #ifdef ACORE_DEBUG
@@ -500,6 +501,10 @@ T* DatabaseWorkerPool<T>::GetFreeConnection()
         //! Must be matched with t->Unlock() or you will get deadlocks
         if (connection->LockIfReady())
             break;
+
+        // Yield after trying all connections to avoid CPU spinning
+        if (i % num_cons == 0)
+            std::this_thread::yield();
     }
 
     return connection;

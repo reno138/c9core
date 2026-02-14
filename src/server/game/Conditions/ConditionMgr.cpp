@@ -1345,6 +1345,17 @@ void ConditionMgr::LoadConditions(bool isReload)
         ++count;
     } while (result->NextRow());
 
+    // Mark creature templates that have visibility conditions
+    auto visCondItr = ConditionStore.find(CONDITION_SOURCE_TYPE_CREATURE_VISIBILITY);
+    if (visCondItr != ConditionStore.end())
+    {
+        for (auto const& [entry, condList] : visCondItr->second)
+        {
+            if (CreatureTemplate const* cTemplate = sObjectMgr->GetCreatureTemplate(entry))
+                const_cast<CreatureTemplate*>(cTemplate)->hasVisibilityConditions = true;
+        }
+    }
+
     LOG_INFO("server.loading", ">> Loaded {} conditions in {} ms", count, GetMSTimeDiffToNow(oldMSTime));
     LOG_INFO("server.loading", " ");
 }

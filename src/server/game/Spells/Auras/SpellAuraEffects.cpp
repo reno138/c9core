@@ -2768,9 +2768,10 @@ void AuraEffect::HandleAuraTransform(AuraApplication const* aurApp, uint8 mode, 
         // Dragonmaw Illusion (restore mount model)
         if (GetId() == 42016 && target->GetMountID() == 16314)
         {
-            if (!target->GetAuraEffectsByType(SPELL_AURA_MOUNTED).empty())
+            auto const& mountedAuras = target->GetAuraEffectsByType(SPELL_AURA_MOUNTED);
+            if (!mountedAuras.empty())
             {
-                uint32 cr_id = target->GetAuraEffectsByType(SPELL_AURA_MOUNTED).front()->GetMiscValue();
+                uint32 cr_id = mountedAuras.front()->GetMiscValue();
                 if (CreatureTemplate const* ci = sObjectMgr->GetCreatureTemplate(cr_id))
                 {
                     CreatureModel model = *ObjectMgr::ChooseDisplayId(ci);

@@ -409,12 +409,19 @@ uint32 Aura::GetId() const
 
 Unit* Aura::GetCaster() const
 {
-    if (GetOwner()->GetGUID() == GetCasterGUID())
-        return GetUnitOwner();
-    if (AuraApplication const* aurApp = GetApplicationOfTarget(GetCasterGUID()))
-        return aurApp->GetTarget();
+    if (m_cachedCaster && m_cachedCaster->IsInWorld() && m_cachedCaster->GetGUID() == GetCasterGUID())
+        return m_cachedCaster;
 
-    return ObjectAccessor::GetUnit(*GetOwner(), GetCasterGUID());
+    Unit* caster = nullptr;
+    if (GetOwner()->GetGUID() == GetCasterGUID())
+        caster = GetUnitOwner();
+    else if (AuraApplication const* aurApp = GetApplicationOfTarget(GetCasterGUID()))
+        caster = aurApp->GetTarget();
+    else
+        caster = ObjectAccessor::GetUnit(*GetOwner(), GetCasterGUID());
+
+    m_cachedCaster = caster;
+    return caster;
 }
 
 AuraObjectType Aura::GetType() const

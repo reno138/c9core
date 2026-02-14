@@ -72,6 +72,8 @@ Map::Map(uint32 id, uint32 InstanceId, uint8 SpawnMode, Map* _parent) :
     _transportsUpdateIter(_transports.end()), i_scriptLock(false), _defaultLight(GetDefaultMapLight(id))
 {
     m_parentMap = (_parent ? _parent : this);
+    _metricMapIdStr = std::to_string(id);
+    _metricInstanceIdStr = std::to_string(InstanceId);
 
     _zonePlayerCountMap.clear();
     _updatableObjectListRecheckTimer.SetInterval(UPDATABLE_OBJECT_LIST_RECHECK_TIMER);
@@ -511,12 +513,12 @@ void Map::Update(const uint32 t_diff, const uint32 s_diff, bool  /*thread*/)
     sScriptMgr->OnMapUpdate(this, t_diff);
 
     METRIC_VALUE("map_creatures", uint64(GetObjectsStore().Size<Creature>()),
-        METRIC_TAG("map_id", std::to_string(GetId())),
-        METRIC_TAG("map_instanceid", std::to_string(GetInstanceId())));
+        METRIC_TAG("map_id", _metricMapIdStr),
+        METRIC_TAG("map_instanceid", _metricInstanceIdStr));
 
     METRIC_VALUE("map_gameobjects", uint64(GetObjectsStore().Size<GameObject>()),
-        METRIC_TAG("map_id", std::to_string(GetId())),
-        METRIC_TAG("map_instanceid", std::to_string(GetInstanceId())));
+        METRIC_TAG("map_id", _metricMapIdStr),
+        METRIC_TAG("map_instanceid", _metricInstanceIdStr));
 }
 
 void Map::UpdateNonPlayerObjects(uint32 const diff)
@@ -1710,14 +1712,12 @@ void Map::SendObjectUpdates()
 {
     UpdateDataMapType update_players;
 
-    while (!_updateObjects.empty())
+    for (Object* obj : _updateObjects)
     {
-        Object* obj = *_updateObjects.begin();
         ASSERT(obj->IsInWorld());
-
-        _updateObjects.erase(_updateObjects.begin());
         obj->BuildUpdate(update_players);
     }
+    _updateObjects.clear();
 
     WorldPacket packet;                                     // here we allocate a std::vector with a size of 0x10000
     for (UpdateDataMapType::iterator iter = update_players.begin(); iter != update_players.end(); ++iter)
