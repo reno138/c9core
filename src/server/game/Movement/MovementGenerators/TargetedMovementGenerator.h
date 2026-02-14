@@ -84,6 +84,15 @@ private:
     bool _mutualChase = true;
 
     ChaseMovementMode m_currentMode;
+
+    // LOS cache to avoid expensive raycasts every tick
+    TimeTrackerSmall _losRecheckTimer{0};
+    Optional<bool> _lastLOSResult;
+    Optional<Position> _lastLOSTargetPosition;
+
+    // Failed path cache to avoid retrying impossible paths
+    Optional<Position> _lastFailedPathDest;
+    TimeTrackerSmall _failedPathCooldown{0};
 };
 
 template<class T>

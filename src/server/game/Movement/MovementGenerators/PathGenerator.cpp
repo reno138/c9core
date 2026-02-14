@@ -958,6 +958,19 @@ dtStatus PathGenerator::FindSmoothPath(float const* startPos, float const* endPo
             dtVcopy(&smoothPath[nsmoothPath * VERTEX_SIZE], iterPos);
             nsmoothPath++;
         }
+
+        // Early exit: if we're close enough to the target, snap to it
+        float distToTarget = dtVdistSqr(iterPos, targetPos);
+        if (distToTarget < SMOOTH_PATH_STEP_SIZE * SMOOTH_PATH_STEP_SIZE)
+        {
+            dtVcopy(iterPos, targetPos);
+            if (nsmoothPath < maxSmoothPathSize)
+            {
+                dtVcopy(&smoothPath[nsmoothPath * VERTEX_SIZE], iterPos);
+                nsmoothPath++;
+            }
+            break;
+        }
     }
 
     *smoothPathSize = nsmoothPath;

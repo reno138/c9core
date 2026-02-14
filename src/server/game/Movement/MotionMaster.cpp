@@ -120,16 +120,15 @@ void MotionMaster::UpdateMotion(uint32 diff)
     else
         _cleanFlag &= ~MMCF_UPDATE;
 
-    if (_expList)
+    if (!_expList.empty())
     {
-        for (std::size_t i = 0; i < _expList->size(); ++i)
+        for (std::size_t i = 0; i < _expList.size(); ++i)
         {
-            MovementGenerator* mg = (*_expList)[i];
+            MovementGenerator* mg = _expList[i];
             DirectDelete(mg);
         }
 
-        delete _expList;
-        _expList = nullptr;
+        _expList.clear();
 
         if (empty())
             Initialize();
@@ -1004,9 +1003,7 @@ void MotionMaster::DelayedDelete(_Ty curr)
     LOG_DEBUG("movement.motionmaster", "Unit (Entry {}) is trying to delete its updating MG (Type {})!", _owner->GetEntry(), curr->GetMovementGeneratorType());
     if (isStatic(curr))
         return;
-    if (!_expList)
-        _expList = new ExpireList();
-    _expList->push_back(curr);
+    _expList.push_back(curr);
 }
 
 bool MotionMaster::GetDestination(float& x, float& y, float& z)

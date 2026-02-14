@@ -157,7 +157,7 @@ private:
     }
     void InitTop();
 public:
-    explicit MotionMaster(Unit* unit) : _expList(nullptr), _top(-1), _owner(unit), _cleanFlag(MMCF_NONE)
+    explicit MotionMaster(Unit* unit) : _top(-1), _owner(unit), _cleanFlag(MMCF_NONE)
     {
         for (uint8 i = 0; i < MAX_MOTION_SLOT; ++i)
         {
@@ -285,7 +285,7 @@ private:
     void DelayedExpire();
 
     typedef std::vector<_Ty> ExpireList;
-    ExpireList* _expList;
+    ExpireList _expList;
     _Ty Impl[MAX_MOTION_SLOT];
     int _top;
     Unit* _owner;

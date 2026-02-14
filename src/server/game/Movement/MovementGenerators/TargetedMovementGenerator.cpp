@@ -280,8 +280,34 @@ bool ChaseMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
     if (m_currentMode == CHASE_MODE_DISTANCING)
         return true;
 
-    // if the target moved, we have to consider whether to adjust
-    if (!_lastTargetPosition || target->GetPosition() != _lastTargetPosition.value() || mutualChase != _mutualChase || !owner->IsWithinLOSInMap(target))
+    // if the target moved significantly, we have to consider whether to adjust
+    bool targetMoved = !_lastTargetPosition || mutualChase != _mutualChase;
+    if (!targetMoved && _lastTargetPosition)
+    {
+        float dx = target->GetPositionX() - _lastTargetPosition->GetPositionX();
+        float dy = target->GetPositionY() - _lastTargetPosition->GetPositionY();
+        float dz = target->GetPositionZ() - _lastTargetPosition->GetPositionZ();
+        targetMoved = (dx * dx + dy * dy + dz * dz) > 2.25f; // 1.5 yards squared
+    }
+
+    // Cache LOS checks (expensive raycast) - recheck every 500ms or when target moves > 5 yards
+    _losRecheckTimer.Update(time_diff);
+    bool losValid = _lastLOSResult.has_value() && !_losRecheckTimer.Passed();
+    if (losValid && _lastLOSTargetPosition)
+    {
+        float dx = target->GetPositionX() - _lastLOSTargetPosition->GetPositionX();
+        float dy = target->GetPositionY() - _lastLOSTargetPosition->GetPositionY();
+        if (dx * dx + dy * dy > 25.0f) // 5 yards squared
+            losValid = false;
+    }
+    if (!losValid)
+    {
+        _lastLOSResult = owner->IsWithinLOSInMap(target);
+        _lastLOSTargetPosition = target->GetPosition();
+        _losRecheckTimer.Reset(500);
+    }
+
+    if (targetMoved || !_lastLOSResult.value())
     {
         _lastTargetPosition = target->GetPosition();
         _mutualChase = mutualChase;
@@ -303,8 +329,8 @@ bool ChaseMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
             bool withinLOS = owner->IsWithinLOS(x, y, z);
             bool moveToward = !(withinRange && withinLOS);
 
-            // make a new path if we have to...
-            if (!i_path || moveToward != _movingTowards)
+            // reuse existing PathGenerator to avoid allocation
+            if (!i_path)
                 i_path = std::make_unique<PathGenerator>(owner);
             else
                 i_path->Clear();
@@ -359,7 +385,29 @@ bool ChaseMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
                 }
             }
 
-            DispatchSplineToPosition(owner, x, y, z, walk, shortenPath, maxTarget, forceDest, true);
+            // Skip pathfinding if we recently failed to reach same destination
+            _failedPathCooldown.Update(time_diff);
+            bool skipPath = false;
+            if (_lastFailedPathDest && !_failedPathCooldown.Passed())
+            {
+                float fdx = x - _lastFailedPathDest->GetPositionX();
+                float fdy = y - _lastFailedPathDest->GetPositionY();
+                if (fdx * fdx + fdy * fdy < 9.0f) // within 3 yards of last failed dest
+                    skipPath = true;
+            }
+
+            if (!skipPath)
+            {
+                if (!DispatchSplineToPosition(owner, x, y, z, walk, shortenPath, maxTarget, forceDest, true))
+                {
+                    _lastFailedPathDest = Position(x, y, z);
+                    _failedPathCooldown.Reset(5000); // 5 second cooldown
+                }
+                else
+                {
+                    _lastFailedPathDest.reset();
+                }
+            }
         }
     }
 
@@ -578,6 +626,20 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
             followingMaster = true;
     }
 
+    // Sync transport state between pet and owner
+    if (cOwner && followingMaster)
+    {
+        Transport* ownerTransport = owner->GetTransport();
+        Transport* targetTransport = target->GetTransport();
+        if (ownerTransport != targetTransport)
+        {
+            if (ownerTransport)
+                ownerTransport->RemovePassenger(owner, true);
+            if (targetTransport)
+                targetTransport->AddPassenger(owner, true);
+        }
+    }
+
     bool forceDest =
         (followingMaster) || // allow pets following their master to cheat while generating paths
         (i_target->IsPlayer() && i_target->ToPlayer()->IsGameMaster()) // for .npc follow
@@ -664,6 +726,18 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
                     float teleZ;
 
                     target->GetClosePoint(teleX, teleY, teleZ, owner->GetCombatReach());
+
+                    // Sync transport state before teleporting
+                    if (Transport* transport = target->GetTransport())
+                    {
+                        if (!owner->GetTransport())
+                            transport->AddPassenger(owner, true);
+                    }
+                    else if (owner->GetTransport())
+                    {
+                        owner->GetTransport()->RemovePassenger(owner, true);
+                    }
+
                     owner->NearTeleportTo(teleX, teleY, teleZ, target->GetOrientation());
                     _lastTargetPosition.reset();
                     _lastPredictedPosition.reset();

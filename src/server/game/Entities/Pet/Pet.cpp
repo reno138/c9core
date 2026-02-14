@@ -33,6 +33,7 @@
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
 #include "SpellMgr.h"
+#include "Transport.h"
 #include "Unit.h"
 #include "Util.h"
 #include "WorldPacket.h"
@@ -338,6 +339,21 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
     float px, py, pz;
     owner->GetClosePoint(px, py, pz, GetCombatReach(), PET_FOLLOW_DIST, GetFollowAngle());
     Relocate(px, py, pz, owner->GetOrientation());
+
+    // Inherit transport state from owner so pet spawns on the transport deck
+    if (Transport* transport = owner->GetTransport())
+    {
+        float tx = px, ty = py, tz = pz, to = owner->GetOrientation();
+        transport->CalculatePassengerOffset(tx, ty, tz, &to);
+
+        SetTransport(transport);
+        m_movementInfo.flags |= MOVEMENTFLAG_ONTRANSPORT;
+        m_movementInfo.transport.guid = transport->GetGUID();
+        m_movementInfo.transport.pos.Relocate(tx, ty, tz, to);
+        AddUnitState(UNIT_STATE_IGNORE_PATHFINDING);
+        transport->AddPassenger(this, false);
+    }
+
     if (!IsPositionValid())
     {
         LOG_ERROR("entities.pet", "Pet {} not loaded. Suggested coordinates isn't valid (X: {} Y: {})",
