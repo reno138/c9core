@@ -4,19 +4,19 @@
 
 #include "DetourExtended.h"
 #include "DetourCommon.h"
-#include "Geometry.h"
+
+#include <cmath>
 
 float dtQueryFilterExt::getCost(const float* pa, const float* pb,
                 const dtPolyRef /*prevRef*/, const dtMeshTile* /*prevTile*/, const dtPoly* /*prevPoly*/,
                 const dtPolyRef /*curRef*/, const dtMeshTile* /*curTile*/, const dtPoly* curPoly,
                 const dtPolyRef /*nextRef*/, const dtMeshTile* /*nextTile*/, const dtPoly* /*nextPoly*/) const
 {
-    float startX = pa[2], startY = pa[0], startZ = pa[1];
-    float destX = pb[2], destY = pb[0], destZ = pb[1];
-    float slopeAngle = getSlopeAngle(startX, startY, startZ, destX, destY, destZ);
-    float slopeAngleDegree = (slopeAngle * 180.0f / M_PI);
-    float cost = slopeAngleDegree > 0 ? 1.0f + (1.0f * (slopeAngleDegree / 100)) : 1.0f;
     float dist = dtVdist(pa, pb);
-    auto totalCost = dist * cost * getAreaCost(curPoly->getArea());
-    return totalCost;
+    // Trig-free slope cost: replaces atan+degrees with direct height ratio.
+    // For walkable slopes (0-50°), sin(angle) * 180/(pi*100) ≈ 0.573 * dz/dist
+    // which closely approximates the original formula: 1 + atan-degrees/100
+    float dz = std::abs(pa[1] - pb[1]);
+    float slopeCost = (dist > 1e-6f) ? 1.0f + 0.573f * dz / dist : 1.0f;
+    return dist * slopeCost * getAreaCost(curPoly->getArea());
 }

@@ -41,6 +41,11 @@ class WorldObject;
 #define VERTEX_SIZE       3
 #define INVALID_POLYREF   0
 
+// Sliced pathfinding iteration budget - caps CPU per path request
+#define SLICED_PATH_MAX_ITERATIONS  256
+// Distance threshold (world units) above which sliced+ANY_ANGLE pathfinding is used
+#define SLICED_PATH_DISTANCE_THRESHOLD 40.0f
+
 enum PathType
 {
     PATHFIND_BLANK             = 0x00,   // path not built yet
@@ -139,6 +144,8 @@ class PathGenerator
         bool _slopeCheck;       // when set, it skips paths with too high slopes (doesn't work with _useStraightPath)
         uint32 _pointPathLimit; // limit point path size; min(this, MAX_POINT_PATH_LENGTH)
         bool _useRaycast;       // use raycast if true for a straight line path
+        mutable uint32 _lastPolyIndex;  // hint for GetPathPolyByPosition to start search near last known position
+        uint16 _lastFilterFlags; // cached filter include flags to avoid redundant UpdateFilter() work
 
         G3D::Vector3 _startPosition;        // {x, y, z} of current location
         G3D::Vector3 _endPosition;          // {x, y, z} of the destination

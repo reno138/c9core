@@ -26,7 +26,7 @@
 #define SIZE_OF_GRIDS            533.3333f
 
 #define MMAP_MAGIC 0x4d4d4150   // 'MMAP'
-#define MMAP_VERSION 19
+#define MMAP_VERSION 20
 
 struct MmapTileRecastConfig
 {
@@ -92,7 +92,7 @@ enum NavTerrain
     NAV_MAGMA   = 0x02,
     NAV_SLIME   = 0x04,
     NAV_WATER   = 0x08,
-    NAV_UNUSED1 = 0x10,
+    NAV_GROUND_STEEP = 0x10, // slope > 30 degrees, higher traversal cost
     NAV_UNUSED2 = 0x20,
     NAV_UNUSED3 = 0x40,
     NAV_UNUSED4 = 0x80

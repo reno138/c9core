@@ -762,11 +762,50 @@ namespace MMAP
         delete[] dmmerge;
         delete[] tiles;
 
-        // set polygons as walkable
-        /// @todo: special flags for DYNAMIC polygons, ie surfaces that can be turned on and off
+        // Classify polygon areas by slope for runtime cost optimization.
+        // Steep polygons (>30 degrees) get NAV_GROUND_STEEP for higher
+        // traversal cost, eliminating runtime trig in getCost().
         for (int i = 0; i < iv.polyMesh->npolys; ++i)
-            if (iv.polyMesh->areas[i] & RC_WALKABLE_AREA)
-                iv.polyMesh->flags[i] = iv.polyMesh->areas[i];
+        {
+            if (!(iv.polyMesh->areas[i] & RC_WALKABLE_AREA))
+                continue;
+
+            // Compute max height difference across polygon vertices
+            const unsigned short* poly = &iv.polyMesh->polys[i * 2 * iv.polyMesh->nvp];
+            float minH = FLT_MAX, maxH = -FLT_MAX;
+            float minX = FLT_MAX, maxX = -FLT_MAX;
+            float minZ = FLT_MAX, maxZ = -FLT_MAX;
+            int vertCount = 0;
+            for (int j = 0; j < iv.polyMesh->nvp; ++j)
+            {
+                if (poly[j] == RC_MESH_NULL_IDX)
+                    break;
+                const unsigned short* v = &iv.polyMesh->verts[poly[j] * 3];
+                float vx = iv.polyMesh->bmin[0] + v[0] * iv.polyMesh->cs;
+                float vy = iv.polyMesh->bmin[1] + v[1] * iv.polyMesh->ch;
+                float vz = iv.polyMesh->bmin[2] + v[2] * iv.polyMesh->cs;
+                if (vy < minH) minH = vy;
+                if (vy > maxH) maxH = vy;
+                if (vx < minX) minX = vx;
+                if (vx > maxX) maxX = vx;
+                if (vz < minZ) minZ = vz;
+                if (vz > maxZ) maxZ = vz;
+                vertCount++;
+            }
+
+            if (vertCount >= 3)
+            {
+                float dh = maxH - minH;
+                float dx = maxX - minX;
+                float dz = maxZ - minZ;
+                float horizontalExtent = std::sqrt(dx * dx + dz * dz);
+                // tan(30°) ≈ 0.577 — polygons steeper than this get the steep flag
+                if (horizontalExtent > 0.001f && dh / horizontalExtent > 0.577f)
+                    iv.polyMesh->areas[i] = NAV_GROUND_STEEP;
+            }
+
+            iv.polyMesh->flags[i] = iv.polyMesh->areas[i];
+        }
 
         // setup mesh parameters
         dtNavMeshCreateParams params;

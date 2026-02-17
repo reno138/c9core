@@ -42,6 +42,7 @@ struct dtNode
 	unsigned int state : DT_NODE_STATE_BITS;	///< extra state information. A polyRef can have multiple nodes with different extra info. see DT_MAX_STATES_PER_NODE
 	unsigned int flags : 3;						///< Node flags. A combination of dtNodeFlags.
 	dtPolyRef id;								///< Polygon ref the node corresponds to.
+	int heapIdx;								///< Index in the priority queue heap, -1 if not in heap.
 };
 
 static const int DT_MAX_STATES_PER_NODE = 1 << DT_NODE_STATE_BITS;	// number of extra states per node. See dtNode::state
@@ -118,27 +119,24 @@ public:
 	inline dtNode* pop()
 	{
 		dtNode* result = m_heap[0];
+		result->heapIdx = -1;
 		m_size--;
-		trickleDown(0, m_heap[m_size]);
+		if (m_size > 0)
+			trickleDown(0, m_heap[m_size]);
 		return result;
 	}
-	
+
 	inline void push(dtNode* node)
 	{
 		m_size++;
 		bubbleUp(m_size-1, node);
 	}
-	
+
 	inline void modify(dtNode* node)
 	{
-		for (int i = 0; i < m_size; ++i)
-		{
-			if (m_heap[i] == node)
-			{
-				bubbleUp(i, node);
-				return;
-			}
-		}
+		// O(log n) via tracked heap index instead of O(n) linear scan
+		if (node->heapIdx >= 0 && node->heapIdx < m_size && m_heap[node->heapIdx] == node)
+			bubbleUp(node->heapIdx, node);
 	}
 	
 	inline bool empty() const { return m_size == 0; }

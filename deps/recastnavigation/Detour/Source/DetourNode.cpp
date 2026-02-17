@@ -144,6 +144,7 @@ dtNode* dtNodePool::getNode(dtPolyRef id, unsigned char state)
 	node->id = id;
 	node->state = state;
 	node->flags = 0;
+	node->heapIdx = -1;
 	
 	m_next[i] = m_first[bucket];
 	m_first[bucket] = i;
@@ -176,10 +177,12 @@ void dtNodeQueue::bubbleUp(int i, dtNode* node)
 	while ((i > 0) && (m_heap[parent]->total > node->total))
 	{
 		m_heap[i] = m_heap[parent];
+		m_heap[i]->heapIdx = i;
 		i = parent;
 		parent = (i-1)/2;
 	}
 	m_heap[i] = node;
+	node->heapIdx = i;
 }
 
 void dtNodeQueue::trickleDown(int i, dtNode* node)
@@ -187,12 +190,13 @@ void dtNodeQueue::trickleDown(int i, dtNode* node)
 	int child = (i*2)+1;
 	while (child < m_size)
 	{
-		if (((child+1) < m_size) && 
+		if (((child+1) < m_size) &&
 			(m_heap[child]->total > m_heap[child+1]->total))
 		{
 			child++;
 		}
 		m_heap[i] = m_heap[child];
+		m_heap[i]->heapIdx = i;
 		i = child;
 		child = (i*2)+1;
 	}
