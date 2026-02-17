@@ -718,7 +718,7 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
             // Teleport if stuck and too far away
             if (cOwner && isFollowingPlayer)
             {
-                float distance = owner->GetDistance(target);
+                float const distance = owner->GetDistance2d(target);
                 if (distance > 20.f)
                 {
                     float teleX;
@@ -726,6 +726,7 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
                     float teleZ;
 
                     target->GetClosePoint(teleX, teleY, teleZ, owner->GetCombatReach());
+                    teleZ = owner->GetMapHeight(teleX, teleY, teleZ);
 
                     // Sync transport state before teleporting
                     if (Transport* transport = target->GetTransport())
