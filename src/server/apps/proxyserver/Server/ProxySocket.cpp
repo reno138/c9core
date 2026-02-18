@@ -52,8 +52,7 @@ void ProxySocket::Start()
         sProxySocketMgr.GetIoContext(),
         shared_from_this());
 
-    std::string backendHost = sConfigMgr->GetOption<std::string>("WorldServer.Address", "127.0.0.1");
-    uint16 backendPort = static_cast<uint16>(sConfigMgr->GetOption<int32>("WorldServer.Port", 8086));
+    auto [backendHost, backendPort] = sProxyMgr.ChooseLeastLoadedNode();
     _backend->Connect(backendHost, backendPort);
 
     AsyncRead();

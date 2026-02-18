@@ -543,6 +543,8 @@ namespace lfg
         void SetComment(ObjectGuid guid, std::string const& comment);
         /// Join Lfg with selected roles, dungeons and comment
         void JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, std::string const& comment);
+        /// Join Lfg queue from cluster relay (remote player, no Player* available on this node).
+        void JoinLfgByData(ObjectGuid guid, uint8 roles, LfgDungeonSet const& dungeons, uint8 teamId);
         /// Leaves lfg
         void LeaveLfg(ObjectGuid guid);
         /// pussywizard: cleans all queues' data

@@ -39,6 +39,7 @@
 #include "ProcessPriority.h"
 #include "SharedDefines.h"
 #include "ControlSocketMgr.h"
+#include "ProxyMgr.h"
 #include "ProxySocketMgr.h"
 #include "SteadyTimer.h"
 #include "Util.h"
@@ -175,11 +176,14 @@ int main(int argc, char** argv)
         std::weak_ptr<boost::asio::steady_timer>(dbPingTimer),
         dbPingInterval, std::placeholders::_1));
 
+    sProxyMgr.LoadNodeConfig();
+
+    uint8 lfgMasterNode = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
+    sProxyMgr.SetLFGMasterNode(lfgMasterNode);
+    LOG_INFO("server.proxyserver", "ProxyMgr: LFG master node = {}", lfgMasterNode);
+
     LOG_INFO("server.proxyserver", "Proxy server listening on {}:{} (client) / {}:{} (control)",
              bindIp, port, bindIp, controlPort);
-    LOG_INFO("server.proxyserver", "Backend world server: {}:{}",
-        sConfigMgr->GetOption<std::string>("WorldServer.Address", "127.0.0.1"),
-        sConfigMgr->GetOption<int32>("WorldServer.Port", 8086));
 
     ioContext->run();
 

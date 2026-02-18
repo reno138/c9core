@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "Config.h"
 #include "DBCStores.h"
 #include "GameTime.h"
 #include "Group.h"
@@ -23,8 +24,17 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "ProxyClient.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+
+static bool IsLFGNonMasterNode()
+{
+    if (!sProxyClient.IsConnected() || sProxyClient.GetNodeId() == 0)
+        return false;
+    uint8 masterNode = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
+    return sProxyClient.GetNodeId() != masterNode;
+}
 
 void BuildPlayerLockDungeonBlock(WorldPacket& data, lfg::LfgLockMap const& lock)
 {
@@ -70,6 +80,15 @@ void WorldSession::HandleLfgJoinOpcode(WorldPackets::LFG::LFGJoin& packet)
     LOG_DEBUG("network", "CMSG_LFG_JOIN [{}] roles: {}, Dungeons: {}, Comment: {}",
                  GetPlayerInfo(), packet.Roles, newDungeons.size(), packet.Comment);
 
+    // On non-master cluster nodes relay the LFG join to the master node.
+    if (IsLFGNonMasterNode())
+    {
+        std::vector<uint32> dungeonVec(newDungeons.begin(), newDungeons.end());
+        sProxyClient.SendLFGJoinRelay(GetPlayer()->GetGUID().GetRawValue(), uint8(packet.Roles), dungeonVec);
+        GetPlayer()->UpdateLFGChannel();
+        return;
+    }
+
     sLFGMgr->JoinLfg(GetPlayer(), uint8(packet.Roles), newDungeons, packet.Comment);
     GetPlayer()->UpdateLFGChannel();
 }
@@ -85,6 +104,14 @@ void WorldSession::HandleLfgLeaveOpcode(WorldPackets::LFG::LFGLeave& /*packet*/)
     // Check cheating - only leader can leave the queue
     if (!group || group->GetLeaderGUID() == guid)
     {
+        // On non-master cluster nodes relay the leave to the master.
+        if (IsLFGNonMasterNode())
+        {
+            sProxyClient.SendLFGLeaveRelay(guid.GetRawValue());
+            GetPlayer()->UpdateLFGChannel();
+            return;
+        }
+
         sLFGMgr->LeaveLfg(sLFGMgr->GetState(guid) == lfg::LFG_STATE_RAIDBROWSER ? guid : gguid);
         sLFGMgr->LeaveAllLfgQueues(guid, true, group ? group->GetGUID() : ObjectGuid::Empty);
     }
@@ -99,6 +126,14 @@ void WorldSession::HandleLfgProposalResultOpcode(WorldPacket& recvData)
     recvData >> accept;
 
     LOG_DEBUG("network", "CMSG_LFG_PROPOSAL_RESULT [{}] proposal: {} accept: {}", GetPlayer()->GetGUID().ToString(), proposalID, accept ? 1 : 0);
+
+    // On non-master cluster nodes relay the proposal result to the master.
+    if (IsLFGNonMasterNode())
+    {
+        sProxyClient.SendLFGProposalResultRelay(proposalID, GetPlayer()->GetGUID().GetRawValue(), accept);
+        return;
+    }
+
     sLFGMgr->UpdateProposal(proposalID, GetPlayer()->GetGUID(), accept);
 }
 

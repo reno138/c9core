@@ -16,8 +16,10 @@
  */
 
 #include "Chat.h"
+#include "ClusterMgr.h"
 #include "DatabaseEnv.h"
 #include "Group.h"
+#include "ProxyClient.h"
 #include "GroupMgr.h"
 #include "LFGMgr.h"
 #include "Language.h"
@@ -78,6 +80,37 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
 
     Player* invitingPlayer = GetPlayer();
     Player* invitedPlayer = ObjectAccessor::FindPlayerByName(membername, false);
+
+    // Check if invitee is on another cluster node.
+    if (!invitedPlayer && sProxyClient.IsConnected())
+    {
+        if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayer(membername))
+        {
+            // Build relay payload: inviter_guid(8) + invitee_guid(8) + name_len(1) + name
+            std::string inviterName = invitingPlayer->GetName();
+            std::vector<uint8> payload;
+            payload.reserve(17 + inviterName.size());
+            uint64 inviterGuid = invitingPlayer->GetGUID().GetRawValue();
+            for (int i = 0; i < 8; ++i)
+                payload.push_back(static_cast<uint8>((inviterGuid >> (i * 8)) & 0xFF));
+            for (int i = 0; i < 8; ++i)
+                payload.push_back(static_cast<uint8>((info->guid >> (i * 8)) & 0xFF));
+            payload.push_back(static_cast<uint8>(inviterName.size()));
+            payload.insert(payload.end(), inviterName.begin(), inviterName.end());
+
+            // Route the relay to the target node (nodeId is populated from PLAYER_ONLINE broadcast).
+            // inner_type 0x01 = CLUSTER_INNER_GROUP_INVITE.
+            sProxyClient.RelayToNode(info->nodeId, 0x01, payload);
+
+            // Track the pending invite on this node keyed by invitee GUID, so when the
+            // GROUP_INVITE_RESULT relays back we can find the inviter.
+            sClusterMgr.SetPendingCrossNodeInvite(info->guid, inviterGuid, inviterName);
+
+            LOG_DEBUG("entities.player", "GroupInvite: Relayed cross-node invite from {} to {} (guid {:016X})",
+                      inviterName, membername, info->guid);
+            return;
+        }
+    }
 
     // no player or cheat self-invite
     if (!invitedPlayer || invitedPlayer == invitingPlayer)
@@ -217,6 +250,25 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
 void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
 {
     recvData.read_skip<uint32>();
+
+    // Cross-node invite: no local group object exists — relay result back to inviter's node.
+    if (sProxyClient.IsConnected())
+    {
+        uint64 myGuid = GetPlayer()->GetGUID().GetRawValue();
+        ClusterMgr::CrossNodeInvite crossInvite;
+        if (sClusterMgr.GetAndClearPendingCrossNodeInvite(myGuid, crossInvite))
+        {
+            ClusterPlayerInfo const* inviterInfo = sClusterMgr.FindRemotePlayerByGuid(crossInvite.inviterGuid);
+            uint8 targetNodeId = inviterInfo ? inviterInfo->nodeId : 0;
+            std::vector<uint8> payload(9);
+            for (int i = 0; i < 8; ++i)
+                payload[i] = static_cast<uint8>((myGuid >> (i * 8)) & 0xFF);
+            payload[8] = 1; // accepted
+            sProxyClient.RelayToNode(targetNodeId, 0x02, payload);
+            return;
+        }
+    }
+
     Group* group = GetPlayer()->GetGroupInvite();
 
     if (!group)
@@ -276,6 +328,24 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
 
 void WorldSession::HandleGroupDeclineOpcode(WorldPacket& /*recvData*/)
 {
+    // Cross-node invite decline: relay result back to inviter's node.
+    if (sProxyClient.IsConnected())
+    {
+        uint64 myGuid = GetPlayer()->GetGUID().GetRawValue();
+        ClusterMgr::CrossNodeInvite crossInvite;
+        if (sClusterMgr.GetAndClearPendingCrossNodeInvite(myGuid, crossInvite))
+        {
+            ClusterPlayerInfo const* inviterInfo = sClusterMgr.FindRemotePlayerByGuid(crossInvite.inviterGuid);
+            uint8 targetNodeId = inviterInfo ? inviterInfo->nodeId : 0;
+            std::vector<uint8> payload(9);
+            for (int i = 0; i < 8; ++i)
+                payload[i] = static_cast<uint8>((myGuid >> (i * 8)) & 0xFF);
+            payload[8] = 0; // declined
+            sProxyClient.RelayToNode(targetNodeId, 0x02, payload);
+            return;
+        }
+    }
+
     Group* group = GetPlayer()->GetGroupInvite();
     if (!group)
         return;

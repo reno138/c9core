@@ -4802,4 +4802,14 @@ WorldServer.Address = "127.0.0.1"
 WorldServer.Port = 8086
 
 #
+#    ClusterServer.LFGMasterNode
+#        Description: Node ID of the worldserver that runs the authoritative LFG/LFD queue.
+#                     Non-master nodes relay CMSG_LFG_JOIN / LEAVE / PROPOSAL_RESULT to this
+#                     node via the proxy control channel. Must be a registered node (1–5).
+#                     Only relevant when ProxyServer.Enable = 1.
+#        Default:     1
+
+ClusterServer.LFGMasterNode = 1
+
+#
 ###################################################################################################

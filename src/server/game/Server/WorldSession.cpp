@@ -43,6 +43,7 @@
 #include "Player.h"
 #include "QueryHolder.h"
 #include "ScriptMgr.h"
+#include "ProxyClient.h"
 #include "SocialMgr.h"
 #include "Transport.h"
 #include "Tokenize.h"
@@ -777,6 +778,8 @@ void WorldSession::LogoutPlayer(bool save)
         }
 
         //! Broadcast a logout message to the player's friends
+        if (sProxyClient.IsConnected())
+            sProxyClient.AnnounceOffline(_player->GetGUID().GetRawValue());
         sSocialMgr->SendFriendStatus(_player, FRIEND_OFFLINE, _player->GetGUID(), true);
         sSocialMgr->RemovePlayerSocial(_player->GetGUID());
 

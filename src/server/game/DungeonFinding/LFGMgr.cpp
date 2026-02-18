@@ -18,6 +18,8 @@
 #include "LFGMgr.h"
 #include "BattlegroundMgr.h"
 #include "Chat.h"
+#include "Config.h"
+#include "ProxyClient.h"
 #include "CharacterCache.h"
 #include "Common.h"
 #include "DBCStores.h"
@@ -807,6 +809,45 @@ namespace lfg
     {
         m_Testing = !m_Testing;
         ChatHandler(nullptr).SendWorldText(m_Testing ? LANG_DEBUG_LFG_ON : LANG_DEBUG_LFG_OFF);
+    }
+
+    /**
+     * @brief Add a remote player to the LFG queue without requiring a Player* object.
+     *
+     * Used by the cluster LFG relay: the master node (Node 1) receives a LFG_JOIN relay
+     * from another worldserver node and inserts the remote player into the queue here.
+     * Validation is skipped — the originating node already checked eligibility.
+     */
+    void LFGMgr::JoinLfgByData(ObjectGuid guid, uint8 roles, LfgDungeonSet const& dungeons, uint8 teamId)
+    {
+        if (dungeons.empty())
+            return;
+
+        // Ensure the player data record exists and has the correct team.
+        SetTeam(guid, TeamId(teamId));
+
+        LfgRolesMap rolesMap;
+        rolesMap[guid] = roles;
+
+        LFGQueue& queue = GetQueue(guid);
+        queue.AddQueueData(guid, GameTime::GetGameTime().count(), dungeons, rolesMap);
+
+        // Expand random dungeon selection if exactly one random dungeon given.
+        LfgDungeonSet expandedDungeons = dungeons;
+        for (uint32 dungeonId : dungeons)
+        {
+            if (GetDungeonType(dungeonId) == LFG_TYPE_RANDOM)
+            {
+                expandedDungeons = GetDungeonsByRandom(dungeonId);
+                break;
+            }
+        }
+        SetSelectedDungeons(guid, expandedDungeons);
+        SetState(guid, LFG_STATE_QUEUED);
+        SetRoles(guid, roles);
+
+        LOG_DEBUG("lfg", "LFGMgr::JoinLfgByData: Remote player [{}] team={} roles={} dungeons={}",
+                  guid.ToString(), teamId, roles, dungeons.size());
     }
 
     /**
@@ -1796,6 +1837,25 @@ namespace lfg
         if (Difficulty(dungeon->difficulty) == DUNGEON_DIFFICULTY_HEROIC)
             grp->AddLfgHeroicFlag();
 
+        // Reroute remote cluster players (on other nodes) to the instance server.
+        if (sProxyClient.IsConnected())
+        {
+            std::string instanceAddr = sConfigMgr->GetOption<std::string>("InstanceServer.Address", "127.0.0.1");
+            uint16 instancePort = static_cast<uint16>(sConfigMgr->GetOption<int32>("InstanceServer.Port", 8087));
+
+            for (ObjectGuid const& pguid : playersToTeleport)
+            {
+                if (ObjectAccessor::FindPlayer(pguid))
+                    continue; // already handled above
+
+                // Not a local player — route them via cluster reroute.
+                SetState(pguid, LFG_STATE_DUNGEON);
+                LOG_DEBUG("lfg", "LFGMgr::MakeNewGroup: Rerouting remote player [{}] to {}:{}",
+                          pguid.ToString(), instanceAddr, instancePort);
+                sProxyClient.SendReroute(pguid.GetRawValue(), instanceAddr, instancePort);
+            }
+        }
+
         // Update group info
         grp->SendUpdate();
     }
@@ -2689,7 +2749,59 @@ namespace lfg
     void LFGMgr::SendLfgUpdateProposal(ObjectGuid guid, LfgProposal const& proposal)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        {
             player->GetSession()->SendLfgUpdateProposal(proposal);
+            return;
+        }
+
+        // Remote player — build the packet from master's data and deliver via proxy.
+        if (!sProxyClient.IsConnected())
+            return;
+
+        auto playerIt = proposal.players.find(guid);
+        if (playerIt == proposal.players.end())
+            return;
+
+        ObjectGuid gguid = playerIt->second.group;
+        bool silent = !proposal.isNew && gguid == proposal.group;
+
+        uint32 dungeonEntry = proposal.dungeonId;
+        if (!silent)
+        {
+            LfgDungeonSet const& playerDungeons = GetSelectedDungeons(guid);
+            if (!playerDungeons.empty() && playerDungeons.find(proposal.dungeonId) == playerDungeons.end())
+                dungeonEntry = (*playerDungeons.begin());
+        }
+        dungeonEntry = GetLFGDungeonEntry(dungeonEntry);
+
+        WorldPacket data(SMSG_LFG_PROPOSAL_UPDATE, 4 + 1 + 4 + 4 + 1 + 1 + proposal.players.size() * (4 + 1 + 1 + 1 + 1 + 1));
+        data << uint32(dungeonEntry);
+        data << uint8(proposal.state);
+        data << uint32(proposal.id);
+        data << uint32(proposal.encounters);
+        data << uint8(silent);
+        data << uint8(proposal.players.size());
+
+        for (auto const& it : proposal.players)
+        {
+            LfgProposalPlayer const& pp = it.second;
+            data << uint32(pp.role);
+            data << uint8(it.first == guid);               // self
+            if (!pp.group)
+            {
+                data << uint8(0);
+                data << uint8(0);
+            }
+            else
+            {
+                data << uint8(pp.group == proposal.group); // in dungeon
+                data << uint8(pp.group == gguid);          // same group as player
+            }
+            data << uint8(pp.accept != LFG_ANSWER_PENDING);
+            data << uint8(pp.accept == LFG_ANSWER_AGREE);
+        }
+
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
     }
 
     void LFGMgr::SendLfgQueueStatus(ObjectGuid guid, LfgQueueStatusData const& data)

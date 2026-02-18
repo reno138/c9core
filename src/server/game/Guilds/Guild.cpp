@@ -18,6 +18,8 @@
 #include "Guild.h"
 #include "Bag.h"
 #include "CalendarMgr.h"
+#include "ClusterMgr.h"
+#include "ProxyClient.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
@@ -2125,9 +2127,20 @@ void Guild::BroadcastToGuild(WorldSession* session, bool officerOnly, std::strin
         WorldPacket data;
         ChatHandler::BuildChatPacket(data, officerOnly ? CHAT_MSG_OFFICER : CHAT_MSG_GUILD, Language(language), session->GetPlayer(), nullptr, msg);
         for (auto const& [guid, member] : m_members)
+        {
             if (Player* player = member.FindPlayer())
+            {
                 if (_HasRankRight(player, officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN) && !player->GetSocial()->HasIgnore(session->GetPlayer()->GetGUID()))
                     player->SendDirectMessage(&data);
+            }
+            else if (sProxyClient.IsConnected() && sClusterMgr.FindRemotePlayerByGuid(member.GetGUID().GetRawValue()))
+            {
+                // Member is online on another node — deliver if rank permits.
+                uint32 rights = _GetRankRights(member.GetRankId());
+                if (rights & (officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN))
+                    sProxyClient.DeliverPacketToPlayer(member.GetGUID().GetRawValue(), data);
+            }
+        }
     }
 }
 

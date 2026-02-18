@@ -16,11 +16,19 @@
  */
 
 #include "ProxyClient.h"
+#include "ClusterMgr.h"
+#include "LFGMgr.h"
+#include "Entities/Player/Player.h"
+#include "Globals/ObjectAccessor.h"
+#include "Groups/Group.h"
 #include "IoContext.h"
 #include "Log.h"
+#include "Opcodes.h"
+#include "WorldPacket.h"
 #include <boost/asio/connect.hpp>
 #include <boost/asio/write.hpp>
 #include <chrono>
+#include <cstring>
 
 void ProxyClient::Initialize(Acore::Asio::IoContext& ioContext, std::string const& address,
                               uint16 controlPort, uint8 serverType, uint16 gamePort)
@@ -31,12 +39,15 @@ void ProxyClient::Initialize(Acore::Asio::IoContext& ioContext, std::string cons
     _serverType  = serverType;
     _gamePort    = gamePort;
 
-    _socket        = std::make_unique<boost::asio::ip::tcp::socket>(*_ioContext);
-    _resolver      = std::make_unique<boost::asio::ip::tcp::resolver>(*_ioContext);
+    _socket         = std::make_unique<boost::asio::ip::tcp::socket>(*_ioContext);
+    _resolver       = std::make_unique<boost::asio::ip::tcp::resolver>(*_ioContext);
     _reconnectTimer = std::make_unique<boost::asio::steady_timer>(*_ioContext);
+    _readBuf.resize(READ_BUFFER_SIZE);
 
     Connect();
 }
+
+// ── Connection management ─────────────────────────────────────────────────────
 
 void ProxyClient::Connect()
 {
@@ -76,50 +87,36 @@ void ProxyClient::OnConnect(boost::system::error_code const& error)
     }
 
     _connected = true;
+    _nodeId    = 0;
+    _accumBuf.clear();
+    _inParseState = InParseState::WaitType;
+
     LOG_INFO("server.worldserver", "ProxyClient: Connected to proxy control channel.");
     SendRegister();
+    AsyncRead();
 }
 
-void ProxyClient::SendRegister()
+void ProxyClient::ScheduleReconnect()
 {
-    // MSG_REGISTER: 0x01 | uint8 server_type | uint16 game_port (LE)
-    std::vector<uint8> msg(4);
-    msg[0] = MSG_REGISTER;
-    msg[1] = _serverType;
-    msg[2] = static_cast<uint8>(_gamePort & 0xFF);
-    msg[3] = static_cast<uint8>(_gamePort >> 8);
+    _connected = false;
+    _nodeId    = 0;
 
-    {
-        std::lock_guard<std::mutex> lock(_queueMutex);
-        _sendQueue.push(std::move(msg));
-    }
+    boost::system::error_code ec;
+    _socket->close(ec);
 
-    AsyncWrite();
+    _reconnectTimer->expires_after(std::chrono::seconds(10));
+    _reconnectTimer->async_wait(
+        [this](boost::system::error_code const& error)
+        {
+            if (!error)
+                Connect();
+        });
 }
 
-void ProxyClient::SendReroute(uint64 playerGuid, std::string const& address, uint16 port)
+// ── Outgoing write loop ───────────────────────────────────────────────────────
+
+void ProxyClient::EnqueueRaw(std::vector<uint8> msg)
 {
-    if (!_connected)
-    {
-        LOG_WARN("server.worldserver", "ProxyClient: SendReroute called but not connected");
-        return;
-    }
-
-    uint8 addrLen = static_cast<uint8>(std::min(address.size(), std::size_t(255)));
-
-    // MSG_REROUTE_PLAYER: 0x02 | uint64 guid | uint8 addr_len | addr | uint16 port
-    std::vector<uint8> msg;
-    msg.reserve(1 + 8 + 1 + addrLen + 2);
-    msg.push_back(MSG_REROUTE_PLAYER);
-
-    for (int i = 0; i < 8; ++i)
-        msg.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
-
-    msg.push_back(addrLen);
-    msg.insert(msg.end(), address.begin(), address.begin() + addrLen);
-    msg.push_back(static_cast<uint8>(port & 0xFF));
-    msg.push_back(static_cast<uint8>(port >> 8));
-
     bool wasEmpty;
     {
         std::lock_guard<std::mutex> lock(_queueMutex);
@@ -165,16 +162,744 @@ void ProxyClient::AsyncWrite()
         });
 }
 
-void ProxyClient::ScheduleReconnect()
+void ProxyClient::SendRegister()
 {
-    _connected = false;
-    _socket->close();
+    // MSG_REGISTER: 0x01 | uint8 server_type | uint16 game_port (LE)
+    std::vector<uint8> msg(4);
+    msg[0] = MSG_REGISTER;
+    msg[1] = _serverType;
+    msg[2] = static_cast<uint8>(_gamePort & 0xFF);
+    msg[3] = static_cast<uint8>(_gamePort >> 8);
 
-    _reconnectTimer->expires_after(std::chrono::seconds(10));
-    _reconnectTimer->async_wait(
-        [this](boost::system::error_code const& error)
+    EnqueueRaw(std::move(msg));
+}
+
+// ── Incoming read loop ────────────────────────────────────────────────────────
+
+void ProxyClient::AsyncRead()
+{
+    if (!_socket || !_socket->is_open())
+        return;
+
+    _socket->async_read_some(boost::asio::buffer(_readBuf),
+        [this](boost::system::error_code const& error, std::size_t transferred)
         {
-            if (!error)
-                Connect();
+            OnRead(error, transferred);
         });
+}
+
+void ProxyClient::OnRead(boost::system::error_code const& error, std::size_t transferred)
+{
+    if (error)
+    {
+        if (_connected)
+        {
+            LOG_WARN("server.worldserver", "ProxyClient: Read error: {} — reconnecting",
+                     error.message());
+            _connected = false;
+            ScheduleReconnect();
+        }
+        return;
+    }
+
+    _accumBuf.insert(_accumBuf.end(), _readBuf.begin(), _readBuf.begin() + transferred);
+    LOG_INFO("server.worldserver", "ProxyClient: Received {} bytes from proxy (total buffered: {})",
+             transferred, _accumBuf.size());
+    ParseIncoming();
+    AsyncRead();
+}
+
+void ProxyClient::ParseIncoming()
+{
+    while (!_accumBuf.empty())
+    {
+        switch (_inParseState)
+        {
+            case InParseState::WaitType:
+            {
+                uint8 msgType = _accumBuf[0];
+                _accumBuf.erase(_accumBuf.begin());
+
+                switch (msgType)
+                {
+                    case MSG_REGISTER_ACK:           _inParseState = InParseState::ReadRegisterAck;      break;
+                    case MSG_CLUSTER_PLAYER_ONLINE:  _inParseState = InParseState::ReadPlayerOnlineMeta; break;
+                    case MSG_CLUSTER_PLAYER_OFFLINE: _inParseState = InParseState::ReadPlayerOffline;    break;
+                    case MSG_CLUSTER_RELAY_TO_NODE:  _inParseState = InParseState::ReadRelayHeader;      break;
+                    case MSG_CLUSTER_GROUP_UPDATE:   _inParseState = InParseState::ReadGroupUpdateMeta;   break;
+                    case MSG_CLUSTER_GROUP_DISBAND:  _inParseState = InParseState::ReadGroupDisband;      break;
+                    case MSG_CLUSTER_LFG_RELAY:      _inParseState = InParseState::ReadLFGRelayHeader;   break;
+                    case MSG_CLUSTER_LFG_RELAY_RESP: _inParseState = InParseState::ReadLFGRelayRespHeader;break;
+                    default:
+                        LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming message type 0x{:02X}", msgType);
+                        _accumBuf.clear(); // desync — drop buffer, reconnect
+                        ScheduleReconnect();
+                        return;
+                }
+                break;
+            }
+
+            case InParseState::ReadRegisterAck:
+            {
+                if (_accumBuf.size() < 1)
+                    return;
+                HandleRegisterAck(_accumBuf[0]);
+                _accumBuf.erase(_accumBuf.begin());
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            case InParseState::ReadPlayerOnlineMeta:
+            {
+                if (_accumBuf.size() < PLAYER_ONLINE_META_SIZE)
+                    return;
+                std::memcpy(&_remotePlayerGuid, _accumBuf.data(), 8);
+                _remotePlayerNameLen = _accumBuf[8];
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + PLAYER_ONLINE_META_SIZE);
+                _inParseState = InParseState::ReadPlayerOnlineBody;
+                break;
+            }
+
+            case InParseState::ReadPlayerOnlineBody:
+            {
+                std::size_t need = static_cast<std::size_t>(_remotePlayerNameLen) + PLAYER_ONLINE_TAIL_SIZE;
+                if (_accumBuf.size() < need)
+                    return;
+                HandleRemotePlayerOnline();
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + need);
+                _remotePlayerGuid    = 0;
+                _remotePlayerNameLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            case InParseState::ReadPlayerOffline:
+            {
+                if (_accumBuf.size() < PLAYER_OFFLINE_SIZE)
+                    return;
+                uint64 guid;
+                std::memcpy(&guid, _accumBuf.data(), 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + PLAYER_OFFLINE_SIZE);
+                HandleRemotePlayerOffline(guid);
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            case InParseState::ReadRelayHeader:
+            {
+                if (_accumBuf.size() < RELAY_HEADER_SIZE)
+                    return;
+                _relayTargetNode = _accumBuf[0];
+                _relayInnerType  = _accumBuf[1];
+                _relayPayloadLen = static_cast<uint16>(_accumBuf[2]) | (static_cast<uint16>(_accumBuf[3]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + RELAY_HEADER_SIZE);
+                _inParseState = InParseState::ReadRelayBody;
+                break;
+            }
+
+            case InParseState::ReadRelayBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_relayPayloadLen))
+                    return;
+                std::vector<uint8> payload(_accumBuf.begin(), _accumBuf.begin() + _relayPayloadLen);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _relayPayloadLen);
+                HandleIncomingRelay(_relayInnerType, payload);
+                _relayTargetNode = 0;
+                _relayInnerType  = 0;
+                _relayPayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            case InParseState::ReadGroupUpdateMeta:
+            {
+                if (_accumBuf.size() < GROUP_UPDATE_META_SIZE)
+                    return;
+                std::memcpy(&_groupUpdateGuid, _accumBuf.data(), 8);
+                _groupUpdateMemberCount = _accumBuf[8];
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + GROUP_UPDATE_META_SIZE);
+                _inParseState = InParseState::ReadGroupUpdateBody;
+                break;
+            }
+
+            case InParseState::ReadGroupUpdateBody:
+            {
+                std::size_t need = static_cast<std::size_t>(_groupUpdateMemberCount) * GROUP_MEMBER_SIZE;
+                if (_accumBuf.size() < need)
+                    return;
+                std::vector<uint8> memberData(_accumBuf.begin(), _accumBuf.begin() + need);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + need);
+                HandleGroupUpdate(_groupUpdateGuid, _groupUpdateMemberCount, memberData);
+                _groupUpdateGuid        = 0;
+                _groupUpdateMemberCount = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            case InParseState::ReadGroupDisband:
+            {
+                if (_accumBuf.size() < GROUP_DISBAND_SIZE)
+                    return;
+                uint64 groupGuid;
+                std::memcpy(&groupGuid, _accumBuf.data(), 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + GROUP_DISBAND_SIZE);
+                HandleGroupDisband(groupGuid);
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_LFG_RELAY (header: uint16 payload_len) ────────────
+            case InParseState::ReadLFGRelayHeader:
+            {
+                if (_accumBuf.size() < LFG_RELAY_HEADER_SIZE)
+                    return;
+                _lfgRelayPayloadLen = static_cast<uint16>(_accumBuf[0]) | (static_cast<uint16>(_accumBuf[1]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + LFG_RELAY_HEADER_SIZE);
+                _inParseState = InParseState::ReadLFGRelayBody;
+                break;
+            }
+
+            case InParseState::ReadLFGRelayBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_lfgRelayPayloadLen))
+                    return;
+                // First byte of body is source_node_id (prepended by proxy).
+                uint8 sourceNodeId = _lfgRelayPayloadLen > 0 ? _accumBuf[0] : 0;
+                std::vector<uint8> payload(_accumBuf.begin() + 1, _accumBuf.begin() + _lfgRelayPayloadLen);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _lfgRelayPayloadLen);
+                HandleLFGRelay(sourceNodeId, payload);
+                _lfgRelayPayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_LFG_RELAY_RESP (header: uint8 target + uint16 len) ─
+            case InParseState::ReadLFGRelayRespHeader:
+            {
+                if (_accumBuf.size() < LFG_RELAY_RESP_HDR_SIZE)
+                    return;
+                _lfgRelayRespTargetNode = _accumBuf[0];
+                _lfgRelayRespPayloadLen = static_cast<uint16>(_accumBuf[1]) | (static_cast<uint16>(_accumBuf[2]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + LFG_RELAY_RESP_HDR_SIZE);
+                _inParseState = InParseState::ReadLFGRelayRespBody;
+                break;
+            }
+
+            case InParseState::ReadLFGRelayRespBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_lfgRelayRespPayloadLen))
+                    return;
+                if (_lfgRelayRespPayloadLen > 0)
+                {
+                    uint8 innerType = _accumBuf[0];
+                    std::vector<uint8> payload(_accumBuf.begin() + 1, _accumBuf.begin() + _lfgRelayRespPayloadLen);
+                    HandleLFGRelayResponse(innerType, payload);
+                }
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _lfgRelayRespPayloadLen);
+                _lfgRelayRespTargetNode = 0;
+                _lfgRelayRespPayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+        }
+    }
+}
+
+// ── Incoming message handlers ─────────────────────────────────────────────────
+
+void ProxyClient::HandleRegisterAck(uint8 nodeId)
+{
+    _nodeId = nodeId;
+    LOG_INFO("server.worldserver", "ProxyClient: Registered with proxy, node_id={}", nodeId);
+}
+
+void ProxyClient::HandleRemotePlayerOnline()
+{
+    uint8 const* p = _accumBuf.data();
+
+    std::string name(reinterpret_cast<char const*>(p), _remotePlayerNameLen);
+    p += _remotePlayerNameLen;
+
+    uint32 zoneId;
+    std::memcpy(&zoneId, p, 4);
+    p += 4;
+
+    uint8 level   = p[0];
+    uint8 classId = p[1];
+    uint8 raceId  = p[2];
+    uint8 teamId  = p[3];
+    uint8 nodeId  = p[4]; // byte 8 of tail: which proxy node the player is on
+
+    LOG_INFO("server.worldserver", "ProxyClient: Remote player ONLINE  GUID {:016X} '{}' node={}",
+             _remotePlayerGuid, name, nodeId);
+
+    sClusterMgr.OnRemotePlayerOnline(_remotePlayerGuid, std::move(name),
+                                      zoneId, level, classId, raceId, teamId, nodeId);
+}
+
+void ProxyClient::HandleRemotePlayerOffline(uint64 guid)
+{
+    LOG_INFO("server.worldserver", "ProxyClient: Remote player OFFLINE GUID {:016X}", guid);
+    sClusterMgr.OnRemotePlayerOffline(guid);
+}
+
+// ── Outgoing cluster messages ─────────────────────────────────────────────────
+
+void ProxyClient::SendReroute(uint64 playerGuid, std::string const& address, uint16 port)
+{
+    if (!_connected)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: SendReroute called but not connected");
+        return;
+    }
+
+    uint8 addrLen = static_cast<uint8>(std::min(address.size(), std::size_t(255)));
+
+    std::vector<uint8> msg;
+    msg.reserve(1 + 8 + 1 + addrLen + 2);
+    msg.push_back(MSG_REROUTE_PLAYER);
+
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
+
+    msg.push_back(addrLen);
+    msg.insert(msg.end(), address.begin(), address.begin() + addrLen);
+    msg.push_back(static_cast<uint8>(port & 0xFF));
+    msg.push_back(static_cast<uint8>(port >> 8));
+
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::AnnounceOnline(Player const* player)
+{
+    if (!_connected || !player)
+        return;
+
+    std::string name = player->GetName();
+    std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+
+    uint64 guid   = player->GetGUID().GetRawValue();
+    uint32 zoneId = player->GetZoneId();
+    uint8 level   = static_cast<uint8>(player->GetLevel());
+    uint8 classId = static_cast<uint8>(player->getClass());
+    uint8 raceId  = static_cast<uint8>(player->getRace());
+    uint8 teamId  = static_cast<uint8>(player->GetTeamId());
+
+    std::vector<uint8> msg;
+    msg.reserve(1 + 8 + 1 + name.size() + 4 + 4);
+    msg.push_back(MSG_CLUSTER_PLAYER_ONLINE);
+
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((guid >> (i * 8)) & 0xFF));
+
+    msg.push_back(static_cast<uint8>(name.size()));
+    msg.insert(msg.end(), name.begin(), name.end());
+
+    msg.push_back(static_cast<uint8>(zoneId & 0xFF));
+    msg.push_back(static_cast<uint8>((zoneId >> 8) & 0xFF));
+    msg.push_back(static_cast<uint8>((zoneId >> 16) & 0xFF));
+    msg.push_back(static_cast<uint8>((zoneId >> 24) & 0xFF));
+
+    msg.push_back(level);
+    msg.push_back(classId);
+    msg.push_back(raceId);
+    msg.push_back(teamId);
+
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::AnnounceOffline(uint64 playerGuid)
+{
+    if (!_connected)
+        return;
+
+    std::vector<uint8> msg(9);
+    msg[0] = MSG_CLUSTER_PLAYER_OFFLINE;
+    for (int i = 0; i < 8; ++i)
+        msg[1 + i] = static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF);
+
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::RelayToNode(uint8 targetNodeId, uint8 innerType, std::vector<uint8> const& payload)
+{
+    if (!_connected)
+        return;
+
+    uint16 payloadLen = static_cast<uint16>(payload.size());
+    std::vector<uint8> msg;
+    msg.reserve(1 + RELAY_HEADER_SIZE + payload.size());
+    msg.push_back(MSG_CLUSTER_RELAY_TO_NODE);
+    msg.push_back(targetNodeId);
+    msg.push_back(innerType);
+    msg.push_back(static_cast<uint8>(payloadLen & 0xFF));
+    msg.push_back(static_cast<uint8>(payloadLen >> 8));
+    msg.insert(msg.end(), payload.begin(), payload.end());
+
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::SendGroupUpdate(uint64 groupGuid, std::vector<uint8> const& memberData)
+{
+    if (!_connected)
+        return;
+
+    uint8 memberCount = static_cast<uint8>(memberData.size() / GROUP_MEMBER_SIZE);
+    std::vector<uint8> msg;
+    msg.reserve(1 + 8 + 1 + memberData.size());
+    msg.push_back(MSG_CLUSTER_GROUP_UPDATE);
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((groupGuid >> (i * 8)) & 0xFF));
+    msg.push_back(memberCount);
+    msg.insert(msg.end(), memberData.begin(), memberData.end());
+
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::SendGroupDisband(uint64 groupGuid)
+{
+    if (!_connected)
+        return;
+
+    std::vector<uint8> msg(9);
+    msg[0] = MSG_CLUSTER_GROUP_DISBAND;
+    for (int i = 0; i < 8; ++i)
+        msg[1 + i] = static_cast<uint8>((groupGuid >> (i * 8)) & 0xFF);
+
+    EnqueueRaw(std::move(msg));
+}
+
+// ── Incoming relay / group handlers ──────────────────────────────────────────
+
+static constexpr uint8 CLUSTER_INNER_GROUP_INVITE        = 0x01;
+static constexpr uint8 CLUSTER_INNER_GROUP_INVITE_RESULT = 0x02;
+
+void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const& payload)
+{
+    switch (innerType)
+    {
+        case CLUSTER_INNER_GROUP_INVITE:
+        {
+            // payload: inviter_guid(8) + invitee_guid(8) + inviter_name_len(1) + inviter_name
+            if (payload.size() < 17)
+                return;
+            uint64 inviterGuid, inviteeGuid;
+            std::memcpy(&inviterGuid, payload.data(), 8);
+            std::memcpy(&inviteeGuid, payload.data() + 8, 8);
+            uint8 nameLen = payload[16];
+            if (payload.size() < static_cast<std::size_t>(17) + nameLen)
+                return;
+            std::string inviterName(reinterpret_cast<char const*>(payload.data() + 17), nameLen);
+
+            LOG_DEBUG("server.worldserver", "ProxyClient: Cross-node GROUP_INVITE from GUID {:016X} '{}' to GUID {:016X}",
+                      inviterGuid, inviterName, inviteeGuid);
+
+            Player* invitee = ObjectAccessor::FindPlayer(ObjectGuid(inviteeGuid));
+            if (!invitee)
+            {
+                LOG_DEBUG("server.worldserver", "ProxyClient: GROUP_INVITE — invitee {:016X} not found locally", inviteeGuid);
+                return;
+            }
+
+            // Store cross-node invite so HandleGroupAcceptOpcode can relay back.
+            sClusterMgr.SetPendingCrossNodeInvite(inviteeGuid, inviterGuid, inviterName);
+
+            // Send invite packet to the local invitee.
+            WorldPacket data(SMSG_GROUP_INVITE, 10);
+            data << uint8(1);           // invited flag
+            data << inviterName;
+            data << uint32(0);          // unk
+            data << uint8(0);           // count
+            data << uint32(0);          // unk
+            invitee->SendDirectMessage(&data);
+            break;
+        }
+
+        case CLUSTER_INNER_GROUP_INVITE_RESULT:
+        {
+            // payload: invitee_guid(8) + result(1)
+            if (payload.size() < 9)
+                return;
+            uint64 inviteeGuid;
+            std::memcpy(&inviteeGuid, payload.data(), 8);
+            uint8 result = payload[8];
+
+            LOG_DEBUG("server.worldserver", "ProxyClient: Cross-node GROUP_INVITE_RESULT for invitee {:016X} result={}",
+                      inviteeGuid, result);
+
+            // Queue the invite result to be processed on the game update thread.
+            sClusterMgr.QueueCrossNodeInviteResult(inviteeGuid, result);
+            break;
+        }
+
+        default:
+            LOG_WARN("server.worldserver", "ProxyClient: Unknown relay inner type 0x{:02X}", innerType);
+            break;
+    }
+}
+
+void ProxyClient::HandleGroupUpdate(uint64 groupGuid, uint8 memberCount, std::vector<uint8> const& memberData)
+{
+    LOG_DEBUG("server.worldserver", "ProxyClient: GroupUpdate group {:016X} {} members", groupGuid, memberCount);
+    sClusterMgr.OnGroupUpdate(groupGuid, memberCount, memberData);
+}
+
+void ProxyClient::HandleGroupDisband(uint64 groupGuid)
+{
+    LOG_DEBUG("server.worldserver", "ProxyClient: GroupDisband group {:016X}", groupGuid);
+    sClusterMgr.OnGroupDisband(groupGuid);
+}
+
+// ── LFG relay send methods ────────────────────────────────────────────────────
+
+void ProxyClient::SendLFGJoinRelay(uint64 playerGuid, uint8 roles, std::vector<uint32> const& dungeons)
+{
+    if (!_connected)
+        return;
+
+    uint8 dungeonCount = static_cast<uint8>(dungeons.size());
+    // payload = inner_type(1) + guid(8) + roles(1) + count(1) + dungeons(4 each)
+    uint16 payloadLen = static_cast<uint16>(1 + 8 + 1 + 1 + 4 * dungeonCount);
+
+    std::vector<uint8> msg;
+    msg.reserve(1 + 2 + payloadLen);
+    msg.push_back(MSG_CLUSTER_LFG_RELAY);
+    msg.push_back(static_cast<uint8>(payloadLen & 0xFF));
+    msg.push_back(static_cast<uint8>(payloadLen >> 8));
+    msg.push_back(LFG_INNER_JOIN);
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
+    msg.push_back(roles);
+    msg.push_back(dungeonCount);
+    for (uint32 d : dungeons)
+    {
+        msg.push_back(static_cast<uint8>(d & 0xFF));
+        msg.push_back(static_cast<uint8>((d >> 8) & 0xFF));
+        msg.push_back(static_cast<uint8>((d >> 16) & 0xFF));
+        msg.push_back(static_cast<uint8>((d >> 24) & 0xFF));
+    }
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::SendLFGLeaveRelay(uint64 playerGuid)
+{
+    if (!_connected)
+        return;
+
+    // payload = inner_type(1) + guid(8) = 9 bytes
+    std::vector<uint8> msg;
+    msg.reserve(1 + 2 + 9);
+    msg.push_back(MSG_CLUSTER_LFG_RELAY);
+    msg.push_back(9);
+    msg.push_back(0);
+    msg.push_back(LFG_INNER_LEAVE);
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::SendLFGProposalResultRelay(uint32 proposalId, uint64 playerGuid, bool accept)
+{
+    if (!_connected)
+        return;
+
+    // payload = inner_type(1) + proposalId(4) + guid(8) + accept(1) = 14 bytes
+    std::vector<uint8> msg;
+    msg.reserve(1 + 2 + 14);
+    msg.push_back(MSG_CLUSTER_LFG_RELAY);
+    msg.push_back(14);
+    msg.push_back(0);
+    msg.push_back(LFG_INNER_PROPOSAL_RESULT);
+    for (int i = 0; i < 4; ++i)
+        msg.push_back(static_cast<uint8>((proposalId >> (i * 8)) & 0xFF));
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
+    msg.push_back(accept ? 1 : 0);
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::SendLFGRelayResponse(uint8 targetNodeId, uint8 innerType, std::vector<uint8> const& payload)
+{
+    if (!_connected)
+        return;
+
+    // Wire: MSG_CLUSTER_LFG_RELAY_RESP | target_node(1) | payload_len(2) | inner_type(1) | payload
+    uint16 totalLen = static_cast<uint16>(1 + payload.size()); // inner_type byte + payload
+    std::vector<uint8> msg;
+    msg.reserve(1 + 1 + 2 + 1 + payload.size());
+    msg.push_back(MSG_CLUSTER_LFG_RELAY_RESP);
+    msg.push_back(targetNodeId);
+    msg.push_back(static_cast<uint8>(totalLen & 0xFF));
+    msg.push_back(static_cast<uint8>(totalLen >> 8));
+    msg.push_back(innerType);
+    msg.insert(msg.end(), payload.begin(), payload.end());
+    EnqueueRaw(std::move(msg));
+}
+
+// ── LFG relay incoming handlers ───────────────────────────────────────────────
+
+void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& payload)
+{
+    if (payload.empty())
+        return;
+
+    uint8 innerType = payload[0];
+    switch (innerType)
+    {
+        case LFG_INNER_JOIN:
+        {
+            // payload: inner_type(1) + guid(8) + roles(1) + dungeon_count(1) + dungeons(4 each)
+            if (payload.size() < 11)
+                return;
+            uint64 guid;
+            std::memcpy(&guid, payload.data() + 1, 8);
+            uint8 roles        = payload[9];
+            uint8 dungeonCount = payload[10];
+            if (payload.size() < static_cast<std::size_t>(11) + 4u * dungeonCount)
+                return;
+
+            lfg::LfgDungeonSet dungeons;
+            for (uint8 i = 0; i < dungeonCount; ++i)
+            {
+                uint32 d;
+                std::memcpy(&d, payload.data() + 11 + i * 4, 4);
+                dungeons.insert(d);
+            }
+
+            // Look up team from ClusterMgr (player is remote from master's perspective).
+            uint8 teamId = TEAM_ALLIANCE;
+            if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayerByGuid(guid))
+                teamId = info->teamId;
+
+            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_JOIN relay from node {} guid {:016X} roles={} dungeons={}",
+                      sourceNodeId, guid, roles, dungeons.size());
+
+            sLFGMgr->JoinLfgByData(ObjectGuid(guid), roles, dungeons, teamId);
+            break;
+        }
+
+        case LFG_INNER_LEAVE:
+        {
+            // payload: inner_type(1) + guid(8)
+            if (payload.size() < 9)
+                return;
+            uint64 guid;
+            std::memcpy(&guid, payload.data() + 1, 8);
+            ObjectGuid objectGuid(guid);
+            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_LEAVE relay from node {} guid {:016X}", sourceNodeId, guid);
+            sLFGMgr->LeaveLfg(objectGuid);
+            sLFGMgr->LeaveAllLfgQueues(objectGuid, true, ObjectGuid::Empty);
+            break;
+        }
+
+        case LFG_INNER_PROPOSAL_RESULT:
+        {
+            // payload: inner_type(1) + proposalId(4) + guid(8) + accept(1)
+            if (payload.size() < 14)
+                return;
+            uint32 proposalId;
+            std::memcpy(&proposalId, payload.data() + 1, 4);
+            uint64 guid;
+            std::memcpy(&guid, payload.data() + 5, 8);
+            bool accept = payload[13] != 0;
+            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_PROPOSAL_RESULT relay from node {} guid {:016X} proposal={} accept={}",
+                      sourceNodeId, guid, proposalId, accept ? 1 : 0);
+            sLFGMgr->UpdateProposal(proposalId, ObjectGuid(guid), accept);
+            break;
+        }
+
+        default:
+            LOG_WARN("server.worldserver", "ProxyClient: Unknown LFG relay inner type 0x{:02X}", innerType);
+            break;
+    }
+}
+
+void ProxyClient::HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> const& payload)
+{
+    switch (innerType)
+    {
+        case LFG_INNER_MATCH_NOTIFY:
+        {
+            // payload: guid(8) + addr_len(1) + addr(addr_len) + port(2)
+            if (payload.size() < 11)
+                return;
+            uint64 guid;
+            std::memcpy(&guid, payload.data(), 8);
+            uint8 addrLen = payload[8];
+            if (payload.size() < static_cast<std::size_t>(9) + addrLen + 2u)
+                return;
+            std::string addr(reinterpret_cast<char const*>(payload.data() + 9), addrLen);
+            uint16 port = static_cast<uint16>(payload[9 + addrLen]) |
+                          (static_cast<uint16>(payload[10 + addrLen]) << 8);
+
+            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_MATCH_NOTIFY guid {:016X} → {}:{}", guid, addr, port);
+            // Reroute the local player to the instance server.
+            SendReroute(guid, addr, port);
+            break;
+        }
+
+        default:
+            LOG_WARN("server.worldserver", "ProxyClient: Unknown LFG relay response inner type 0x{:02X}", innerType);
+            break;
+    }
+}
+
+void ProxyClient::DeliverPacketToPlayer(uint64 targetGuid, WorldPacket const& packet)
+{
+    if (!_connected)
+        return;
+
+    // Serialize the WoW packet into raw bytes (the header is the standard server-side format).
+    // WorldPacket::size() gives the payload size; the actual wire packet needs the header prepended.
+    // We build: header (4 or 5 bytes) + payload.
+    // The proxy will re-encrypt for the client direction via QueuePacketForClient.
+
+    // Build a minimal server-side packet header (size BE, opcode LE).
+    // Size field = opcode_size(2) + payload_size.
+    std::size_t payloadSize = packet.size();
+    uint32 sizeField = static_cast<uint32>(payloadSize) + 2; // +2 for opcode uint16
+
+    std::vector<uint8> rawPacket;
+    if (sizeField > 0x7FFF)
+    {
+        // Large packet: 5-byte header with high bit set.
+        rawPacket.reserve(5 + payloadSize);
+        rawPacket.push_back(static_cast<uint8>(0x80 | ((sizeField >> 16) & 0x7F)));
+        rawPacket.push_back(static_cast<uint8>((sizeField >> 8) & 0xFF));
+        rawPacket.push_back(static_cast<uint8>(sizeField & 0xFF));
+    }
+    else
+    {
+        // Normal packet: 4-byte header.
+        rawPacket.reserve(4 + payloadSize);
+        rawPacket.push_back(static_cast<uint8>((sizeField >> 8) & 0xFF));
+        rawPacket.push_back(static_cast<uint8>(sizeField & 0xFF));
+    }
+
+    uint16 opcode = static_cast<uint16>(packet.GetOpcode());
+    rawPacket.push_back(static_cast<uint8>(opcode & 0xFF));
+    rawPacket.push_back(static_cast<uint8>(opcode >> 8));
+
+    // Append payload.
+    if (payloadSize > 0)
+    {
+        rawPacket.insert(rawPacket.end(),
+            reinterpret_cast<uint8 const*>(packet.contents()),
+            reinterpret_cast<uint8 const*>(packet.contents()) + payloadSize);
+    }
+
+    uint16 pktLen = static_cast<uint16>(rawPacket.size());
+
+    std::vector<uint8> msg;
+    msg.reserve(1 + 8 + 2 + rawPacket.size());
+    msg.push_back(MSG_CLUSTER_DELIVER_PACKET);
+
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((targetGuid >> (i * 8)) & 0xFF));
+
+    msg.push_back(static_cast<uint8>(pktLen & 0xFF));
+    msg.push_back(static_cast<uint8>(pktLen >> 8));
+    msg.insert(msg.end(), rawPacket.begin(), rawPacket.end());
+
+    EnqueueRaw(std::move(msg));
 }

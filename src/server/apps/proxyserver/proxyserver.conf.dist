@@ -108,16 +108,35 @@ ProcessPriority = 0
 #                     The proxy connects here to forward continent-bound client traffic.
 #        Default:     "127.0.0.1"
 
-WorldServer.Address = "127.0.0.1"
+WorldServer.Node.Count = 1
+
+WorldServer.Node.1.Address = "127.0.0.1"
+WorldServer.Node.1.Port    = 8086
+
+# WorldServer.Node.2.Address = "127.0.0.1"
+# WorldServer.Node.2.Port    = 8087
+
+# WorldServer.Node.3.Address = "127.0.0.1"
+# WorldServer.Node.3.Port    = 8088
+
+# WorldServer.Node.4.Address = "127.0.0.1"
+# WorldServer.Node.4.Port    = 8089
+
+# WorldServer.Node.5.Address = "127.0.0.1"
+# WorldServer.Node.5.Port    = 8090
+
+# Legacy single-node fallback (used when WorldServer.Node.Count = 0):
+# WorldServer.Address = "127.0.0.1"
+# WorldServer.Port    = 8086
 
 #
-#    WorldServer.Port
-#        Description: TCP port the worldserver listens on for proxy connections.
-#                     The worldserver should NOT be listed in the realmlist — only the
-#                     proxy's WorldServerPort should be advertised to clients.
-#        Default:     8086
+#    ClusterServer.LFGMasterNode
+#        Description: Which worldserver node ID runs the authoritative LFG/LFD matching queue.
+#                     Non-master nodes relay LFG join/leave/proposal-response to this node.
+#                     Must be a configured node (1–5). Node 1 is default.
+#        Default:     1
 
-WorldServer.Port = 8086
+ClusterServer.LFGMasterNode = 1
 
 #
 #    InstanceServer.Address
@@ -233,6 +252,17 @@ LoginDatabase.WorkerThreads = 1
 #        Default:     1
 
 LoginDatabase.SynchThreads = 1
+
+#
+# Database updater — disabled for proxy server (only authserver and worldserver update DBs)
+Updates.EnableDatabases = 0
+Updates.AutoSetup = 0
+Updates.Redundancy = 0
+Updates.ArchivedRedundancy = 0
+Updates.AllowRehash = 1
+Updates.CleanDeadRefMaxCount = 3
+SourceDirectory = ""
+MySQLExecutable = ""
 
 #
 ###################################################################################################

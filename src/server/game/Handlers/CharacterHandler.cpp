@@ -48,6 +48,7 @@
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "ProxyClient.h"
 #include "SocialMgr.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
@@ -938,6 +939,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 
     // friend status
     sSocialMgr->SendFriendStatus(pCurrChar, FRIEND_ONLINE, pCurrChar->GetGUID(), true);
+
+    // cluster: announce login to other worldserver nodes
+    if (sProxyClient.IsConnected())
+        sProxyClient.AnnounceOnline(pCurrChar);
 
     // Place character in world (and load zone) before some object loading
     pCurrChar->LoadCorpse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CORPSE_LOCATION));

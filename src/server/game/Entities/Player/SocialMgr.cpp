@@ -17,6 +17,8 @@
 
 #include "SocialMgr.h"
 #include "AccountMgr.h"
+#include "ClusterMgr.h"
+#include "ProxyClient.h"
 #include "DatabaseEnv.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -312,6 +314,13 @@ void SocialMgr::BroadcastToFriendListers(Player* player, WorldPacket* packet)
             // MODERATOR, GAME MASTER, ADMINISTRATOR can see all
             if (pFriend && (!AccountMgr::IsPlayerAccount(pFriend->GetSession()->GetSecurity()) || ((pFriend->GetTeamId() == teamId || allowTwoSideWhoList) && security <= gmLevelInWhoList)) && player->IsVisibleGloballyFor(pFriend))
                 pFriend->SendDirectMessage(packet);
+            else if (!pFriend && sProxyClient.IsConnected())
+            {
+                // Friend is on another node — deliver status notification via proxy.
+                if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayerByGuid(itr.first.GetRawValue()))
+                    if (info->teamId == teamId || allowTwoSideWhoList)
+                        sProxyClient.DeliverPacketToPlayer(info->guid, *packet);
+            }
         }
     }
 }

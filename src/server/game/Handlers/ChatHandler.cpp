@@ -19,6 +19,8 @@
 #include "CellImpl.h"
 #include "ChannelMgr.h"
 #include "Chat.h"
+#include "ClusterMgr.h"
+#include "ProxyClient.h"
 #include "ChatPackets.h"
 #include "Common.h"
 #include "GameTime.h"
@@ -391,7 +393,27 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                     return;
                 }
 
-                if (!receiver || (senderIsPlayer && !receiverIsPlayer && !receiver->isAcceptWhispers() && !receiver->IsInWhisperWhiteList(sender->GetGUID())))
+                if (!receiver)
+                {
+                    // Check if the player is on another worldserver node.
+                    if (sProxyClient.IsConnected())
+                    {
+                        if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayer(to))
+                        {
+                            Language whisperLang = (lang == LANG_ADDON) ? Language(lang) : LANG_UNIVERSAL;
+                            WorldPacket data;
+                            ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, whisperLang, sender, sender, msg);
+                            sProxyClient.DeliverPacketToPlayer(info->guid, data);
+                            ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_INFORM, whisperLang, sender, sender, msg);
+                            sender->SendDirectMessage(&data);
+                            return;
+                        }
+                    }
+                    SendPlayerNotFoundNotice(to);
+                    return;
+                }
+
+                if (senderIsPlayer && !receiverIsPlayer && !receiver->isAcceptWhispers() && !receiver->IsInWhisperWhiteList(sender->GetGUID()))
                 {
                     SendPlayerNotFoundNotice(to);
                     return;

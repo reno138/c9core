@@ -91,6 +91,9 @@
 #include "WaypointMovementGenerator.h"
 #include "WeatherMgr.h"
 #include "WhoListCacheMgr.h"
+#include "ClusterMgr.h"
+#include "ObjectAccessor.h"
+#include "ProxyClient.h"
 #include "WorldGlobals.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -1200,6 +1203,90 @@ void World::Update(uint32 diff)
     {
         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update sessions"));
         sWorldSessionMgr->UpdateSessions(diff);
+    }
+
+    // ── Cluster: process cross-node group invite results ───────────────────────
+    if (sProxyClient.IsConnected())
+    {
+        auto inviteResults = sClusterMgr.DrainInviteResults();
+        for (auto const& res : inviteResults)
+        {
+            ClusterMgr::CrossNodeInvite invite;
+            if (!sClusterMgr.GetAndClearPendingCrossNodeInvite(res.inviteeGuid, invite))
+                continue;
+
+            Player* inviter = ObjectAccessor::FindPlayer(ObjectGuid(invite.inviterGuid));
+            if (!inviter)
+                continue;
+
+            if (res.result == 0)
+            {
+                // Declined: inform the inviter.
+                ClusterPlayerInfo const* inviteeInfo = sClusterMgr.FindRemotePlayerByGuid(res.inviteeGuid);
+                std::string inviteeName = inviteeInfo ? inviteeInfo->name : "unknown";
+                WorldPacket declineData(SMSG_GROUP_DECLINE, inviteeName.size() + 1);
+                declineData << inviteeName;
+                inviter->SendDirectMessage(&declineData);
+            }
+            else
+            {
+                // Accepted: create group for inviter (if needed) and broadcast membership.
+                Group* group = inviter->GetGroup();
+                if (!group && inviter->GetGroupInvite())
+                {
+                    group = inviter->GetGroupInvite();
+                    group->RemoveInvite(inviter);
+                    group->Create(inviter);
+                    sGroupMgr->AddGroup(group);
+                }
+                if (!group)
+                {
+                    group = new Group();
+                    if (!group->AddLeaderInvite(inviter))
+                    {
+                        delete group;
+                        continue;
+                    }
+                    group->RemoveInvite(inviter);
+                    group->Create(inviter);
+                    sGroupMgr->AddGroup(group);
+                }
+
+                // Retrieve invitee's node so we can build the member data.
+                ClusterPlayerInfo const* inviteeInfo = sClusterMgr.FindRemotePlayerByGuid(res.inviteeGuid);
+                uint8 inviteeNodeId = inviteeInfo ? inviteeInfo->nodeId : 0;
+
+                // Build compact member data: [inviter local, invitee remote]
+                // Format per member: uint64 guid + uint8 subgroup + uint8 role_flags + uint8 node_id
+                uint64 groupGuid = group->GetGUID().GetRawValue();
+                std::vector<uint8> memberData;
+                memberData.reserve(2 * 11);
+
+                auto pushMember = [&](uint64 guid, uint8 nodeId)
+                {
+                    for (int i = 0; i < 8; ++i)
+                        memberData.push_back(static_cast<uint8>((guid >> (i * 8)) & 0xFF));
+                    memberData.push_back(0); // subgroup 0
+                    memberData.push_back(0); // role_flags
+                    memberData.push_back(nodeId);
+                };
+
+                for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+                    if (Player* m = itr->GetSource())
+                        pushMember(m->GetGUID().GetRawValue(), sProxyClient.GetNodeId());
+
+                pushMember(res.inviteeGuid, inviteeNodeId);
+
+                // Update local ClusterMgr so BroadcastPacket knows about this remote member.
+                sClusterMgr.OnGroupUpdate(groupGuid, static_cast<uint8>(memberData.size() / 11), memberData);
+
+                // Broadcast to all member nodes via proxy.
+                sProxyClient.SendGroupUpdate(groupGuid, memberData);
+
+                LOG_DEBUG("server.worldserver", "World: Cross-node group accept: inviter {:016X} invitee {:016X} node={}",
+                          invite.inviterGuid, res.inviteeGuid, inviteeNodeId);
+            }
+        }
     }
 
     /// <li> Clean logs table

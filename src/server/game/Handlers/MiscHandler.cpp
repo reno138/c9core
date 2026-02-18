@@ -17,6 +17,8 @@
 
 #include "AccountMgr.h"
 #include "BattlefieldMgr.h"
+#include "ClusterMgr.h"
+#include "ProxyClient.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterPackets.h"
@@ -407,6 +409,68 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         data << uint32(playerZoneId);                     // player zone id
 
         ++displaycount;
+    }
+
+    // Aggregate remote players from other cluster nodes.
+    if (sProxyClient.IsConnected())
+    {
+        for (ClusterPlayerInfo const& info : sClusterMgr.GetAllRemotePlayers())
+        {
+            if (AccountMgr::IsPlayerAccount(security))
+                if (info.teamId != team && !allowTwoSideWhoList)
+                    continue;
+
+            if (info.level < levelMin || info.level > levelMax)
+                continue;
+
+            if (!(classmask & (1 << info.classId)))
+                continue;
+
+            if (!(racemask & (1 << info.raceId)))
+                continue;
+
+            bool showZones = (zonesCount == 0);
+            for (uint32 i = 0; i < zonesCount; ++i)
+                if (zoneids[i] == info.zoneId) { showZones = true; break; }
+            if (!showZones)
+                continue;
+
+            std::wstring wname;
+            if (!Utf8toWStr(info.name, wname))
+                continue;
+
+            if (!(wpacketPlayerName.empty() || wname.find(wpacketPlayerName) != std::wstring::npos))
+                continue;
+
+            if (!wpacketGuildName.empty())
+                continue;  // remote players have no guild name cached
+
+            bool s_show = true;
+            for (uint32 i = 0; i < strCount; ++i)
+            {
+                if (!str[i].empty())
+                {
+                    if (wname.find(str[i]) != std::wstring::npos)
+                    { s_show = true; break; }
+                    s_show = false;
+                }
+            }
+            if (!s_show)
+                continue;
+
+            if ((matchCount++) >= sWorld->getIntConfig(CONFIG_MAX_WHO_LIST_RETURN))
+                continue;
+
+            data << info.name;              // player name (lowercase)
+            data << std::string("");        // guild name (unknown cross-node)
+            data << uint32(info.level);
+            data << uint32(info.classId);
+            data << uint32(info.raceId);
+            data << uint8(0);               // gender unknown cross-node
+            data << uint32(info.zoneId);
+
+            ++displaycount;
+        }
     }
 
     data.put(0, displaycount);                            // insert right count, count displayed

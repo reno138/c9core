@@ -60,6 +60,10 @@ DatabaseWorkerPool<T>::DatabaseWorkerPool() :
 {
     WPFatal(mysql_thread_safe(), "Used MySQL library isn't thread-safe.");
 
+#if !defined(MARIADB_VERSION_ID)
+    // MariaDB uses a different version numbering scheme (e.g. MYSQL_VERSION_ID=120102 for
+    // MariaDB 12.1, while mysql_get_client_version() returns the Connector/C version 30408),
+    // so these checks are skipped for MariaDB builds.
     bool isSupportClientDB = mysql_get_client_version() >= MIN_MYSQL_CLIENT_VERSION;
     bool isSameClientDB = mysql_get_client_version() == MYSQL_VERSION_ID;
 
@@ -67,6 +71,7 @@ DatabaseWorkerPool<T>::DatabaseWorkerPool() :
         mysql_get_client_info(), mysql_get_client_version(), MYSQL_VERSION_ID);
     WPFatal(isSameClientDB, "Used MySQL library version ({} id {}) does not match the version id used to compile AzerothCore (id {}).\nSearch the wiki for ACE00046 in Common Errors (https://www.azerothcore.org/wiki/common-errors#ace00046).",
         mysql_get_client_info(), mysql_get_client_version(), MYSQL_VERSION_ID);
+#endif
 }
 
 template <class T>
@@ -441,12 +446,16 @@ uint32 DatabaseWorkerPool<T>::OpenConnections(InternalIndex type, uint8 numConne
             _connections[type].clear();
             return error;
         }
+#if !defined(MARIADB_VERSION_ID)
+        // Skip server version check for MariaDB: it uses different version string formats
+        // (e.g. "10.x.x-MariaDB") that this parser does not handle correctly.
         else if (DatabaseIncompatibleVersion(connection->GetServerInfo()))
         {
             LOG_ERROR("sql.driver", "AzerothCore does not support MySQL versions below 8.0\n\nFound server version: {}. Server compiled with: {}.",
                 connection->GetServerInfo(), MYSQL_VERSION_ID);
             return 1;
         }
+#endif
         else
         {
             _connections[type].push_back(std::move(connection));
