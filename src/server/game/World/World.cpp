@@ -328,18 +328,26 @@ void World::SetInitialWorldSettings()
     if (!sConfigMgr->isDryRun())
     {
         ///- Check the existence of the map files for all starting areas.
-        if (!MapMgr::ExistMapAndVMap(MAP_EASTERN_KINGDOMS, -6240.32f, 331.033f)
-                || !MapMgr::ExistMapAndVMap(MAP_EASTERN_KINGDOMS, -8949.95f, -132.493f)
-                || !MapMgr::ExistMapAndVMap(MAP_KALIMDOR, -618.518f, -4251.67f)
-                || !MapMgr::ExistMapAndVMap(MAP_EASTERN_KINGDOMS, 1676.35f, 1677.45f)
-                || !MapMgr::ExistMapAndVMap(MAP_KALIMDOR, 10311.3f, 832.463f)
-                || !MapMgr::ExistMapAndVMap(MAP_KALIMDOR, -2917.58f, -257.98f)
-                || (getIntConfig(CONFIG_EXPANSION) && (
-                        !MapMgr::ExistMapAndVMap(MAP_OUTLAND, 10349.6f, -6357.29f) ||
-                        !MapMgr::ExistMapAndVMap(MAP_OUTLAND, -3961.64f, -13931.2f))))
+        // Instance servers skip continent maps entirely — no .map files needed for them.
+        if (!sConfigMgr->GetOption<bool>("InstanceServer.Enable", false))
         {
-            LOG_ERROR("server.loading", "Failed to find map files for starting areas");
-            exit(1);
+            if (!MapMgr::ExistMapAndVMap(MAP_EASTERN_KINGDOMS, -6240.32f, 331.033f)
+                    || !MapMgr::ExistMapAndVMap(MAP_EASTERN_KINGDOMS, -8949.95f, -132.493f)
+                    || !MapMgr::ExistMapAndVMap(MAP_KALIMDOR, -618.518f, -4251.67f)
+                    || !MapMgr::ExistMapAndVMap(MAP_EASTERN_KINGDOMS, 1676.35f, 1677.45f)
+                    || !MapMgr::ExistMapAndVMap(MAP_KALIMDOR, 10311.3f, 832.463f)
+                    || !MapMgr::ExistMapAndVMap(MAP_KALIMDOR, -2917.58f, -257.98f)
+                    || (getIntConfig(CONFIG_EXPANSION) && (
+                            !MapMgr::ExistMapAndVMap(MAP_OUTLAND, 10349.6f, -6357.29f) ||
+                            !MapMgr::ExistMapAndVMap(MAP_OUTLAND, -3961.64f, -13931.2f))))
+            {
+                LOG_ERROR("server.loading", "Failed to find map files for starting areas");
+                exit(1);
+            }
+        }
+        else
+        {
+            LOG_INFO("server.loading", "Instance server mode: skipping continent map file checks.");
         }
     }
 
@@ -952,7 +960,10 @@ void World::SetInitialWorldSettings()
     sBattlefieldMgr->InitBattlefield();
 
     LOG_INFO("server.loading", "Loading Transports...");
-    sTransportMgr->SpawnContinentTransports();
+    if (!sConfigMgr->GetOption<bool>("InstanceServer.Enable", false))
+        sTransportMgr->SpawnContinentTransports();
+    else
+        LOG_INFO("server.loading", "Instance server mode: skipping continent transport spawning.");
 
     ///- Initialize Warden
     LOG_INFO("server.loading", "Loading Warden Checks..." );

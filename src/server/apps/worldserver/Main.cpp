@@ -49,6 +49,7 @@
 #include "SharedDefines.h"
 #include "SteadyTimer.h"
 #include "Systemd.h"
+#include "ProxyClient.h"
 #include "World.h"
 #include "WorldSessionMgr.h"
 #include "WorldSocket.h"
@@ -367,6 +368,17 @@ int main(int argc, char** argv)
         ///- Clean database before leaving
         ClearOnlineAccounts();
     });
+
+    // Connect to proxy control channel if configured.
+    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false))
+    {
+        std::string proxyAddress = sConfigMgr->GetOption<std::string>("ProxyServer.Address", "127.0.0.1");
+        uint16 proxyControlPort  = static_cast<uint16>(sConfigMgr->GetOption<int32>("ProxyServer.ControlPort", 8090));
+        uint16 gamePort          = static_cast<uint16>(sWorld->getIntConfig(CONFIG_PORT_WORLD));
+        // server_type = 0 for worldserver, 1 for instance server (set by InstanceServer.Enable)
+        uint8 serverType = sConfigMgr->GetOption<bool>("InstanceServer.Enable", false) ? 1 : 0;
+        sProxyClient.Initialize(*ioContext, proxyAddress, proxyControlPort, serverType, gamePort);
+    }
 
     // Set server online (allow connecting now)
     LoginDatabase.DirectExecute("UPDATE realmlist SET flag = flag & ~{}, population = 0 WHERE id = '{}'", REALM_FLAG_VERSION_MISMATCH, realm.Id.Realm);

@@ -81,6 +81,15 @@ Map* MapMgr::CreateBaseMap(uint32 id)
             MapEntry const* entry = sMapStore.LookupEntry(id);
             ASSERT(entry);
 
+            // In instance server mode, refuse to create non-instanceable (continent) maps.
+            if (sConfigMgr->GetOption<bool>("InstanceServer.Enable", false) && !entry->Instanceable())
+            {
+                LOG_ERROR("maps", "InstanceServer: Attempt to create non-instanceable map {} "
+                          "(type={}) rejected — this map belongs on the worldserver.",
+                          id, entry->map_type);
+                return nullptr;
+            }
+
             if (entry->Instanceable())
                 map = new MapInstanced(id);
             else

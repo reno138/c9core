@@ -1,0 +1,117 @@
+/*
+ * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifndef ProxySocket_h__
+#define ProxySocket_h__
+
+#include "AsyncCallbackProcessor.h"
+#include "AuthCrypt.h"
+#include "AuthDefines.h"
+#include "MessageBuffer.h"
+#include "QueryCallback.h"
+#include "Socket.h"
+#include <memory>
+#include <queue>
+#include <string>
+#include <vector>
+
+class BackendSession;
+
+/**
+ * @brief Client-facing socket — accepts WoW client connections on the proxy's public port.
+ *
+ * Lifecycle with ProxyMgr:
+ *   - CMSG_PLAYER_LOGIN intercepted → RegisterSession(guid, this)
+ *   - Destructor → UnregisterSession(guid)
+ *
+ * Each ProxySocket owns one BackendSession (the current upstream worldserver or instance server).
+ * The proxy holds the RC4 AuthCrypt state for the full session lifetime, surviving any backend switch.
+ *
+ * RC4 direction (normal, server-side perspective):
+ *   - DecryptRecv(): decrypts packets coming FROM the client (C→S direction).
+ *   - EncryptSend(): encrypts packets going TO the client (S→C direction).
+ */
+class ProxySocket final : public Socket<ProxySocket>
+{
+    typedef Socket<ProxySocket> BaseSocket;
+
+public:
+    explicit ProxySocket(IoContextTcpSocket&& socket);
+    ~ProxySocket();
+
+    void Start() override;
+    bool Update() override;
+
+    /// Called by BackendSession: forward a plaintext-header packet to the client.
+    /// This method re-encrypts the header for the client direction before sending.
+    void QueuePacketForClient(uint8 const* plainHeader, std::size_t headerLen, MessageBuffer& payload);
+
+    /// Called by BackendSession when reroute handshake with instance server completes.
+    void OnRerouteComplete(std::shared_ptr<BackendSession> newBackend);
+
+    /// Initiate a backend switch to the given address:port (called by ProxyMgr).
+    void RerouteToBackend(std::string const& address, uint16 port);
+
+protected:
+    SocketReadCallbackResult ReadHandler() final;
+
+private:
+    bool ReadHeaderHandler();
+    bool ReadDataHandler();
+
+    void HandleAuthSessionIntercepted();
+    void HandleAuthSessionCallback(PreparedQueryResult result);
+    void ResumeAfterAuth();
+
+    /// Opcode constants (avoid game library dependency).
+    static constexpr uint32 CMSG_AUTH_SESSION_OPCODE  = 0x1ED;
+    static constexpr uint32 CMSG_PLAYER_LOGIN_OPCODE  = 0x03D;
+
+    /// Client-side AuthCrypt (proxy acts as server to client).
+    AuthCrypt _clientCrypt;
+
+    /// The current backend connection (worldserver or instance server).
+    std::shared_ptr<BackendSession> _backend;
+
+    /// Packet framing state (mirrors WorldSocket pattern).
+    MessageBuffer _headerBuffer; ///< Accumulates 6-byte CMSG header.
+    MessageBuffer _packetBuffer; ///< Accumulates payload of current packet.
+
+    /// Player GUID learned from CMSG_PLAYER_LOGIN — used to register with ProxyMgr.
+    uint64 _playerGuid{ 0 };
+
+    /// Session key and realm ID stored for reroute auth handshake.
+    SessionKey _sessionKey;
+    uint32     _realmId{ 0 };
+
+    /// Pending backend during a reroute (kept alive until handshake completes).
+    std::shared_ptr<BackendSession> _pendingBackend;
+
+    /// When true, ReadHandler() pauses client reads (reroute in progress or DB query).
+    bool _rerouting{ false };
+
+    /// Whether we are waiting for the DB auth query to complete.
+    bool _waitingForQuery{ false };
+
+    /// Async DB query processor (callbacks fired in Update()).
+    QueryCallbackProcessor _queryProcessor;
+
+    /// Account name extracted from CMSG_AUTH_SESSION (needed for DB query).
+    std::string _accountName;
+};
+
+#endif // ProxySocket_h__

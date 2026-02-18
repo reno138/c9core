@@ -4720,3 +4720,86 @@ Respawn.DynamicMinimumGameObject = 10
 # GAME SETTINGS END                                                                               #
 #                                                                                                 #
 ###################################################################################################
+
+###################################################################################################
+# INSTANCE SERVER MODE
+#
+#    InstanceServer.Enable
+#        Description: Run this worldserver as an instance server.
+#                     When enabled, only instanced maps (dungeons, raids, battlegrounds, arenas)
+#                     are loaded. Continent maps are skipped entirely.
+#                     This server should NOT be listed in the realmlist — clients connect via
+#                     the proxy server, which routes them here transparently.
+#        Default:     0 - (Normal worldserver mode)
+#                     1 - (Instance server mode)
+
+InstanceServer.Enable = 0
+
+#
+###################################################################################################
+
+###################################################################################################
+# PROXY SERVER CONNECTION
+#
+#    ProxyServer.Enable
+#        Description: Connect to a proxy server on startup and register for player rerouting.
+#                     When a player enters an instanced map, the worldserver notifies the proxy
+#                     via the control channel. The proxy then routes the client's connection to
+#                     the instance server transparently.
+#        Default:     0 - (Disabled — direct connections, no proxy)
+#                     1 - (Enabled)
+
+ProxyServer.Enable = 0
+
+#
+#    ProxyServer.Address
+#        Description: IP address of the proxy server's control channel.
+#        Default:     "127.0.0.1"
+
+ProxyServer.Address = "127.0.0.1"
+
+#
+#    ProxyServer.ControlPort
+#        Description: TCP port of the proxy server's control channel.
+#        Default:     8090
+
+ProxyServer.ControlPort = 8090
+
+#
+#    InstanceServer.Address
+#        Description: IP address of the instance server (dungeon/raid/battleground host).
+#                     Used by the worldserver to tell the proxy where to route a player
+#                     when they enter a dungeon, raid, or battleground.
+#                     Only relevant when ProxyServer.Enable = 1.
+#        Default:     "127.0.0.1"
+
+InstanceServer.Address = "127.0.0.1"
+
+#
+#    InstanceServer.Port
+#        Description: Game port the instance server listens on for client connections (via proxy).
+#                     Only relevant when ProxyServer.Enable = 1.
+#        Default:     8087
+
+InstanceServer.Port = 8087
+
+#
+#    WorldServer.Address
+#        Description: IP address of the worldserver (continent host).
+#                     Used by an instance server running with InstanceServer.Enable = 1 to tell
+#                     the proxy where to route a player when they leave an instance back to the
+#                     open world. Only relevant when ProxyServer.Enable = 1.
+#        Default:     "127.0.0.1"
+
+WorldServer.Address = "127.0.0.1"
+
+#
+#    WorldServer.Port
+#        Description: Game port the worldserver listens on for client connections (via proxy).
+#                     Only relevant when ProxyServer.Enable = 1.
+#        Default:     8086
+
+WorldServer.Port = 8086
+
+#
+###################################################################################################

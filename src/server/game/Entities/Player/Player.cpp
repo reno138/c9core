@@ -39,6 +39,7 @@
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Config.h"
+#include "ProxyClient.h"
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
@@ -1587,6 +1588,28 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
 
                 SendDirectMessage(&data);
                 SendSavedInstances();
+            }
+
+            // Cross-server teleport: if a proxy is enabled and the destination is an
+            // instanced map (dungeon, raid, BG, arena), hand the player off to the
+            // instance server rather than doing a local map transfer.
+            if (!GetSession()->PlayerLogout()
+                && sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
+                && sProxyClient.IsConnected()
+                && mEntry->Instanceable())
+            {
+                // Player position is already set to teleportStore_dest (set above).
+                // Save to DB so the instance server can load the character at this position.
+                SaveToDB(false, false);
+
+                // Ask the proxy to connect to the instance server on this player's behalf.
+                sProxyClient.SendReroute(
+                    GetGUID().GetRawValue(),
+                    sConfigMgr->GetOption<std::string>("InstanceServer.Address", "127.0.0.1"),
+                    static_cast<uint16>(sConfigMgr->GetOption<int32>("InstanceServer.Port", 8087)));
+
+                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
+                return true;
             }
 
             // move packet sent by client always after far teleport

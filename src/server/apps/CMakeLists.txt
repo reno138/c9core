@@ -131,6 +131,10 @@ foreach(APPLICATION_NAME ${APPLICATIONS_BUILD_LIST})
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC
         shared)
+  elseif(${APP_PROJECT_NAME} MATCHES "proxyserver")
+    target_link_libraries(${APP_PROJECT_NAME}
+      PUBLIC
+        shared)
   elseif(${APP_PROJECT_NAME} MATCHES "worldserver")
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC
