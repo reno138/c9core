@@ -19,11 +19,11 @@
 #define NodeMgr_h__
 
 #include "Define.h"
-#include <boost/process/v1/child.hpp>
+#include <boost/process/child.hpp>
 #include <chrono>
 #include <string>
 
-namespace bp = boost::process::v1;
+namespace bp = boost::process;
 
 /**
  * @brief Manages the lifecycle of a single worldserver child process.
