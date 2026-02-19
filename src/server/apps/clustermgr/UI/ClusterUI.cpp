@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the C9Core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -140,7 +140,7 @@ void ClusterUI::DrawTitle()
 {
     attron(COLOR_PAIR(COLOR_TITLE) | A_BOLD);
     mvhline(0, 0, ' ', COLS);
-    mvprintw(0, 1, "AzerothCore Cluster Manager");
+    mvprintw(0, 1, "C9Core Cluster Manager");
     attroff(COLOR_PAIR(COLOR_TITLE) | A_BOLD);
 
     bool conn = _connected.load();
@@ -379,7 +379,7 @@ void ClusterUI::OpenDeployWizard()
     cfg.sshUser         = sConfigMgr->GetOption<std::string>("Deploy.DefaultSSHUser",  "wow");
     cfg.sshPort         = sConfigMgr->GetOption<int32>      ("Deploy.DefaultSSHPort",  22);
     cfg.sshKey          = sConfigMgr->GetOption<std::string>("Deploy.DefaultSSHKey",   "~/.ssh/id_rsa");
-    cfg.remotePath      = sConfigMgr->GetOption<std::string>("Deploy.DefaultRemotePath","/opt/azerothcore");
+    cfg.remotePath      = sConfigMgr->GetOption<std::string>("Deploy.DefaultRemotePath","/opt/c9core");
 
     DeployWizard wizard(std::move(cfg));
     std::string errMsg;

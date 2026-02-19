@@ -1,5 +1,5 @@
 ##########################################
-# AzerothCore Cluster Manager config file #
+# C9Core Cluster Manager config file #
 ##########################################
 [clustermgr]
 
@@ -94,9 +94,9 @@ Deploy.DefaultSSHKey = "~/.ssh/id_rsa"
 #
 #    Deploy.DefaultRemotePath
 #        Description: Default remote base path for deployment.
-#        Default:     "/opt/azerothcore"
+#        Default:     "/opt/c9core"
 
-Deploy.DefaultRemotePath = "/opt/azerothcore"
+Deploy.DefaultRemotePath = "/opt/c9core"
 
 #
 ###################################################################################################

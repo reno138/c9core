@@ -1,4 +1,4 @@
-# AzerothCore Multi-Worldserver Clustering
+# C9Core Multi-Worldserver Clustering
 
 This document covers the cluster architecture, configuration reference, and step-by-step deployment instructions for running multiple worldserver nodes behind a proxy.
 

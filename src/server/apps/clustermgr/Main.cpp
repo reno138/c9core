@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the C9Core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,7 +17,7 @@
 
 /**
  * @file clustermgr/Main.cpp
- * @brief clustermgr — ncurses TUI for AzerothCore cluster management.
+ * @brief clustermgr — ncurses TUI for C9Core cluster management.
  *
  * Connects to the proxy's management port (default 9090) using a PSK-encrypted
  * channel, subscribes to node status updates, and presents a Midnight Commander-

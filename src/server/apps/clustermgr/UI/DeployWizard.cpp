@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the C9Core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -222,7 +222,7 @@ bool DeployWizard::RunDeploy()
             hasNewLines = true;
         };
 
-        log("=== AzerothCore Node Deployment ===");
+        log("=== C9Core Node Deployment ===");
         log("  Remote: " + _cfg.sshUser + "@" + _cfg.sshHost + ":" + std::to_string(_cfg.sshPort));
         log("  Remote path: " + _cfg.remotePath);
         log("");

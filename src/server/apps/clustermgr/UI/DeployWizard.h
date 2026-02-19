@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the C9Core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -51,7 +51,7 @@ public:
         std::string sshHost;
         int         sshPort         { 22 };
         std::string sshKey          { "~/.ssh/id_rsa" };
-        std::string remotePath      { "/opt/azerothcore" };
+        std::string remotePath      { "/opt/c9core" };
         bool        startAfterDeploy{ true };
     };
 
