@@ -17,10 +17,10 @@
 
 #include "NodeMgr.h"
 #include "Log.h"
-#include <boost/process.hpp>
+#include <boost/process/v1.hpp>
 #include <csignal>
 
-namespace bp = boost::process;
+namespace bp = boost::process::v1;
 
 NodeMgr::~NodeMgr()
 {

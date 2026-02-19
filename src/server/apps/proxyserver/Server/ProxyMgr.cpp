@@ -90,17 +90,17 @@ void ProxyMgr::LoadAutoScaleConfig()
                  _scaleUpThreshold, _scaleDownThreshold, _minNodes, _maxNodes, _cooldownSeconds);
 }
 
-std::pair<std::string, uint16> ProxyMgr::ChooseNode()
+std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseNode()
 {
     return _useRoundRobin ? ChooseRoundRobinNode() : ChooseLeastLoadedNode();
 }
 
-std::pair<std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
+std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
 {
     std::lock_guard<std::mutex> lock(_nodeMutex);
 
     if (_nodeAddresses.empty())
-        return { "127.0.0.1", 8086 };
+        return { 0, "127.0.0.1", 8086 };
 
     // Collect running nodes (those with an active ControlSocket).
     std::vector<uint8> running;
@@ -115,7 +115,9 @@ std::pair<std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
     {
         // No active worldserver — fall back to first configured address.
         LOG_WARN("proxy", "ProxyMgr: ChooseRoundRobinNode — no running nodes, using first configured");
-        return _nodeAddresses.begin()->second;
+        uint8 firstId = _nodeAddresses.begin()->first;
+        auto const& [addr, port] = _nodeAddresses.begin()->second;
+        return { firstId, addr, port };
     }
 
     // Round-robin through running nodes, skip any at full capacity.
@@ -131,7 +133,7 @@ std::pair<std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
             LOG_INFO("proxy", "ProxyMgr: RoundRobin → node {} ({}:{}, {}/{} players)",
                      nodeId, _nodeAddresses[nodeId].first, _nodeAddresses[nodeId].second,
                      cnt, _maxPlayersPerNode);
-            return _nodeAddresses[nodeId];
+            return { nodeId, _nodeAddresses[nodeId].first, _nodeAddresses[nodeId].second };
         }
     }
 
@@ -140,14 +142,14 @@ std::pair<std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
     return ChooseLeastLoadedNode();
 }
 
-std::pair<std::string, uint16> ProxyMgr::ChooseLeastLoadedNode()
+std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseLeastLoadedNode()
 {
     // NOTE: caller must NOT hold _nodeMutex (called internally, may be re-entered).
     // When called from ChooseRoundRobinNode, the lock is already held — safe because
     // _nodeMutex is not re-locked here; this is a pure read of already-locked data.
 
     if (_nodeAddresses.empty())
-        return { "127.0.0.1", 8086 };
+        return { 0, "127.0.0.1", 8086 };
 
     uint8    best     = 0;
     uint32   minCount = UINT32_MAX;
@@ -171,12 +173,14 @@ std::pair<std::string, uint16> ProxyMgr::ChooseLeastLoadedNode()
     {
         // No active worldserver at all — return first configured as last resort.
         LOG_WARN("proxy", "ProxyMgr: ChooseLeastLoadedNode — no active nodes");
-        return _nodeAddresses.begin()->second;
+        uint8 firstId = _nodeAddresses.begin()->first;
+        auto const& [addr, port] = _nodeAddresses.begin()->second;
+        return { firstId, addr, port };
     }
 
     LOG_INFO("proxy", "ProxyMgr: LeastLoaded → node {} ({}:{}, {} players)",
              best, _nodeAddresses[best].first, _nodeAddresses[best].second, minCount);
-    return _nodeAddresses[best];
+    return { best, _nodeAddresses[best].first, _nodeAddresses[best].second };
 }
 
 // ── Session registry ──────────────────────────────────────────────────────────
@@ -290,7 +294,7 @@ void ProxyMgr::UnregisterNode(uint8 nodeId)
     if (!affected.empty())
     {
         // Pick a surviving node to redirect players to (holds _nodeMutex internally).
-        auto [fallbackAddr, fallbackPort] = ChooseLeastLoadedNode();
+        auto [fallbackNodeId, fallbackAddr, fallbackPort] = ChooseLeastLoadedNode();
 
         bool hasAlternative = (fallbackPort != 0);
         // If ChooseLeastLoadedNode returned the last-resort "no active nodes" address,
@@ -552,12 +556,42 @@ std::vector<uint8> ProxyMgr::BuildStatusPayload()
     std::lock_guard<std::mutex> nodeLock(_nodeMutex);
     std::lock_guard<std::mutex> dirLock(_dirMutex);
 
+    // ── Compute per-node bandwidth rates ────────────────────────────────────────
+    auto now = std::chrono::steady_clock::now();
+    if (_lastBwUpdate != std::chrono::steady_clock::time_point::min())
+    {
+        double elapsed = std::chrono::duration<double>(now - _lastBwUpdate).count();
+        if (elapsed >= 1.0)
+        {
+            for (auto const& [nodeId, _] : _nodeStatus)
+            {
+                uint64 tx = _nodeTxBytes.count(nodeId) ? _nodeTxBytes.at(nodeId) : 0;
+                uint64 rx = _nodeRxBytes.count(nodeId) ? _nodeRxBytes.at(nodeId) : 0;
+                uint64 prevTx = _prevTxBytes.count(nodeId) ? _prevTxBytes.at(nodeId) : 0;
+                uint64 prevRx = _prevRxBytes.count(nodeId) ? _prevRxBytes.at(nodeId) : 0;
+
+                _nodeTxBps[nodeId] = static_cast<uint32>((tx - prevTx) / elapsed);
+                _nodeRxBps[nodeId] = static_cast<uint32>((rx - prevRx) / elapsed);
+                _prevTxBytes[nodeId] = tx;
+                _prevRxBytes[nodeId] = rx;
+            }
+            _lastBwUpdate = now;
+        }
+    }
+    else
+    {
+        _lastBwUpdate = now;
+    }
+
+    // ── Build payload ────────────────────────────────────────────────────────────
     std::vector<uint8> payload;
     payload.push_back(static_cast<uint8>(_nodeStatus.size()));
 
     for (auto const& [nodeId, ns] : _nodeStatus)
     {
         uint32 players = _nodePlayerCounts.count(nodeId) ? _nodePlayerCounts.at(nodeId) : 0;
+        uint32 txBps   = _nodeTxBps.count(nodeId) ? _nodeTxBps.at(nodeId) : 0;
+        uint32 rxBps   = _nodeRxBps.count(nodeId) ? _nodeRxBps.at(nodeId) : 0;
 
         payload.push_back(ns.nodeId);
         payload.push_back(static_cast<uint8>(ns.state));
@@ -582,6 +616,18 @@ std::vector<uint8> ProxyMgr::BuildStatusPayload()
         payload.push_back(static_cast<uint8>((ns.uptimeSecs >> 16) & 0xFF));
         payload.push_back(static_cast<uint8>((ns.uptimeSecs >> 24) & 0xFF));
 
+        // tx_bps (LE uint32) — bytes/sec client→worldserver
+        payload.push_back(static_cast<uint8>(txBps & 0xFF));
+        payload.push_back(static_cast<uint8>((txBps >> 8) & 0xFF));
+        payload.push_back(static_cast<uint8>((txBps >> 16) & 0xFF));
+        payload.push_back(static_cast<uint8>((txBps >> 24) & 0xFF));
+
+        // rx_bps (LE uint32) — bytes/sec worldserver→client
+        payload.push_back(static_cast<uint8>(rxBps & 0xFF));
+        payload.push_back(static_cast<uint8>((rxBps >> 8) & 0xFF));
+        payload.push_back(static_cast<uint8>((rxBps >> 16) & 0xFF));
+        payload.push_back(static_cast<uint8>((rxBps >> 24) & 0xFF));
+
         // addr_len + addr
         payload.push_back(static_cast<uint8>(ns.address.size()));
         payload.insert(payload.end(), ns.address.begin(), ns.address.end());
@@ -592,6 +638,13 @@ std::vector<uint8> ProxyMgr::BuildStatusPayload()
     }
 
     return payload;
+}
+
+void ProxyMgr::AddNodeTraffic(uint8 nodeId, uint64 txBytes, uint64 rxBytes)
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    _nodeTxBytes[nodeId] += txBytes;
+    _nodeRxBytes[nodeId] += rxBytes;
 }
 
 void ProxyMgr::PushStatusToSubscribers()

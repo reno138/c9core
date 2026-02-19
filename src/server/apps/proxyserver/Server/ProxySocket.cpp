@@ -52,7 +52,8 @@ void ProxySocket::Start()
         sProxySocketMgr.GetIoContext(),
         shared_from_this());
 
-    auto [backendHost, backendPort] = sProxyMgr.ChooseNode();
+    auto [backendNodeId, backendHost, backendPort] = sProxyMgr.ChooseNode();
+    _backendNodeId = backendNodeId;
     _backend->Connect(backendHost, backendPort);
 
     AsyncRead();
@@ -203,6 +204,8 @@ bool ProxySocket::ReadDataHandler()
         _packetBuffer.GetReadPointer() + _packetBuffer.GetActiveSize());
 
     _backend->SendRaw(packet);
+    if (_backendNodeId)
+        sProxyMgr.AddNodeTraffic(_backendNodeId, packet.size(), 0);
     return true;
 }
 
@@ -342,5 +345,8 @@ void ProxySocket::QueuePacketForClient(uint8 const* plainHeader, std::size_t hea
     if (payloadLen > 0)
         outBuf.Write(payload.GetReadPointer(), payloadLen);
 
+    std::size_t totalBytes = headerLen + payloadLen;
     QueuePacket(std::move(outBuf));
+    if (_backendNodeId)
+        sProxyMgr.AddNodeTraffic(_backendNodeId, 0, totalBytes);
 }

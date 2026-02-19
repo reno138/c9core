@@ -41,6 +41,8 @@ struct NodeInfo
     uint16      maxPlayers  { 0 };
     uint32      pid         { 0 };
     uint32      uptimeSecs  { 0 };
+    uint32      txBps       { 0 };   ///< Bytes/sec client→worldserver
+    uint32      rxBps       { 0 };   ///< Bytes/sec worldserver→client
     std::string address;
     uint16      port        { 0 };
 };
@@ -117,7 +119,7 @@ private:
     static constexpr uint8 MSG_MGMT_NODE_CMD    = 0x22;
 
     static constexpr std::size_t NONCE_SIZE     = 16;
-    static constexpr std::size_t NODE_FIXED_SIZE = 15; ///< nodeId+state+players(2)+max(2)+pid(4)+uptime(4)+addrLen(1)
+    static constexpr std::size_t NODE_FIXED_SIZE = 23; ///< nodeId+state+players(2)+max(2)+pid(4)+uptime(4)+txBps(4)+rxBps(4)+addrLen(1)
     static constexpr std::size_t RECV_BUF_SIZE  = 4096;
 
     boost::asio::io_context& _ioCtx;

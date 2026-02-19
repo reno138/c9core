@@ -94,6 +94,9 @@ private:
     /// Player GUID learned from CMSG_PLAYER_LOGIN — used to register with ProxyMgr.
     uint64 _playerGuid{ 0 };
 
+    /// Node ID of the backend worldserver this socket is connected to (for bandwidth tracking).
+    uint8 _backendNodeId{ 0 };
+
     /// Session key and realm ID stored for reroute auth handshake.
     SessionKey _sessionKey;
     uint32     _realmId{ 0 };

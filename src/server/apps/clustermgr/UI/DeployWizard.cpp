@@ -17,28 +17,32 @@
 
 #include "DeployWizard.h"
 #include "Log.h"
-#include <boost/process.hpp>
+#include <boost/process/v1.hpp>
 #include <mutex>
 #include <ncurses.h>
 #include <stdexcept>
 #include <thread>
 
-namespace bp = boost::process;
+namespace bp = boost::process::v1;
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
 DeployWizard::DeployWizard(Config defaults)
     : _cfg(std::move(defaults))
 {
-    // Map Config to editable fields
-    _fields[0] = { "Remote Host  ", _cfg.sshHost,         false };
-    _fields[1] = { "SSH User     ", _cfg.sshUser,         false };
-    _fields[2] = { "SSH Port     ", std::to_string(_cfg.sshPort), false };
-    _fields[3] = { "SSH Key      ", _cfg.sshKey,          false };
-    _fields[4] = { "Remote Path  ", _cfg.remotePath,      false };
-    _fields[5] = { "Worldserver  ", _cfg.worldserverBin,  false };
-    _fields[6] = { "Nodemgr      ", _cfg.nodemgrBin,      false };
-    _fields[7] = { "Start After  ", _cfg.startAfterDeploy ? "yes" : "no", false };
+    // Fields 0–10: Remote Host, SSH User, SSH Password, Node Type, Node ID,
+    //              SSH Port, SSH Key, Remote Path, Worldserver, Nodemgr, Start After
+    _fields[0]  = { "Remote Host  ", _cfg.sshHost,                                    false };
+    _fields[1]  = { "SSH User     ", _cfg.sshUser,                                    false };
+    _fields[2]  = { "SSH Password ", _cfg.sshPassword,                                true  };
+    _fields[3]  = { "Node Type    ", _cfg.nodeType,                                   false };
+    _fields[4]  = { "Node ID      ", std::to_string(_cfg.nodeId),                     false };
+    _fields[5]  = { "SSH Port     ", std::to_string(_cfg.sshPort),                    false };
+    _fields[6]  = { "SSH Key      ", _cfg.sshKey,                                     false };
+    _fields[7]  = { "Remote Path  ", _cfg.remotePath,                                 false };
+    _fields[8]  = { "Worldserver  ", _cfg.worldserverBin,                             false };
+    _fields[9]  = { "Nodemgr      ", _cfg.nodemgrBin,                                 false };
+    _fields[10] = { "Start After  ", _cfg.startAfterDeploy ? "yes" : "no",            false };
 }
 
 // ── Public interface ─────────────────────────────────────────────────────────
@@ -46,7 +50,7 @@ DeployWizard::DeployWizard(Config defaults)
 bool DeployWizard::Run(std::string& errMsg)
 {
     // Compute window geometry
-    _winH = std::min(LINES - 2, 24);
+    _winH = std::min(LINES - 2, 26);
     _winW = std::min(COLS  - 4, 86);
     _winY = (LINES - _winH) / 2;
     _winX = (COLS  - _winW) / 2;
@@ -55,25 +59,23 @@ bool DeployWizard::Run(std::string& errMsg)
         return false;   // user cancelled
 
     // Parse fields back into Config
-    _cfg.sshHost           = _fields[0].value;
-    _cfg.sshUser           = _fields[1].value;
-    _cfg.remotePath        = _fields[4].value;
-    _cfg.worldserverBin    = _fields[5].value;
-    _cfg.nodemgrBin        = _fields[6].value;
-    _cfg.worldserverConf   = _cfg.worldserverBin.empty() ? "./worldserver.conf" : _cfg.worldserverConf;
-    _cfg.nodemgrConf       = _cfg.nodemgrBin.empty()     ? "./nodemgr.conf"     : _cfg.nodemgrConf;
-    _cfg.startAfterDeploy  = (_fields[7].value == "yes" || _fields[7].value == "y" ||
-                              _fields[7].value == "1"   || _fields[7].value == "true");
+    _cfg.sshHost          = _fields[0].value;
+    _cfg.sshUser          = _fields[1].value;
+    _cfg.sshPassword      = _fields[2].value;
+    _cfg.nodeType         = _fields[3].value;
+    _cfg.remotePath       = _fields[7].value;
+    _cfg.worldserverBin   = _fields[8].value;
+    _cfg.nodemgrBin       = _fields[9].value;
+    _cfg.startAfterDeploy = (_fields[10].value == "yes" || _fields[10].value == "y" ||
+                             _fields[10].value == "1"   || _fields[10].value == "true");
 
-    try
-    {
-        _cfg.sshPort = std::stoi(_fields[2].value);
-    }
-    catch (...)
-    {
-        _cfg.sshPort = 22;
-    }
-    _cfg.sshKey = _fields[3].value;
+    try { _cfg.nodeId  = std::stoi(_fields[4].value); } catch (...) { _cfg.nodeId  = 1; }
+    try { _cfg.sshPort = std::stoi(_fields[5].value); } catch (...) { _cfg.sshPort = 22; }
+    _cfg.sshKey = _fields[6].value;
+
+    // Normalise nodeType
+    if (_cfg.nodeType != "instance")
+        _cfg.nodeType = "worldserver";
 
     if (_cfg.sshHost.empty())
     {
@@ -122,24 +124,26 @@ void DeployWizard::DrawForm()
         // Label
         mvwprintw(win, row, 2, "%s: ", _fields[i].label.c_str());
 
-        // Value field
-        std::string val = _fields[i].value;
-        if (static_cast<int>(val.size()) > fieldW)
-            val = val.substr(val.size() - fieldW);  // show tail end
+        // Value (mask password fields)
+        std::string displayVal = _fields[i].isPassword
+            ? std::string(_fields[i].value.size(), '*')
+            : _fields[i].value;
+
+        if (static_cast<int>(displayVal.size()) > fieldW)
+            displayVal = displayVal.substr(displayVal.size() - fieldW);
 
         if (active)
         {
             wattron(win, A_REVERSE | A_BOLD);
-            mvwprintw(win, row, 17, "%-*s", fieldW, val.c_str());
-            // Draw cursor at end of value
-            int cursorX = 17 + static_cast<int>(val.size());
+            mvwprintw(win, row, 17, "%-*s", fieldW, displayVal.c_str());
+            int cursorX = 17 + static_cast<int>(displayVal.size());
             if (cursorX < _winW - 2)
                 mvwaddch(win, row, cursorX, '_');
             wattroff(win, A_REVERSE | A_BOLD);
         }
         else
         {
-            mvwprintw(win, row, 17, "%-*s", fieldW, val.c_str());
+            mvwprintw(win, row, 17, "%-*s", fieldW, displayVal.c_str());
         }
     }
 
@@ -150,7 +154,8 @@ void DeployWizard::DrawForm()
         mvwhline(win, sepRow, 1, ACS_HLINE, _winW - 2);
         mvwaddch(win, sepRow, 0, ACS_LTEE);
         mvwaddch(win, sepRow, _winW - 1, ACS_RTEE);
-        mvwprintw(win, _winH - 2, 2, "Tab/Arrow: Navigate    F10: Deploy    Esc: Cancel");
+        mvwprintw(win, _winH - 2, 2,
+                  "Tab/Arrow: Navigate    F10: Deploy    Esc: Cancel");
     }
 
     wrefresh(win);
@@ -195,10 +200,18 @@ bool DeployWizard::RunForm()
         {
             _fields[_activeField].value += static_cast<char>(ch);
         }
-        // Ignore other keys
 
         DrawForm();
     }
+}
+
+// ── sshpass helper ────────────────────────────────────────────────────────────
+
+std::vector<std::string> DeployWizard::SshpassPrefix() const
+{
+    if (_cfg.sshPassword.empty())
+        return {};
+    return { "sshpass", "-p", _cfg.sshPassword };
 }
 
 // ── Deploy execution ──────────────────────────────────────────────────────────
@@ -222,13 +235,18 @@ bool DeployWizard::RunDeploy()
             hasNewLines = true;
         };
 
+        std::string authMethod = _cfg.sshPassword.empty() ? "key" : "password";
         log("=== C9Core Node Deployment ===");
-        log("  Remote: " + _cfg.sshUser + "@" + _cfg.sshHost + ":" + std::to_string(_cfg.sshPort));
-        log("  Remote path: " + _cfg.remotePath);
+        log("  Remote:  " + _cfg.sshUser + "@" + _cfg.sshHost +
+            ":" + std::to_string(_cfg.sshPort) + "  (auth: " + authMethod + ")");
+        log("  RemPath: " + _cfg.remotePath);
+        log("  NodeType:" + _cfg.nodeType + "  NodeID:" + std::to_string(_cfg.nodeId));
+        if (!_cfg.proxyAddress.empty())
+            log("  Proxy:   " + _cfg.proxyAddress);
         log("");
 
         // Step 1: worldserver binary
-        log("[1/5] Copying worldserver binary...");
+        log("[1/6] Copying worldserver binary...");
         if (!ScpFile(_cfg.worldserverBin, _cfg.remotePath, "worldserver"))
         {
             _deployErrMsg = "Failed to copy worldserver binary";
@@ -237,7 +255,7 @@ bool DeployWizard::RunDeploy()
         log("      OK");
 
         // Step 2: nodemgr binary
-        log("[2/5] Copying nodemgr binary...");
+        log("[2/6] Copying nodemgr binary...");
         if (!ScpFile(_cfg.nodemgrBin, _cfg.remotePath, "nodemgr"))
         {
             _deployErrMsg = "Failed to copy nodemgr binary";
@@ -246,7 +264,7 @@ bool DeployWizard::RunDeploy()
         log("      OK");
 
         // Step 3: worldserver config
-        log("[3/5] Copying worldserver.conf...");
+        log("[3/6] Copying worldserver.conf...");
         if (!ScpFile(_cfg.worldserverConf, _cfg.remotePath, "worldserver.conf"))
         {
             _deployErrMsg = "Failed to copy worldserver.conf";
@@ -255,7 +273,7 @@ bool DeployWizard::RunDeploy()
         log("      OK");
 
         // Step 4: nodemgr config
-        log("[4/5] Copying nodemgr.conf...");
+        log("[4/6] Copying nodemgr.conf...");
         if (!ScpFile(_cfg.nodemgrConf, _cfg.remotePath, "nodemgr.conf"))
         {
             _deployErrMsg = "Failed to copy nodemgr.conf";
@@ -264,7 +282,7 @@ bool DeployWizard::RunDeploy()
         log("      OK");
 
         // Step 5: Set permissions
-        log("[5/5] Setting permissions...");
+        log("[5/6] Setting permissions...");
         std::string chmodCmd = "chmod +x " + _cfg.remotePath + "/worldserver "
                                + _cfg.remotePath + "/nodemgr";
         if (!SshCommand(chmodCmd))
@@ -274,13 +292,49 @@ bool DeployWizard::RunDeploy()
         }
         log("      OK");
 
+        // Step 6: Patch configuration via sed
+        log("[6/6] Patching configuration...");
+
+        // Always patch nodemgr.conf: NodeId and ProxyServer.Address
+        std::string rp = _cfg.remotePath;
+        std::string nc = rp + "/nodemgr.conf";
+
+        if (!SshCommand("sed -i 's/NodeId = [0-9]*/NodeId = " +
+                        std::to_string(_cfg.nodeId) + "/' " + nc))
+            log("    WARNING: Could not patch NodeId in nodemgr.conf");
+
+        if (!_cfg.proxyAddress.empty())
+        {
+            // Patch proxy address in nodemgr.conf
+            if (!SshCommand("sed -i 's/ProxyServer\\.Address = \"[^\"]*\"/ProxyServer.Address = \"" +
+                            _cfg.proxyAddress + "\"/' " + nc))
+                log("    WARNING: Could not patch ProxyServer.Address in nodemgr.conf");
+
+            // Patch worldserver.conf
+            std::string wc = rp + "/worldserver.conf";
+            if (!SshCommand("sed -i 's/ProxyServer\\.Enable = 0/ProxyServer.Enable = 1/' " + wc))
+                log("    WARNING: Could not patch ProxyServer.Enable in worldserver.conf");
+
+            if (!SshCommand("sed -i 's/ProxyServer\\.Address = \"[^\"]*\"/ProxyServer.Address = \"" +
+                            _cfg.proxyAddress + "\"/' " + wc))
+                log("    WARNING: Could not patch ProxyServer.Address in worldserver.conf");
+
+            // If instance node, enable InstanceServer
+            if (_cfg.nodeType == "instance")
+            {
+                if (!SshCommand("sed -i 's/InstanceServer\\.Enable = 0/InstanceServer.Enable = 1/' " + wc))
+                    log("    WARNING: Could not patch InstanceServer.Enable in worldserver.conf");
+            }
+        }
+        log("      OK");
+
         // Optional: Start nodemgr after deploy
         if (_cfg.startAfterDeploy)
         {
             log("");
             log("[+] Starting nodemgr on remote host...");
-            std::string startCmd = "nohup " + _cfg.remotePath + "/nodemgr"
-                                   + " -c " + _cfg.remotePath + "/nodemgr.conf"
+            std::string startCmd = "nohup " + rp + "/nodemgr"
+                                   + " -c " + rp + "/nodemgr.conf"
                                    + " </dev/null >/dev/null 2>&1 &";
             if (!SshCommand(startCmd))
                 log("    WARNING: Failed to start nodemgr (may already be running)");
@@ -333,19 +387,17 @@ void DeployWizard::DrawDeployLog()
     mvwprintw(win, 0, titleX, "%s", title.c_str());
     wattroff(win, A_BOLD);
 
-    int logAreaH = _winH - 3;   // top border + title + bottom border + hint
+    int logAreaH = _winH - 3;
     int logAreaY = 1;
     int logAreaX = 2;
     int logAreaW = _winW - 4;
 
-    // Snapshot lines under lock to avoid race with worker thread
     std::vector<std::string> lines;
     {
         std::lock_guard<std::mutex> lock(_logMutex);
         lines = _logLines;
     }
 
-    // Show last logAreaH lines
     int startLine = static_cast<int>(lines.size()) - logAreaH;
     if (startLine < 0) startLine = 0;
 
@@ -372,19 +424,37 @@ bool DeployWizard::ScpFile(std::string const& localPath, std::string const& remo
 {
     std::string target = _cfg.sshUser + "@" + _cfg.sshHost + ":" + remoteDir + "/" + remoteName;
 
-    std::vector<std::string> args = {
+    // Base scp arguments
+    std::vector<std::string> scpArgs = {
         "-P", std::to_string(_cfg.sshPort),
-        "-i", _cfg.sshKey,
         "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
-        localPath,
-        target
     };
+
+    std::string program;
+    std::vector<std::string> args;
+
+    if (!_cfg.sshPassword.empty())
+    {
+        // sshpass -p <password> scp [opts] src dst
+        program = "sshpass";
+        args = { "-p", _cfg.sshPassword, "scp" };
+        args.insert(args.end(), scpArgs.begin(), scpArgs.end());
+        // BatchMode conflicts with sshpass; don't add it
+    }
+    else
+    {
+        // scp -i key -o BatchMode=yes [opts] src dst
+        program = "scp";
+        args = scpArgs;
+        args.insert(args.end(), { "-i", _cfg.sshKey, "-o", "BatchMode=yes" });
+    }
+    args.push_back(localPath);
+    args.push_back(target);
 
     try
     {
         bp::ipstream out;
-        bp::child proc("scp", bp::args(args), bp::std_out > out, bp::std_err > out);
+        bp::child proc(program, bp::args(args), bp::std_out > out, bp::std_err > out);
 
         std::string line;
         while (std::getline(out, line))
@@ -402,19 +472,33 @@ bool DeployWizard::ScpFile(std::string const& localPath, std::string const& remo
 
 bool DeployWizard::SshCommand(std::string const& cmd)
 {
-    std::vector<std::string> args = {
+    std::vector<std::string> sshArgs = {
         "-p", std::to_string(_cfg.sshPort),
-        "-i", _cfg.sshKey,
         "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
-        _cfg.sshUser + "@" + _cfg.sshHost,
-        cmd
     };
+
+    std::string program;
+    std::vector<std::string> args;
+
+    if (!_cfg.sshPassword.empty())
+    {
+        program = "sshpass";
+        args = { "-p", _cfg.sshPassword, "ssh" };
+        args.insert(args.end(), sshArgs.begin(), sshArgs.end());
+    }
+    else
+    {
+        program = "ssh";
+        args = sshArgs;
+        args.insert(args.end(), { "-i", _cfg.sshKey, "-o", "BatchMode=yes" });
+    }
+    args.push_back(_cfg.sshUser + "@" + _cfg.sshHost);
+    args.push_back(cmd);
 
     try
     {
         bp::ipstream out;
-        bp::child proc("ssh", bp::args(args), bp::std_out > out, bp::std_err > out);
+        bp::child proc(program, bp::args(args), bp::std_out > out, bp::std_err > out);
 
         std::string line;
         while (std::getline(out, line))

@@ -32,7 +32,10 @@
  *   3. scp worldserver.conf   → remote host
  *   4. scp nodemgr.conf       → remote host
  *   5. ssh chmod +x worldserver nodemgr
- *   6. (optional) ssh nohup ./nodemgr ... &
+ *   6. ssh sed to patch configs (ProxyServer.Enable, NodeId, etc.)
+ *   7. (optional) ssh nohup ./nodemgr ... &
+ *
+ * Supports SSH key auth or password auth via sshpass.
  *
  * The wizard blocks the calling thread while the ncurses modal is visible.
  * Deployment steps run in a background thread; output is streamed to a
@@ -48,10 +51,14 @@ public:
         std::string worldserverConf { "./worldserver.conf" };
         std::string nodemgrConf     { "./nodemgr.conf" };
         std::string sshUser         { "wow" };
+        std::string sshPassword;            ///< empty = use key auth
         std::string sshHost;
         int         sshPort         { 22 };
         std::string sshKey          { "~/.ssh/id_rsa" };
         std::string remotePath      { "/opt/c9core" };
+        std::string nodeType        { "worldserver" };  ///< "worldserver" or "instance"
+        int         nodeId          { 1 };
+        std::string proxyAddress;           ///< proxy IP for sed patching
         bool        startAfterDeploy{ true };
     };
 
@@ -73,10 +80,13 @@ private:
                  std::string const& remoteName);
     bool SshCommand(std::string const& cmd);
 
+    /// Build argv prefix for sshpass if password is set (otherwise empty).
+    std::vector<std::string> SshpassPrefix() const;
+
     void AppendLog(std::string const& line);
 
     // ── Field editing helpers ─────────────────────────────────────────────────
-    static constexpr int FIELD_COUNT = 8;
+    static constexpr int FIELD_COUNT = 11;
 
     struct Field
     {

@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -104,8 +105,8 @@ public:
     /// Load per-node address/port from config at startup.
     void LoadNodeConfig();
 
-    /// Return the address+port for the next node (round-robin or least-loaded).
-    std::pair<std::string, uint16> ChooseNode();
+    /// Return the nodeId, address, and port for the next node (round-robin or least-loaded).
+    std::tuple<uint8, std::string, uint16> ChooseNode();
 
     /// Register a worldserver control socket; return assigned node ID.
     uint8 RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort);
@@ -131,6 +132,10 @@ public:
     void StopNode(uint8 nodeId);
 
     // ── Management subscribers (clustermgr) ────────────────────────────────────
+
+    /// Accumulate bytes transferred to/from a worldserver node (called from ProxySocket).
+    /// tx = client→worldserver bytes, rx = worldserver→client bytes.
+    void AddNodeTraffic(uint8 nodeId, uint64 txBytes, uint64 rxBytes);
 
     /// Add a clustermgr client to the push subscriber list.
     void AddMgmtSubscriber(std::shared_ptr<ManagementSocket> sock);
@@ -175,8 +180,8 @@ private:
     ProxyMgr() = default;
 
     // ── Internal routing ──────────────────────────────────────────────────────
-    std::pair<std::string, uint16> ChooseLeastLoadedNode();
-    std::pair<std::string, uint16> ChooseRoundRobinNode();
+    std::tuple<uint8, std::string, uint16> ChooseLeastLoadedNode();
+    std::tuple<uint8, std::string, uint16> ChooseRoundRobinNode();
 
     /// Build the MSG_MGMT_STATUS_PUSH payload from current state.
     std::vector<uint8> BuildStatusPayload();
@@ -198,6 +203,15 @@ private:
 
     // ── Node status table (updated by nodemgr status messages) ────────────────
     std::map<uint8, NodeStatus> _nodeStatus;
+
+    // ── Per-node bandwidth counters (protected by _nodeMutex) ─────────────────
+    std::map<uint8, uint64> _nodeTxBytes;   ///< Cumulative bytes client→worldserver
+    std::map<uint8, uint64> _nodeRxBytes;   ///< Cumulative bytes worldserver→client
+    std::map<uint8, uint64> _prevTxBytes;   ///< Snapshot at last bps computation
+    std::map<uint8, uint64> _prevRxBytes;
+    std::map<uint8, uint32> _nodeTxBps;     ///< Last computed TX bytes/sec
+    std::map<uint8, uint32> _nodeRxBps;     ///< Last computed RX bytes/sec
+    std::chrono::steady_clock::time_point _lastBwUpdate{ std::chrono::steady_clock::time_point::min() };
 
     // ── Management subscribers ─────────────────────────────────────────────────
     std::mutex _mgmtMutex;

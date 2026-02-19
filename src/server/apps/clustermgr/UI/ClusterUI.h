@@ -21,9 +21,11 @@
 #include "ManagementClient.h"
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 /**
@@ -81,6 +83,17 @@ private:
     std::string FormatUptime(uint32 secs) const;
     std::string FormatState(uint8 state) const;
     int         StateColorPair(uint8 state) const;
+    std::string FormatLatency(int32 ms) const;
+    std::string FormatBandwidth(uint32 txBps, uint32 rxBps) const;
+
+    // ── Ping / latency thread ─────────────────────────────────────────────────
+    void PingLoop();
+    void PingNode(uint8 nodeId, std::string const& addr);
+
+    std::map<uint8, int32> _latencyMs;   ///< nodeId → ms (-1 = unknown)
+    std::mutex             _latencyMutex;
+    std::atomic<bool>      _pingRunning { false };
+    std::thread            _pingThread;
 
     // ── Shared state (io_context thread writes, main thread reads) ────────────
     std::mutex           _nodesMutex;

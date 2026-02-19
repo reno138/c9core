@@ -19,7 +19,12 @@
 #include "Config.h"
 #include "DeployWizard.h"
 #include <algorithm>
+#include <boost/process/v1.hpp>
 #include <ncurses.h>
+#include <sstream>
+#include <thread>
+
+namespace bp = boost::process::v1;
 
 // ── Column widths (content only, not counting the `|` separator) ──────────────
 static constexpr int W_ID      = 4;
@@ -27,7 +32,9 @@ static constexpr int W_STATE   = 10;
 static constexpr int W_PLAYERS = 10;
 static constexpr int W_PID     = 7;
 static constexpr int W_UPTIME  = 9;
-// W_HOST computed as: COLS - W_ID - W_STATE - W_PLAYERS - W_PID - W_UPTIME - 6 separators (|) - 1 leading space
+static constexpr int W_LATENCY = 8;
+static constexpr int W_BW      = 13;  // "1.2M↑ 900K↓"
+// W_HOST: remaining width after all columns + separators
 
 ClusterUI::ClusterUI(std::string proxyHost, uint16 proxyPort, std::shared_ptr<ManagementClient> client)
     : _proxyHost(std::move(proxyHost))
@@ -39,6 +46,11 @@ ClusterUI::ClusterUI(std::string proxyHost, uint16 proxyPort, std::shared_ptr<Ma
 
 ClusterUI::~ClusterUI()
 {
+    // Stop ping thread if still running
+    _pingRunning = false;
+    if (_pingThread.joinable())
+        _pingThread.join();
+
     endwin();
 }
 
@@ -76,6 +88,10 @@ void ClusterUI::Run()
 
     _dirty = true;
 
+    // Start background latency ping thread
+    _pingRunning = true;
+    _pingThread = std::thread(&ClusterUI::PingLoop, this);
+
     bool running = true;
     while (running)
     {
@@ -102,6 +118,11 @@ void ClusterUI::Run()
     }
 
     endwin();
+
+    // Stop ping thread
+    _pingRunning = false;
+    if (_pingThread.joinable())
+        _pingThread.join();
 }
 
 void ClusterUI::UpdateNodes(std::vector<NodeInfo> nodes)
@@ -157,18 +178,22 @@ void ClusterUI::DrawTitle()
 
 void ClusterUI::DrawNodeTable()
 {
-    int hostW = COLS - 1 - W_ID - 1 - W_STATE - 1 - W_PLAYERS - 1 - W_PID - 1 - W_UPTIME - 1;
+    // Compute host column width from remaining space
+    // Columns: space(1) + ID + | + STATE + | + PLAYERS + | + PID + | + UPTIME + | + LATENCY + | + BW + | + HOST
+    int hostW = COLS - 1 - W_ID - 1 - W_STATE - 1 - W_PLAYERS - 1 - W_PID - 1 - W_UPTIME - 1 - W_LATENCY - 1 - W_BW - 1;
     if (hostW < 8) hostW = 8;
 
     // ── Column header row ─────────────────────────────────────────────────────
     attron(COLOR_PAIR(COLOR_HEADER) | A_BOLD);
     mvhline(1, 0, ' ', COLS);
-    mvprintw(1, 0, " %-*s|%-*s|%-*s|%-*s|%-*s|%-*s",
+    mvprintw(1, 0, " %-*s|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s",
              W_ID,      "ID",
              W_STATE,   " State",
              W_PLAYERS, " Players",
              W_PID,     " PID",
              W_UPTIME,  " Uptime",
+             W_LATENCY, " Ping",
+             W_BW,      " Bandwidth",
              hostW,     " Host");
     attroff(COLOR_PAIR(COLOR_HEADER) | A_BOLD);
 
@@ -215,24 +240,39 @@ void ClusterUI::DrawNodeTable()
         NodeInfo const& n = nodes[i];
         bool selected = (i == _selectedRow);
 
-        std::string stateStr = FormatState(n.state);
-        std::string players  = std::to_string(n.playerCount) + "/" + std::to_string(n.maxPlayers);
-        std::string pidStr   = n.pid ? std::to_string(n.pid) : "-";
-        std::string uptime   = FormatUptime(n.uptimeSecs);
-        std::string host     = n.address.empty() ? "-" : (n.address + ":" + std::to_string(n.port));
+        std::string stateStr  = FormatState(n.state);
+        std::string players   = std::to_string(n.playerCount) + "/" + std::to_string(n.maxPlayers);
+        std::string pidStr    = n.pid ? std::to_string(n.pid) : "-";
+        std::string uptime    = FormatUptime(n.uptimeSecs);
+        std::string host      = n.address.empty() ? "-" : (n.address + ":" + std::to_string(n.port));
         if (static_cast<int>(host.size()) > hostW)
             host = host.substr(0, hostW - 1) + ">";
+
+        // Latency
+        int32 latMs = -1;
+        {
+            std::lock_guard<std::mutex> lock(_latencyMutex);
+            auto it = _latencyMs.find(n.nodeId);
+            if (it != _latencyMs.end())
+                latMs = it->second;
+        }
+        std::string latStr = FormatLatency(latMs);
+
+        // Bandwidth
+        std::string bwStr = FormatBandwidth(n.txBps, n.rxBps);
 
         // Print whole row in selected/normal color
         if (selected)
             attron(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
 
-        mvprintw(row, 0, " %-*d|%-*s|%-*s|%-*s|%-*s|%-*s",
+        mvprintw(row, 0, " %-*d|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s",
                  W_ID,      n.nodeId,
                  W_STATE,   stateStr.c_str(),
                  W_PLAYERS, players.c_str(),
                  W_PID,     pidStr.c_str(),
                  W_UPTIME,  uptime.c_str(),
+                 W_LATENCY, latStr.c_str(),
+                 W_BW,      bwStr.c_str(),
                  hostW,     host.c_str());
 
         if (selected)
@@ -380,6 +420,7 @@ void ClusterUI::OpenDeployWizard()
     cfg.sshPort         = sConfigMgr->GetOption<int32>      ("Deploy.DefaultSSHPort",  22);
     cfg.sshKey          = sConfigMgr->GetOption<std::string>("Deploy.DefaultSSHKey",   "~/.ssh/id_rsa");
     cfg.remotePath      = sConfigMgr->GetOption<std::string>("Deploy.DefaultRemotePath","/opt/c9core");
+    cfg.proxyAddress    = _proxyHost;  // pass proxy address for sed patching
 
     DeployWizard wizard(std::move(cfg));
     std::string errMsg;
@@ -397,6 +438,78 @@ void ClusterUI::Refresh()
     _dirty = true;
 }
 
+// ── Latency ping thread ───────────────────────────────────────────────────────
+
+void ClusterUI::PingLoop()
+{
+    // Stagger the first ping by 2 seconds so the UI has time to get nodes
+    for (int i = 0; i < 4 && _pingRunning; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    while (_pingRunning)
+    {
+        std::vector<NodeInfo> snap;
+        {
+            std::lock_guard<std::mutex> lock(_nodesMutex);
+            snap = _nodes;
+        }
+
+        for (auto const& n : snap)
+        {
+            if (!_pingRunning)
+                break;
+            if (!n.address.empty())
+                PingNode(n.nodeId, n.address);
+        }
+
+        // Sleep 10 seconds between rounds, checking stop flag
+        for (int i = 0; i < 20 && _pingRunning; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+}
+
+void ClusterUI::PingNode(uint8 nodeId, std::string const& addr)
+{
+    // ping -c 1 -W 1 <addr> → parse "time=X.X ms" from stdout
+    std::vector<std::string> args = { "-c", "1", "-W", "1", addr };
+
+    try
+    {
+        bp::ipstream out;
+        bp::child proc("ping", bp::args(args), bp::std_out > out, bp::std_err > bp::null);
+
+        int32 latMs = -1;
+        std::string line;
+        while (std::getline(out, line))
+        {
+            // Look for "time=X.X ms" or "time=X ms"
+            auto pos = line.find("time=");
+            if (pos != std::string::npos)
+            {
+                std::istringstream ss(line.substr(pos + 5));
+                float ms = 0.0f;
+                if (ss >> ms)
+                    latMs = static_cast<int32>(ms + 0.5f);
+            }
+        }
+
+        proc.wait();
+
+        {
+            std::lock_guard<std::mutex> lock(_latencyMutex);
+            _latencyMs[nodeId] = latMs;
+        }
+        _dirty = true;
+    }
+    catch (...)
+    {
+        std::lock_guard<std::mutex> lock(_latencyMutex);
+        _latencyMs[nodeId] = -1;
+    }
+}
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+
 std::string ClusterUI::FormatUptime(uint32 secs) const
 {
     if (secs == 0) return "-";
@@ -406,6 +519,29 @@ std::string ClusterUI::FormatUptime(uint32 secs) const
     if (h > 0) return std::to_string(h) + "h " + std::to_string(m) + "m";
     if (m > 0) return std::to_string(m) + "m " + std::to_string(s) + "s";
     return std::to_string(s) + "s";
+}
+
+std::string ClusterUI::FormatLatency(int32 ms) const
+{
+    if (ms < 0)  return "  ?";
+    return std::to_string(ms) + "ms";
+}
+
+std::string ClusterUI::FormatBandwidth(uint32 txBps, uint32 rxBps) const
+{
+    // Format a single byte/sec value as "X.Xu" or "Xu"
+    auto fmtBps = [](uint32 bps) -> std::string
+    {
+        if (bps >= 1048576)
+            return std::to_string(bps / 1048576) + "M";
+        if (bps >= 1024)
+            return std::to_string(bps / 1024) + "K";
+        return std::to_string(bps) + "B";
+    };
+
+    if (txBps == 0 && rxBps == 0)
+        return "-";
+    return fmtBps(txBps) + "u " + fmtBps(rxBps) + "d";
 }
 
 std::string ClusterUI::FormatState(uint8 state) const
