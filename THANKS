@@ -1,0 +1,34 @@
+# THANKS
+
+C9Core is built upon the outstanding work of the AzerothCore project and
+its long lineage of predecessors. Without their years of effort, C9Core
+would not exist.
+
+## AzerothCore
+- **Project**: AzerothCore — open-source WoW 3.3.5a (Wrath of the Lich King) server emulator
+- **Website**: https://www.azerothcore.org/
+- **Source**: https://github.com/azerothcore/azerothcore-wotlk
+- **License**: GNU GPL v2
+
+AzerothCore provides the complete game emulation layer: world simulation,
+player logic, scripting system, database schema, and networking
+infrastructure that C9Core extends with cluster, proxy, and node management
+capabilities.
+
+## Upstream lineage (from AzerothCore AUTHORS)
+- **TrinityCore** — https://www.trinitycore.org/
+- **MaNGOS** — http://www.mangosproject.org (2005–2008), http://getmangos.com (2008–2011)
+- **WoW Daemon Team** (2004)
+
+## C9Core additions
+The following systems are original work developed on top of AzerothCore
+and are not present in the upstream project:
+
+- **proxyserver** — transparent WoW protocol proxy with per-node routing,
+  auto-scale triggers, and cross-node player directory
+- **nodemgr** — per-node daemon that manages worldserver lifecycle and
+  reports health to the proxy over a PSK-authenticated TCP channel
+- **clustermgr** — ncurses-based TUI for cluster monitoring and node
+  deployment (SCP/SSH wizard)
+- **shared/Cluster/PskCrypt** — AES-256-CTR + HMAC-SHA256 channel
+  authentication used by all three cluster components

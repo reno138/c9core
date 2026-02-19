@@ -222,17 +222,17 @@ bool DeployWizard::RunDeploy()
         std::lock_guard<std::mutex> lock(_logMutex);
         _logLines.clear();
     }
-    _deployDone = false;
-    _deployOk   = false;
-    std::atomic<bool> hasNewLines{ false };
+    _deployDone   = false;
+    _deployOk     = false;
+    _hasNewLines  = false;
 
     // Run deployment in a background thread
-    std::thread worker([this, &hasNewLines]()
+    std::thread worker([this]()
     {
         auto log = [&](std::string const& line)
         {
             AppendLog(line);
-            hasNewLines = true;
+            _hasNewLines = true;
         };
 
         std::string authMethod = _cfg.sshPassword.empty() ? "key" : "password";
@@ -350,7 +350,7 @@ bool DeployWizard::RunDeploy()
     // ── UI loop while deploying ───────────────────────────────────────────────
     while (!_deployDone)
     {
-        if (hasNewLines.exchange(false))
+        if (_hasNewLines.exchange(false))
             DrawDeployLog();
         getch();  // will return ERR (halfdelay) or a key press
     }

@@ -65,8 +65,8 @@
 #if AC_PLATFORM == AC_PLATFORM_WINDOWS
 #include "ServiceWin32.h"
 char serviceName[] = "worldserver";
-char serviceLongName[] = "AzerothCore world service";
-char serviceDescription[] = "AzerothCore World of Warcraft emulator world service";
+char serviceLongName[] = "C9Core world service";
+char serviceDescription[] = "C9Core World of Warcraft emulator world service";
 /*
  * -1 - not in service mode
  *  0 - stopped

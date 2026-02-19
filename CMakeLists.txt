@@ -23,7 +23,7 @@ if (POLICY CMP0153)
 endif()
 
 # Set projectname (must be done AFTER setting configurationtypes)
-project(AzerothCore VERSION 3.0.0 LANGUAGES CXX C)
+project(C9Core VERSION 3.0.0 LANGUAGES CXX C)
 
 # add this options before PROJECT keyword
 set(CMAKE_DISABLE_SOURCE_CHANGES ON)

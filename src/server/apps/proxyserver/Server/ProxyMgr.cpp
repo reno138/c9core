@@ -489,10 +489,13 @@ void ProxyMgr::CheckAutoScale()
 
             if (!hasWorldserver && hasMgr)
             {
-                LOG_INFO("proxy", "ProxyMgr: AutoScale UP — load={}% starting node {}", loadPct, nodeId);
-                _nodeStatus[nodeId].state = NodeState::Starting;
-                _nodeMgrs[nodeId].lock()->SendNodeStart();
-                _lastScaleEvent = now;
+                if (auto sock = _nodeMgrs[nodeId].lock())
+                {
+                    LOG_INFO("proxy", "ProxyMgr: AutoScale UP — load={}% starting node {}", loadPct, nodeId);
+                    _nodeStatus[nodeId].state = NodeState::Starting;
+                    sock->SendNodeStart();
+                    _lastScaleEvent = now;
+                }
                 return;
             }
         }
@@ -520,11 +523,14 @@ void ProxyMgr::CheckAutoScale()
 
         if (targetNode != 0)
         {
-            LOG_INFO("proxy", "ProxyMgr: AutoScale DOWN — load={}% stopping node {} ({} players)",
-                     loadPct, targetNode, fewest);
-            _nodeStatus[targetNode].state = NodeState::Stopping;
-            _nodeMgrs[targetNode].lock()->SendNodeStop();
-            _lastScaleEvent = now;
+            if (auto sock = _nodeMgrs[targetNode].lock())
+            {
+                LOG_INFO("proxy", "ProxyMgr: AutoScale DOWN — load={}% stopping node {} ({} players)",
+                         loadPct, targetNode, fewest);
+                _nodeStatus[targetNode].state = NodeState::Stopping;
+                sock->SendNodeStop();
+                _lastScaleEvent = now;
+            }
         }
     }
 }

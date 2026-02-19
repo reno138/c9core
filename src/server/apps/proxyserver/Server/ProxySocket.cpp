@@ -332,7 +332,13 @@ void ProxySocket::OnRerouteComplete(std::shared_ptr<BackendSession> newBackend)
 void ProxySocket::QueuePacketForClient(uint8 const* plainHeader, std::size_t headerLen, MessageBuffer& payload)
 {
     // Re-encrypt the plaintext header for the client direction.
+    // WoW 3.3.5a server headers are 4 or 5 bytes; anything else is a protocol error.
     uint8 encHeader[5];
+    if (headerLen == 0 || headerLen > sizeof(encHeader))
+    {
+        LOG_ERROR("proxy", "ProxySocket: QueuePacketForClient — invalid headerLen {}", headerLen);
+        return;
+    }
     std::memcpy(encHeader, plainHeader, headerLen);
 
     if (_clientCrypt.IsInitialized())

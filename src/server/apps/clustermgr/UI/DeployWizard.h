@@ -105,6 +105,7 @@ private:
     std::vector<std::string> _logLines;
     std::atomic<bool>        _deployDone   { false };
     std::atomic<bool>        _deployOk     { false };
+    std::atomic<bool>        _hasNewLines  { false };
     std::string              _deployErrMsg;
 
     // ── Window geometry (set in DrawForm) ─────────────────────────────────────
