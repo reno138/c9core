@@ -149,17 +149,29 @@ std::pair<std::string, uint16> ProxyMgr::ChooseLeastLoadedNode()
     if (_nodeAddresses.empty())
         return { "127.0.0.1", 8086 };
 
-    uint8 best = _nodeAddresses.begin()->first;
-    uint32 minCount = _nodePlayerCounts.count(best) ? _nodePlayerCounts[best] : 0;
+    uint8    best     = 0;
+    uint32   minCount = UINT32_MAX;
 
     for (auto const& [nodeId, addr] : _nodeAddresses)
     {
+        // Only consider nodes with an active (non-expired) ControlSocket.
+        auto it = _nodes.find(nodeId);
+        if (it == _nodes.end() || it->second.expired())
+            continue;
+
         uint32 cnt = _nodePlayerCounts.count(nodeId) ? _nodePlayerCounts.at(nodeId) : 0;
-        if (cnt < minCount)
+        if (best == 0 || cnt < minCount)
         {
-            best = nodeId;
+            best     = nodeId;
             minCount = cnt;
         }
+    }
+
+    if (best == 0)
+    {
+        // No active worldserver at all — return first configured as last resort.
+        LOG_WARN("proxy", "ProxyMgr: ChooseLeastLoadedNode — no active nodes");
+        return _nodeAddresses.begin()->second;
     }
 
     LOG_INFO("proxy", "ProxyMgr: LeastLoaded → node {} ({}:{}, {} players)",
@@ -253,8 +265,72 @@ void ProxyMgr::UnregisterNode(uint8 nodeId)
         _nodes.erase(nodeId);
         if (_nodeStatus.count(nodeId))
             _nodeStatus[nodeId].state = NodeState::Stopped;
+        // Clear stale player count so the dead node isn't picked as least-loaded.
+        _nodePlayerCounts[nodeId] = 0;
+        if (_nodeStatus.count(nodeId))
+            _nodeStatus[nodeId].playerCount = 0;
     }
     LOG_INFO("proxy", "ProxyMgr: Worldserver node {} offline", nodeId);
+
+    // ── Reroute or disconnect players that were on the crashed node ────────────
+    // Collect affected GUIDs under the directory lock (don't hold it while rerouting).
+    std::vector<uint64> affected;
+    {
+        std::lock_guard<std::mutex> lock(_dirMutex);
+        for (auto const& [guid, info] : _playerByGuid)
+            if (info.nodeId == nodeId)
+                affected.push_back(guid);
+    }
+
+    if (!affected.empty())
+    {
+        // Pick a surviving node to redirect players to (holds _nodeMutex internally).
+        auto [fallbackAddr, fallbackPort] = ChooseLeastLoadedNode();
+
+        bool hasAlternative = (fallbackPort != 0);
+        // If ChooseLeastLoadedNode returned the last-resort "no active nodes" address,
+        // the port is still non-zero but no worldserver is behind it — safer to
+        // check that at least one active node exists.
+        {
+            std::lock_guard<std::mutex> lock(_nodeMutex);
+            hasAlternative = std::any_of(_nodes.begin(), _nodes.end(),
+                [](auto const& kv) { return !kv.second.expired(); });
+        }
+
+        if (hasAlternative)
+        {
+            LOG_WARN("proxy", "ProxyMgr: Node {} crashed — rerouting {} player(s) to {}:{}",
+                     nodeId, affected.size(), fallbackAddr, fallbackPort);
+            for (uint64 guid : affected)
+                ReroutePlayer(guid, fallbackAddr, fallbackPort);
+        }
+        else
+        {
+            LOG_WARN("proxy", "ProxyMgr: Node {} crashed — no surviving node; disconnecting {} player(s)",
+                     nodeId, affected.size());
+            for (uint64 guid : affected)
+            {
+                auto sock = GetSession(guid);
+                if (sock)
+                    sock->CloseSocket();
+            }
+        }
+
+        // Clean the directory for these players now (they will re-register on reconnect).
+        {
+            std::lock_guard<std::mutex> lock(_dirMutex);
+            for (uint64 guid : affected)
+            {
+                auto it = _playerByGuid.find(guid);
+                if (it != _playerByGuid.end())
+                {
+                    _playerByName.erase(it->second.name);
+                    _playerByGuid.erase(it);
+                }
+            }
+        }
+    }
+
     PushStatusToSubscribers();
 }
 
