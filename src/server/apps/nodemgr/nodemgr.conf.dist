@@ -1,0 +1,96 @@
+########################################
+# AzerothCore Node Manager config file #
+########################################
+[nodemgr]
+
+###################################################################################################
+# SECTION INDEX
+#
+#    PROXY CONNECTION
+#    WORLDSERVER PROCESS
+#    LOGGING
+#
+###################################################################################################
+
+###################################################################################################
+# PROXY CONNECTION
+#
+#    ProxyAddress
+#        Description: IP address or hostname of the proxy server.
+#        Default:     "127.0.0.1"
+
+ProxyAddress = "127.0.0.1"
+
+#
+#    ProxyNodeMgrPort
+#        Description: Port the proxy listens on for nodemgr connections (must match proxyserver.conf NodeMgrPort).
+#        Default:     8091
+
+ProxyNodeMgrPort = 8091
+
+#
+#    Management.SharedSecret
+#        Description: Pre-shared secret for channel encryption (must match proxyserver.conf and clustermgr.conf).
+#        Default:     "change-me"
+
+Management.SharedSecret = "change-me"
+
+#
+#    NodeId
+#        Description: The cluster node ID this nodemgr manages (1-based, must match proxy's WorldServer.Node.N config).
+#                     If the configured ID is already occupied the proxy will assign the next free slot.
+#        Default:     1
+
+NodeId = 1
+
+#
+#    WorldServerPort
+#        Description: The game port the managed worldserver listens on (must match proxy's WorldServer.Node.N.Port).
+#        Default:     8086
+
+WorldServerPort = 8086
+
+#
+###################################################################################################
+
+###################################################################################################
+# WORLDSERVER PROCESS
+#
+#    WorldserverBin
+#        Description: Full path to the worldserver binary.
+#        Default:     "./worldserver"
+
+WorldserverBin = "./worldserver"
+
+#
+#    WorldserverConfig
+#        Description: Full path to the worldserver configuration file for this node.
+#        Default:     "./worldserver.conf"
+
+WorldserverConfig = "./worldserver.conf"
+
+#
+#    WorldserverLog
+#        Description: Full path to the log file where worldserver stdout is redirected.
+#        Default:     "/tmp/worldserver-node.log"
+
+WorldserverLog = "/tmp/worldserver-node.log"
+
+#
+###################################################################################################
+
+###################################################################################################
+# LOGGING
+#
+
+LogsDir = ""
+
+Appender.Console=1,4,0,"1 9 3 6 5 8"
+Appender.NodeMgr=2,4,0,nodemgr.log,w
+
+Logger.root=4,Console NodeMgr
+Logger.server.nodemgr=4,Console NodeMgr
+Logger.nodemgr=4,Console NodeMgr
+
+#
+###################################################################################################

@@ -19,6 +19,7 @@
 #define ProxyMgr_h__
 
 #include "Define.h"
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -28,6 +29,8 @@
 #include <vector>
 
 class ControlSocket;
+class ManagementSocket;
+class NodeMgrSocket;
 class ProxySocket;
 
 /// Cross-node player information maintained in the proxy's global directory.
@@ -35,7 +38,7 @@ struct ClusterPlayerInfo
 {
     uint64      guid{ 0 };
     uint8       nodeId{ 0 };
-    std::string name;        ///< lowercase
+    std::string name;
     uint32      zoneId{ 0 };
     uint8       level{ 0 };
     uint8       classId{ 0 };
@@ -43,15 +46,43 @@ struct ClusterPlayerInfo
     uint8       teamId{ 0 };
 };
 
+/// Per-node lifecycle state reported by nodemgr daemons.
+enum class NodeState : uint8
+{
+    Unknown  = 0,
+    Stopped  = 1,
+    Starting = 2,
+    Running  = 3,
+    Stopping = 4,
+    Crashed  = 5,
+};
+
+/// Status snapshot for a single node (used by management push and auto-scale).
+struct NodeStatus
+{
+    uint8     nodeId{ 0 };
+    NodeState state{ NodeState::Unknown };
+    uint32    pid{ 0 };
+    uint32    uptimeSecs{ 0 };
+    uint32    playerCount{ 0 };
+    uint32    maxPlayers{ 500 };
+    std::string address;
+    uint16    port{ 0 };
+};
+
 /**
  * @brief Central proxy manager.
  *
  * Responsibilities:
- *  1. Maps player GUIDs to their ProxySockets (for rerouting).
- *  2. Tracks registered backend nodes (node_id → ControlSocket).
- *  3. Maintains a cross-node player directory (guid → info, name → guid).
- *  4. Delivers packets directly to player clients (bypassing backend).
- *  5. Broadcasts cluster events (player online/offline) to all other nodes.
+ *  1. Maps player GUIDs to their ProxySockets.
+ *  2. Tracks registered backend worldserver nodes.
+ *  3. Tracks registered nodemgr daemons.
+ *  4. Tracks clustermgr management subscribers.
+ *  5. Maintains a cross-node player directory.
+ *  6. Delivers packets directly to player clients.
+ *  7. Broadcasts cluster events to all nodes.
+ *  8. Routes players via round-robin or least-loaded strategy.
+ *  9. Drives auto-scale decisions (start/stop nodes based on load).
  */
 class ProxyMgr
 {
@@ -62,123 +93,141 @@ public:
         return instance;
     }
 
-    // ── Session registry (ProxySocket ↔ GUID) ─────────────────────────────────
-
+    // ── Session registry ───────────────────────────────────────────────────────
     void RegisterSession(uint64 guid, std::shared_ptr<ProxySocket> socket);
     void UnregisterSession(uint64 guid);
     std::shared_ptr<ProxySocket> GetSession(uint64 guid);
-
     void ReroutePlayer(uint64 guid, std::string const& address, uint16 port);
 
-    // ── Node registry (worldserver/instanceserver nodes) ──────────────────────
+    // ── Worldserver node registry ──────────────────────────────────────────────
 
-    /**
-     * @brief Load per-node address/port from config (call once at startup).
-     * Reads WorldServer.Node.Count + WorldServer.Node.N.Address/Port.
-     * Falls back to WorldServer.Address/Port for single-node setups.
-     */
+    /// Load per-node address/port from config at startup.
     void LoadNodeConfig();
 
-    /**
-     * @brief Return the address+port of the worldserver node with the fewest players.
-     * Used by ProxySocket::Start() to pick which backend to connect to.
-     */
-    std::pair<std::string, uint16> ChooseLeastLoadedNode();
+    /// Return the address+port for the next node (round-robin or least-loaded).
+    std::pair<std::string, uint16> ChooseNode();
 
-    /**
-     * @brief Register a backend node, assign it a node ID (1–5), and return it.
-     * Called by ControlSocket::HandleRegister().
-     */
+    /// Register a worldserver control socket; return assigned node ID.
     uint8 RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort);
 
-    /**
-     * @brief Unregister a node when its ControlSocket disconnects.
-     */
+    /// Unregister a worldserver when its control socket closes.
     void UnregisterNode(uint8 nodeId);
 
-    // ── Cluster player directory ──────────────────────────────────────────────
+    // ── nodemgr daemon registry ────────────────────────────────────────────────
 
-    /**
-     * @brief Called when a worldserver reports a player came online.
-     * Updates the directory and broadcasts to all other nodes.
-     */
+    /// Register a nodemgr connection; return the node ID it will manage.
+    uint8 RegisterNodeMgr(std::shared_ptr<NodeMgrSocket> socket, uint8 configuredNodeId, uint16 gamePort);
+
+    /// Unregister a nodemgr (called from NodeMgrSocket::OnClose).
+    void UnregisterNodeMgr(uint8 nodeId);
+
+    /// Update per-node status from a MSG_NODE_STATUS message.
+    void UpdateNodeMgrStatus(uint8 nodeId, uint8 state, uint32 pid, uint32 uptime);
+
+    /// Send MSG_NODE_START to the nodemgr for a given node (from clustermgr or auto-scale).
+    void StartNode(uint8 nodeId);
+
+    /// Send MSG_NODE_STOP to the nodemgr for a given node.
+    void StopNode(uint8 nodeId);
+
+    // ── Management subscribers (clustermgr) ────────────────────────────────────
+
+    /// Add a clustermgr client to the push subscriber list.
+    void AddMgmtSubscriber(std::shared_ptr<ManagementSocket> sock);
+
+    /// Remove a clustermgr client (called from ManagementSocket::OnClose).
+    void RemoveMgmtSubscriber(std::shared_ptr<ManagementSocket> sock);
+
+    /// Serialize the current NodeStatus table and push to all subscribers.
+    void PushStatusToSubscribers();
+
+    // ── Auto-scale ────────────────────────────────────────────────────────────
+
+    /// Called by a recurring 30-second timer in Main.cpp.
+    void CheckAutoScale();
+
+    /// Load auto-scale and routing config from proxyserver.conf.
+    void LoadAutoScaleConfig();
+
+    // ── Cluster player directory ───────────────────────────────────────────────
     void OnPlayerOnline(uint64 guid, uint8 nodeId, std::string name,
                         uint32 zoneId, uint8 level, uint8 classId, uint8 raceId, uint8 teamId);
-
-    /**
-     * @brief Called when a worldserver reports a player went offline.
-     * Updates the directory and broadcasts to all other nodes.
-     */
     void OnPlayerOffline(uint64 guid, uint8 nodeId);
 
     // ── Cross-node packet delivery ────────────────────────────────────────────
-
-    /**
-     * @brief Deliver a plaintext WoW game packet directly to a player's client.
-     * The packet bytes are re-encrypted for the client direction by ProxySocket.
-     */
     void DeliverPacketToPlayer(uint64 targetGuid, std::vector<uint8> packetData);
 
     // ── Group state ───────────────────────────────────────────────────────────
-
     struct ProxyGroupMember { uint64 guid; uint8 subgroup; uint8 roleFlags; uint8 nodeId; };
 
     void OnGroupUpdate(uint64 groupGuid, uint8 sourceNodeId, uint8 memberCount, std::vector<uint8> memberData);
     void OnGroupDisband(uint64 groupGuid, uint8 sourceNodeId);
 
     // ── LFG master-node relay ─────────────────────────────────────────────────
-
-    /**
-     * @brief Set which node ID runs the LFG master queue (default: 1).
-     * Called at startup from config (ClusterServer.LFGMasterNode).
-     */
     void SetLFGMasterNode(uint8 nodeId) { _lfgMasterNodeId = nodeId; }
-
-    /**
-     * @brief Forward an LFG relay payload to the designated LFG master node.
-     * Wraps the payload in MSG_CLUSTER_LFG_RELAY before sending.
-     * sourceNodeId is included so the master can route responses back.
-     */
     void RelayToLFGMaster(uint8 sourceNodeId, std::vector<uint8> payload);
 
     // ── Node relay & broadcast helpers ────────────────────────────────────────
-
-    /**
-     * @brief Forward a pre-built relay frame to a specific node's ControlSocket.
-     */
     void RelayToNode(uint8 targetNodeId, std::vector<uint8> const& msg);
-
-    /**
-     * @brief Send a raw binary message to all registered nodes except exclude_node_id.
-     * Thread-safe.
-     */
     void BroadcastToOtherNodes(std::vector<uint8> const& data, uint8 excludeNodeId);
 
 private:
     ProxyMgr() = default;
 
+    // ── Internal routing ──────────────────────────────────────────────────────
+    std::pair<std::string, uint16> ChooseLeastLoadedNode();
+    std::pair<std::string, uint16> ChooseRoundRobinNode();
+
+    /// Build the MSG_MGMT_STATUS_PUSH payload from current state.
+    std::vector<uint8> BuildStatusPayload();
+
     // ── Session map ────────────────────────────────────────────────────────────
     std::mutex _sessionMutex;
     std::unordered_map<uint64, std::weak_ptr<ProxySocket>> _sessions;
 
-    // ── Node map ───────────────────────────────────────────────────────────────
+    // ── Worldserver node map ───────────────────────────────────────────────────
     std::mutex _nodeMutex;
-    std::unordered_map<uint8, std::weak_ptr<ControlSocket>> _nodes; ///< node_id → socket
-    uint8 _nextNodeId{ 1 };                                          ///< 1–5
-    std::map<uint8, std::pair<std::string, uint16>> _nodeAddresses;  ///< node_id → (address, port)
-    std::map<uint8, uint32> _nodePlayerCounts;                       ///< node_id → online player count
+    std::unordered_map<uint8, std::weak_ptr<ControlSocket>> _nodes;
+    uint8 _nextNodeId{ 1 };
+    std::map<uint8, std::pair<std::string, uint16>> _nodeAddresses;
+    std::map<uint8, uint32> _nodePlayerCounts;
+
+    // ── nodemgr map ────────────────────────────────────────────────────────────
+    // Keyed by the node ID they manage (matches _nodeAddresses keys).
+    std::unordered_map<uint8, std::weak_ptr<NodeMgrSocket>> _nodeMgrs;
+
+    // ── Node status table (updated by nodemgr status messages) ────────────────
+    std::map<uint8, NodeStatus> _nodeStatus;
+
+    // ── Management subscribers ─────────────────────────────────────────────────
+    std::mutex _mgmtMutex;
+    std::vector<std::weak_ptr<ManagementSocket>> _mgmtSubscribers;
 
     // ── Player directory ───────────────────────────────────────────────────────
     std::mutex _dirMutex;
     std::unordered_map<uint64, ClusterPlayerInfo> _playerByGuid;
-    std::unordered_map<std::string, uint64>       _playerByName; ///< lowercase name → guid
+    std::unordered_map<std::string, uint64>       _playerByName;
 
-    // ── Group directory (proxy-side group state) ──────────────────────────────
+    // ── Group directory ────────────────────────────────────────────────────────
     std::mutex _groupMutex;
-    std::unordered_map<uint64, std::vector<ProxyGroupMember>> _groupMembers; ///< group_guid → members
+    std::unordered_map<uint64, std::vector<ProxyGroupMember>> _groupMembers;
 
     // ── LFG master routing ────────────────────────────────────────────────────
-    uint8 _lfgMasterNodeId{ 1 }; ///< Node ID that runs the authoritative LFG queue
+    uint8 _lfgMasterNodeId{ 1 };
+
+    // ── Routing strategy ──────────────────────────────────────────────────────
+    bool  _useRoundRobin{ true };
+    uint32 _rrIndex{ 0 };         ///< Protected by _nodeMutex
+
+    // ── Auto-scale ────────────────────────────────────────────────────────────
+    bool   _autoScaleEnabled{ false };
+    uint32 _maxPlayersPerNode{ 500 };
+    uint32 _scaleUpThreshold{ 80 };    ///< % of capacity → start a node
+    uint32 _scaleDownThreshold{ 30 };  ///< % of capacity → stop a node
+    uint32 _minNodes{ 1 };
+    uint32 _maxNodes{ 5 };
+    uint32 _cooldownSeconds{ 300 };
+    std::chrono::steady_clock::time_point _lastScaleEvent{ std::chrono::steady_clock::time_point::min() };
 };
 
 #define sProxyMgr ProxyMgr::Instance()

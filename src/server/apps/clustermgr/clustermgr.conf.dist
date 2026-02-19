@@ -1,0 +1,118 @@
+##########################################
+# AzerothCore Cluster Manager config file #
+##########################################
+[clustermgr]
+
+###################################################################################################
+# SECTION INDEX
+#
+#    PROXY CONNECTION
+#    DEPLOY DEFAULTS
+#    LOGGING
+#
+###################################################################################################
+
+###################################################################################################
+# PROXY CONNECTION
+#
+#    ProxyAddress
+#        Description: IP address or hostname of the proxy server.
+#        Default:     "127.0.0.1"
+
+ProxyAddress = "127.0.0.1"
+
+#
+#    ProxyManagementPort
+#        Description: Port the proxy listens on for management connections (must match proxyserver.conf ManagementPort).
+#        Default:     9090
+
+ProxyManagementPort = 9090
+
+#
+#    Management.SharedSecret
+#        Description: Pre-shared secret for channel encryption (must match proxyserver.conf and nodemgr.conf).
+#        Default:     "change-me"
+
+Management.SharedSecret = "change-me"
+
+#
+###################################################################################################
+
+###################################################################################################
+# DEPLOY DEFAULTS
+#    These are the default values pre-filled in the Deploy Wizard (F4).
+#    All values can be overridden interactively at deploy time.
+#
+#    Deploy.WorldserverBin
+#        Description: Local path to the worldserver binary to deploy.
+#        Default:     "./worldserver"
+
+Deploy.WorldserverBin = "./worldserver"
+
+#
+#    Deploy.NodemgrBin
+#        Description: Local path to the nodemgr binary to deploy.
+#        Default:     "./nodemgr"
+
+Deploy.NodemgrBin = "./nodemgr"
+
+#
+#    Deploy.WorldserverConf
+#        Description: Local path to the worldserver.conf to deploy.
+#        Default:     "./worldserver.conf"
+
+Deploy.WorldserverConf = "./worldserver.conf"
+
+#
+#    Deploy.NodemgrConf
+#        Description: Local path to the nodemgr.conf to deploy.
+#        Default:     "./nodemgr.conf"
+
+Deploy.NodemgrConf = "./nodemgr.conf"
+
+#
+#    Deploy.DefaultSSHUser
+#        Description: Default SSH username for deployment.
+#        Default:     "wow"
+
+Deploy.DefaultSSHUser = "wow"
+
+#
+#    Deploy.DefaultSSHPort
+#        Description: Default SSH port for deployment.
+#        Default:     22
+
+Deploy.DefaultSSHPort = 22
+
+#
+#    Deploy.DefaultSSHKey
+#        Description: Default SSH private key path for deployment.
+#        Default:     "~/.ssh/id_rsa"
+
+Deploy.DefaultSSHKey = "~/.ssh/id_rsa"
+
+#
+#    Deploy.DefaultRemotePath
+#        Description: Default remote base path for deployment.
+#        Default:     "/opt/azerothcore"
+
+Deploy.DefaultRemotePath = "/opt/azerothcore"
+
+#
+###################################################################################################
+
+###################################################################################################
+# LOGGING
+#
+
+LogsDir = ""
+
+Appender.Console=1,4,0,"1 9 3 6 5 8"
+Appender.ClusterMgr=2,4,0,clustermgr.log,w
+
+Logger.root=4,Console ClusterMgr
+Logger.server.clustermgr=4,Console ClusterMgr
+Logger.clustermgr=4,Console ClusterMgr
+
+#
+###################################################################################################

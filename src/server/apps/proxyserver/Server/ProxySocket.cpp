@@ -52,7 +52,7 @@ void ProxySocket::Start()
         sProxySocketMgr.GetIoContext(),
         shared_from_this());
 
-    auto [backendHost, backendPort] = sProxyMgr.ChooseLeastLoadedNode();
+    auto [backendHost, backendPort] = sProxyMgr.ChooseNode();
     _backend->Connect(backendHost, backendPort);
 
     AsyncRead();

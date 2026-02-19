@@ -68,6 +68,41 @@ WorldServerPort = 8085
 ControlPort = 8090
 
 #
+#    NodeMgrPort
+#        Description: TCP port the proxy listens on for nodemgr daemon connections.
+#                     nodemgr daemons connect here to register and receive start/stop commands.
+#                     Communication is PSK-encrypted (see Management.SharedSecret).
+#        Default:     8091
+
+NodeMgrPort = 8091
+
+#
+#    ManagementPort
+#        Description: TCP port the proxy listens on for clustermgr TUI connections.
+#                     The clustermgr console app connects here for status and control.
+#                     Communication is PSK-encrypted (see Management.SharedSecret).
+#        Default:     9090
+
+ManagementPort = 9090
+
+#
+#    Management.SharedSecret
+#        Description: Pre-shared secret for encrypting nodemgr and clustermgr channels.
+#                     Must be identical in proxyserver.conf, nodemgr.conf, and clustermgr.conf.
+#                     CHANGE THIS before deploying to production.
+#        Default:     "change-me"
+
+Management.SharedSecret = "change-me"
+
+#
+#    Management.MaxPlayersPerNode
+#        Description: Maximum number of players per worldserver node.
+#                     Used by the round-robin router (to skip full nodes) and auto-scale.
+#        Default:     500
+
+Management.MaxPlayersPerNode = 500
+
+#
 #    RealmID
 #        Description: The realm ID this proxy server represents.
 #                     Must match the realm ID in the auth database realmlist table.
@@ -137,6 +172,37 @@ WorldServer.Node.1.Port    = 8086
 #        Default:     1
 
 ClusterServer.LFGMasterNode = 1
+
+#
+#    Cluster.RoutingMode
+#        Description: How incoming WoW clients are distributed across worldserver nodes.
+#                     roundrobin  — cycles through running nodes in order; skips full nodes.
+#                     leastloaded — always picks the node with the fewest active players.
+#        Default:     "roundrobin"
+
+Cluster.RoutingMode = "roundrobin"
+
+#
+#    Cluster.AutoScale.*
+#        Description: Automatic node start/stop based on cluster-wide player load.
+#
+#        Enable            — 0=disabled 1=enabled
+#        ScaleUpThreshold  — Start a new node when load % of total capacity exceeds this.
+#        ScaleDownThreshold— Stop a node when load % of total capacity drops below this.
+#        MinNodes          — Always keep at least this many nodes running.
+#        MaxNodes          — Never run more than this many nodes (even under load).
+#        CooldownSeconds   — Minimum seconds between consecutive scale events.
+#
+#        Requires nodemgr daemons to be connected on NodeMgrPort.
+#
+#        Default:     disabled; thresholds 80%/30%; min 1; max 5; cooldown 300s
+
+Cluster.AutoScale.Enable            = 0
+Cluster.AutoScale.ScaleUpThreshold  = 80
+Cluster.AutoScale.ScaleDownThreshold= 30
+Cluster.AutoScale.MinNodes          = 1
+Cluster.AutoScale.MaxNodes          = 5
+Cluster.AutoScale.CooldownSeconds   = 300
 
 #
 #    InstanceServer.Address

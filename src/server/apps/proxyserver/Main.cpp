@@ -39,6 +39,8 @@
 #include "ProcessPriority.h"
 #include "SharedDefines.h"
 #include "ControlSocketMgr.h"
+#include "ManagementSocketMgr.h"
+#include "NodeMgrSocketMgr.h"
 #include "ProxyMgr.h"
 #include "ProxySocketMgr.h"
 #include "SteadyTimer.h"
@@ -46,7 +48,9 @@
 #include <boost/asio/signal_set.hpp>
 #include <boost/program_options.hpp>
 #include <boost/version.hpp>
+#include <chrono>
 #include <csignal>
+#include <functional>
 #include <filesystem>
 #include <iostream>
 #include <openssl/crypto.h>
@@ -176,16 +180,65 @@ int main(int argc, char** argv)
         std::weak_ptr<boost::asio::steady_timer>(dbPingTimer),
         dbPingInterval, std::placeholders::_1));
 
+    sProxyMgr.LoadAutoScaleConfig();
     sProxyMgr.LoadNodeConfig();
 
     uint8 lfgMasterNode = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
     sProxyMgr.SetLFGMasterNode(lfgMasterNode);
     LOG_INFO("server.proxyserver", "ProxyMgr: LFG master node = {}", lfgMasterNode);
 
-    LOG_INFO("server.proxyserver", "Proxy server listening on {}:{} (client) / {}:{} (control)",
-             bindIp, port, bindIp, controlPort);
+    // ── nodemgr management port ───────────────────────────────────────────────
+    int32 nodeMgrPort = sConfigMgr->GetOption<int32>("NodeMgrPort", 8091);
+    if (nodeMgrPort < 0 || nodeMgrPort > 0xFFFF)
+    {
+        LOG_ERROR("server.proxyserver", "NodeMgrPort out of range (1-65535)");
+        return 1;
+    }
+    if (!sNodeMgrSocketMgr.StartNetwork(*ioContext, bindIp, static_cast<uint16>(nodeMgrPort)))
+    {
+        LOG_ERROR("server.proxyserver", "Failed to initialize nodemgr channel");
+        return 1;
+    }
+    std::shared_ptr<void> nodeMgrNetHandle(nullptr, [](void*) { sNodeMgrSocketMgr.StopNetwork(); });
+
+    // ── clustermgr management port ────────────────────────────────────────────
+    int32 mgmtPort = sConfigMgr->GetOption<int32>("ManagementPort", 9090);
+    if (mgmtPort < 0 || mgmtPort > 0xFFFF)
+    {
+        LOG_ERROR("server.proxyserver", "ManagementPort out of range (1-65535)");
+        return 1;
+    }
+    if (!sManagementSocketMgr.StartNetwork(*ioContext, bindIp, static_cast<uint16>(mgmtPort)))
+    {
+        LOG_ERROR("server.proxyserver", "Failed to initialize management channel");
+        return 1;
+    }
+    std::shared_ptr<void> mgmtNetHandle(nullptr, [](void*) { sManagementSocketMgr.StopNetwork(); });
+
+    // ── Auto-scale timer (fires every 30 seconds) ─────────────────────────────
+    std::shared_ptr<boost::asio::steady_timer> autoScaleTimer =
+        std::make_shared<boost::asio::steady_timer>(*ioContext);
+
+    std::function<void(boost::system::error_code const&)> autoScaleHandler;
+    autoScaleHandler = [&autoScaleTimer, &autoScaleHandler](boost::system::error_code const& error)
+    {
+        if (!error)
+        {
+            sProxyMgr.CheckAutoScale();
+            autoScaleTimer->expires_after(std::chrono::seconds(30));
+            autoScaleTimer->async_wait(autoScaleHandler);
+        }
+    };
+    autoScaleTimer->expires_after(std::chrono::seconds(30));
+    autoScaleTimer->async_wait(autoScaleHandler);
+
+    LOG_INFO("server.proxyserver",
+             "Proxy server listening on {}:{} (client) / {}:{} (control) / {}:{} (nodemgr) / {}:{} (mgmt)",
+             bindIp, port, bindIp, controlPort, bindIp, nodeMgrPort, bindIp, mgmtPort);
 
     ioContext->run();
+
+    autoScaleTimer->cancel();
 
     dbPingTimer->cancel();
     LOG_INFO("server.proxyserver", "Halting process...");
