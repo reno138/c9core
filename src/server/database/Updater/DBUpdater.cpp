@@ -504,7 +504,11 @@ void DBUpdater<T>::ApplyFile(DatabaseWorkerPool<T>& pool, std::string const& hos
     if (ssl == "ssl")
         args.emplace_back("--ssl-mode=REQUIRED");
     else
+#if defined(MARIADB_VERSION_ID)
         args.emplace_back("--ssl=0"); // MariaDB CLI enables SSL by default; disable when not requested
+#else
+        args.emplace_back("--ssl-mode=DISABLED"); // MySQL CLI: disable SSL
+#endif
 
     // Database
     if (!database.empty())
