@@ -221,41 +221,46 @@ void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 por
 
 uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort)
 {
-    std::lock_guard<std::mutex> lock(_nodeMutex);
-
-    if (serverType != 0)
-        return 0;
-
-    for (auto const& [nodeId, addrPort] : _nodeAddresses)
+    uint8 assignedNodeId = 0;
     {
-        if (addrPort.second == gamePort && !_nodes.count(nodeId))
+        std::lock_guard<std::mutex> lock(_nodeMutex);
+
+        if (serverType != 0)
+            return 0;
+
+        for (auto const& [nodeId, addrPort] : _nodeAddresses)
         {
-            _nodes[nodeId] = socket;
-            if (_nodeStatus.count(nodeId))
-                _nodeStatus[nodeId].state = NodeState::Running;
-            LOG_INFO("proxy", "ProxyMgr: Worldserver node {} online (game_port={})", nodeId, gamePort);
-            PushStatusToSubscribers();
-            return nodeId;
+            if (addrPort.second == gamePort && !_nodes.count(nodeId))
+            {
+                _nodes[nodeId] = socket;
+                if (_nodeStatus.count(nodeId))
+                    _nodeStatus[nodeId].state = NodeState::Running;
+                LOG_INFO("proxy", "ProxyMgr: Worldserver node {} online (game_port={})", nodeId, gamePort);
+                assignedNodeId = nodeId;
+                break;
+            }
         }
-    }
 
-    while (_nextNodeId <= 10 && _nodes.count(_nextNodeId))
-        _nextNodeId++;
+        if (assignedNodeId == 0)
+        {
+            while (_nextNodeId <= 10 && _nodes.count(_nextNodeId))
+                _nextNodeId++;
 
-    if (_nextNodeId > 10)
-    {
-        LOG_ERROR("proxy", "ProxyMgr: RegisterNode — max nodes reached, rejecting");
-        return 0;
-    }
+            if (_nextNodeId > 10)
+            {
+                LOG_ERROR("proxy", "ProxyMgr: RegisterNode — max nodes reached, rejecting");
+                return 0;
+            }
 
-    uint8 nodeId = _nextNodeId++;
-    _nodes[nodeId] = socket;
-    if (_nodeStatus.count(nodeId))
-        _nodeStatus[nodeId].state = NodeState::Running;
-
-    LOG_INFO("proxy", "ProxyMgr: Worldserver node {} online (game_port={}, assigned)", nodeId, gamePort);
+            assignedNodeId = _nextNodeId++;
+            _nodes[assignedNodeId] = socket;
+            if (_nodeStatus.count(assignedNodeId))
+                _nodeStatus[assignedNodeId].state = NodeState::Running;
+            LOG_INFO("proxy", "ProxyMgr: Worldserver node {} online (game_port={}, assigned)", assignedNodeId, gamePort);
+        }
+    } // _nodeMutex released before PushStatusToSubscribers
     PushStatusToSubscribers();
-    return nodeId;
+    return assignedNodeId;
 }
 
 void ProxyMgr::UnregisterNode(uint8 nodeId)
@@ -338,36 +343,40 @@ void ProxyMgr::UnregisterNode(uint8 nodeId)
 
 uint8 ProxyMgr::RegisterNodeMgr(std::shared_ptr<NodeMgrSocket> socket, uint8 configuredNodeId, uint16 /*gamePort*/)
 {
-    std::lock_guard<std::mutex> lock(_nodeMutex);
-
-    // Use the node ID the nodemgr claims if it's valid and unoccupied.
-    uint8 nodeId = configuredNodeId;
-    if (nodeId == 0 || !_nodeAddresses.count(nodeId))
+    uint8 nodeId;
     {
-        // Find first configured slot without a nodemgr.
-        for (auto const& [id, _] : _nodeAddresses)
+        std::lock_guard<std::mutex> lock(_nodeMutex);
+
+        // Use the node ID the nodemgr claims if it's valid and unoccupied.
+        nodeId = configuredNodeId;
+        if (nodeId == 0 || !_nodeAddresses.count(nodeId))
         {
-            if (!_nodeMgrs.count(id) || _nodeMgrs.at(id).expired())
+            nodeId = 0; // reset; will find a free slot below
+            // Find first configured slot without a nodemgr.
+            for (auto const& [id, _] : _nodeAddresses)
             {
-                nodeId = id;
-                break;
+                if (!_nodeMgrs.count(id) || _nodeMgrs.at(id).expired())
+                {
+                    nodeId = id;
+                    break;
+                }
             }
         }
-    }
 
-    if (nodeId == 0)
-    {
-        LOG_ERROR("proxy", "ProxyMgr: RegisterNodeMgr — no slot available");
-        return 0;
-    }
+        if (nodeId == 0)
+        {
+            LOG_ERROR("proxy", "ProxyMgr: RegisterNodeMgr — no slot available");
+            return 0;
+        }
 
-    _nodeMgrs[nodeId] = socket;
+        _nodeMgrs[nodeId] = socket;
 
-    NodeStatus& ns = _nodeStatus[nodeId];
-    if (ns.state == NodeState::Unknown)
-        ns.state = NodeState::Stopped;
+        NodeStatus& ns = _nodeStatus[nodeId];
+        if (ns.state == NodeState::Unknown)
+            ns.state = NodeState::Stopped;
 
-    LOG_INFO("proxy", "ProxyMgr: nodemgr registered for node {}", nodeId);
+        LOG_INFO("proxy", "ProxyMgr: nodemgr registered for node {}", nodeId);
+    } // _nodeMutex released before PushStatusToSubscribers
     PushStatusToSubscribers();
     return nodeId;
 }
