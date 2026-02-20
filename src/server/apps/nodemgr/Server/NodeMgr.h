@@ -43,7 +43,10 @@ public:
     NodeMgr& operator=(NodeMgr const&) = delete;
 
     /// Configure from command-line / nodemgr.conf.
-    void Configure(std::string worldserverBin, std::string worldserverConf, std::string logFile);
+    /// If useGdb is true, the worldserver is spawned under GDB in batch mode so
+    /// crash backtraces are written to the log file automatically.
+    void Configure(std::string worldserverBin, std::string worldserverConf,
+                   std::string logFile, bool useGdb = false);
 
     /// NodeState values matching the wire protocol.
     enum class State : uint8
@@ -73,6 +76,7 @@ private:
     std::string _worldserverBin;
     std::string _worldserverConf;
     std::string _logFile;
+    bool        _useGdb{ false };
 
     bp::child   _child;
     State       _state{ State::Stopped };

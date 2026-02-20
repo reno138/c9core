@@ -95,10 +95,14 @@ int main(int argc, char** argv)
     std::string worldserverBin  = sConfigMgr->GetOption<std::string>("WorldserverBin", "./worldserver");
     std::string worldserverConf = sConfigMgr->GetOption<std::string>("WorldserverConfig", "./worldserver.conf");
     std::string worldserverLog  = sConfigMgr->GetOption<std::string>("WorldserverLog", "/tmp/worldserver-node.log");
+    bool        useGdb          = sConfigMgr->GetOption<bool>("NodeMgr.UseGdb", false);
+
+    if (useGdb)
+        LOG_INFO("server.nodemgr", "nodemgr: GDB mode ENABLED — crash backtraces will appear in {}", worldserverLog);
 
     // ── Create NodeMgr (process manager) ──────────────────────────────────────
     NodeMgr nodeMgr;
-    nodeMgr.Configure(worldserverBin, worldserverConf, worldserverLog);
+    nodeMgr.Configure(worldserverBin, worldserverConf, worldserverLog, useGdb);
 
     LOG_INFO("server.nodemgr", "nodemgr: node_id={} proxy={}:{} worldserver={}",
              configuredNodeId, proxyHost, proxyPort, worldserverBin);

@@ -77,6 +77,17 @@ WorldserverConfig = "./worldserver.conf"
 WorldserverLog = "/tmp/worldserver-node.log"
 
 #
+#    NodeMgr.UseGdb
+#        Description: Launch the worldserver under GDB in batch mode so that crash
+#                     backtraces (bt full) are automatically written to WorldserverLog.
+#                     Requires gdb to be installed on the node.
+#                     Disable this in production once debugging is complete.
+#        Default:     0 - (Disabled — normal launch)
+#                     1 - (Enabled  — launch under GDB)
+
+NodeMgr.UseGdb = 0
+
+#
 ###################################################################################################
 
 ###################################################################################################

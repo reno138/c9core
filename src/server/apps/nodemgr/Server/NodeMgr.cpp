@@ -31,11 +31,13 @@ NodeMgr::~NodeMgr()
     }
 }
 
-void NodeMgr::Configure(std::string worldserverBin, std::string worldserverConf, std::string logFile)
+void NodeMgr::Configure(std::string worldserverBin, std::string worldserverConf,
+                        std::string logFile, bool useGdb)
 {
     _worldserverBin  = std::move(worldserverBin);
     _worldserverConf = std::move(worldserverConf);
     _logFile         = std::move(logFile);
+    _useGdb          = useGdb;
 }
 
 bool NodeMgr::Start()
@@ -49,22 +51,39 @@ bool NodeMgr::Start()
 
     try
     {
-        // Redirect stdout+stderr to log file; stdin from /dev/null (prevents CLI spinning).
-        bp::ipstream devNull;
-        _child = bp::child(
-            _worldserverBin,
-            "-c", _worldserverConf,
-            bp::std_out > _logFile,
-            bp::std_err > bp::null,
-            bp::std_in  < bp::null
-        );
+        if (_useGdb)
+        {
+            // Launch under GDB in batch mode: crash backtraces are written to the log.
+            // Command: gdb -batch -ex run -ex 'bt full' --args <bin> -c <conf> >> <log> 2>&1
+            std::string gdbCmd =
+                "gdb -batch -ex run -ex 'bt full' --args \""
+                + _worldserverBin + "\" -c \"" + _worldserverConf
+                + "\" >> \"" + _logFile + "\" 2>&1";
+
+            _child = bp::child(
+                bp::search_path("bash"),
+                std::vector<std::string>{"-c", gdbCmd},
+                bp::std_in < bp::null
+            );
+            LOG_INFO("nodemgr", "NodeMgr: Launched worldserver under GDB PID={}", _child.id());
+        }
+        else
+        {
+            // Normal launch: stdout to log file, stderr discarded, stdin from /dev/null.
+            _child = bp::child(
+                _worldserverBin,
+                "-c", _worldserverConf,
+                bp::std_out > _logFile,
+                bp::std_err > bp::null,
+                bp::std_in  < bp::null
+            );
+            LOG_INFO("nodemgr", "NodeMgr: Launched worldserver PID={} ({})",
+                     _child.id(), _worldserverBin);
+        }
 
         _pid       = static_cast<uint32>(_child.id());
         _state     = State::Starting;
         _startTime = std::chrono::steady_clock::now();
-
-        LOG_INFO("nodemgr", "NodeMgr: Launched worldserver PID={} ({})",
-                 _pid, _worldserverBin);
         return true;
     }
     catch (std::exception const& e)
