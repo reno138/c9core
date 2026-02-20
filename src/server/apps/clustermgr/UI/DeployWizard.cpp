@@ -17,13 +17,12 @@
 
 #include "DeployWizard.h"
 #include "Log.h"
-#include <boost/process/v1.hpp>
+#include "BoostProcess.h"
 #include <mutex>
 #include <ncurses.h>
 #include <stdexcept>
 #include <thread>
 
-namespace bp = boost::process::v1;
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 

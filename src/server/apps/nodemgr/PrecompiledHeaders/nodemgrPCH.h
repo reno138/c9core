@@ -28,7 +28,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/steady_timer.hpp>
-#include <boost/process/v1.hpp>
+#include "BoostProcess.h"
 
 #include <chrono>
 #include <functional>

@@ -19,12 +19,11 @@
 #include "Config.h"
 #include "DeployWizard.h"
 #include <algorithm>
-#include <boost/process/v1.hpp>
+#include "BoostProcess.h"
 #include <ncurses.h>
 #include <sstream>
 #include <thread>
 
-namespace bp = boost::process::v1;
 
 // ── Column widths (content only, not counting the `|` separator) ──────────────
 static constexpr int W_ID      = 4;
