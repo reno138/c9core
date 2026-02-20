@@ -24,6 +24,7 @@
 #include "IoContext.h"
 #include "Log.h"
 #include "Opcodes.h"
+#include "World.h"
 #include "WorldPacket.h"
 #include <boost/asio/connect.hpp>
 #include <boost/asio/write.hpp>
@@ -415,20 +416,20 @@ void ProxyClient::HandleRegisterAck(uint8 nodeId)
 
 void ProxyClient::HandleRemotePlayerOnline()
 {
-    uint8 const* p = _accumBuf.data();
-
-    std::string name(reinterpret_cast<char const*>(p), _remotePlayerNameLen);
-    p += _remotePlayerNameLen;
+    // Copy all values out of _accumBuf before touching ClusterMgr, so there is
+    // no raw pointer into the vector alive across any external call.
+    std::string name(_accumBuf.begin(), _accumBuf.begin() + _remotePlayerNameLen);
+    std::size_t off = _remotePlayerNameLen;
 
     uint32 zoneId;
-    std::memcpy(&zoneId, p, 4);
-    p += 4;
+    std::memcpy(&zoneId, _accumBuf.data() + off, 4);
+    off += 4;
 
-    uint8 level   = p[0];
-    uint8 classId = p[1];
-    uint8 raceId  = p[2];
-    uint8 teamId  = p[3];
-    uint8 nodeId  = p[4]; // byte 8 of tail: which proxy node the player is on
+    uint8 level   = _accumBuf[off + 0];
+    uint8 classId = _accumBuf[off + 1];
+    uint8 raceId  = _accumBuf[off + 2];
+    uint8 teamId  = _accumBuf[off + 3];
+    uint8 nodeId  = _accumBuf[off + 4];
 
     LOG_INFO("server.worldserver", "ProxyClient: Remote player ONLINE  GUID {:016X} '{}' node={}",
              _remotePlayerGuid, name, nodeId);
@@ -594,24 +595,26 @@ void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const&
             LOG_DEBUG("server.worldserver", "ProxyClient: Cross-node GROUP_INVITE from GUID {:016X} '{}' to GUID {:016X}",
                       inviterGuid, inviterName, inviteeGuid);
 
-            Player* invitee = ObjectAccessor::FindPlayer(ObjectGuid(inviteeGuid));
-            if (!invitee)
-            {
-                LOG_DEBUG("server.worldserver", "ProxyClient: GROUP_INVITE — invitee {:016X} not found locally", inviteeGuid);
-                return;
-            }
-
-            // Store cross-node invite so HandleGroupAcceptOpcode can relay back.
+            // Store the pending invite now (ClusterMgr is mutex-protected, safe from I/O thread).
             sClusterMgr.SetPendingCrossNodeInvite(inviteeGuid, inviterGuid, inviterName);
 
-            // Send invite packet to the local invitee.
-            WorldPacket data(SMSG_GROUP_INVITE, 10);
-            data << uint8(1);           // invited flag
-            data << inviterName;
-            data << uint32(0);          // unk
-            data << uint8(0);           // count
-            data << uint32(0);          // unk
-            invitee->SendDirectMessage(&data);
+            // Post the player lookup + packet send to the world update thread.
+            sWorld->QueueCallback([inviteeGuid, inviterGuid, inviterName = std::move(inviterName)]()
+            {
+                Player* invitee = ObjectAccessor::FindPlayer(ObjectGuid(inviteeGuid));
+                if (!invitee)
+                {
+                    LOG_DEBUG("server.worldserver", "ProxyClient: GROUP_INVITE — invitee {:016X} not found locally", inviteeGuid);
+                    return;
+                }
+                WorldPacket data(SMSG_GROUP_INVITE, 10);
+                data << uint8(1);           // invited flag
+                data << inviterName;
+                data << uint32(0);          // unk
+                data << uint8(0);           // count
+                data << uint32(0);          // unk
+                invitee->SendDirectMessage(&data);
+            });
             break;
         }
 
@@ -774,7 +777,11 @@ void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& p
             LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_JOIN relay from node {} guid {:016X} roles={} dungeons={}",
                       sourceNodeId, guid, roles, dungeons.size());
 
-            sLFGMgr->JoinLfgByData(ObjectGuid(guid), roles, dungeons, teamId);
+            // sLFGMgr is not thread-safe; post to world update thread.
+            sWorld->QueueCallback([guid, roles, dungeons = std::move(dungeons), teamId]()
+            {
+                sLFGMgr->JoinLfgByData(ObjectGuid(guid), roles, dungeons, teamId);
+            });
             break;
         }
 
@@ -785,10 +792,14 @@ void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& p
                 return;
             uint64 guid;
             std::memcpy(&guid, payload.data() + 1, 8);
-            ObjectGuid objectGuid(guid);
             LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_LEAVE relay from node {} guid {:016X}", sourceNodeId, guid);
-            sLFGMgr->LeaveLfg(objectGuid);
-            sLFGMgr->LeaveAllLfgQueues(objectGuid, true, ObjectGuid::Empty);
+            // sLFGMgr is not thread-safe; post to world update thread.
+            sWorld->QueueCallback([guid]()
+            {
+                ObjectGuid objectGuid(guid);
+                sLFGMgr->LeaveLfg(objectGuid);
+                sLFGMgr->LeaveAllLfgQueues(objectGuid, true, ObjectGuid::Empty);
+            });
             break;
         }
 
@@ -804,7 +815,11 @@ void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& p
             bool accept = payload[13] != 0;
             LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_PROPOSAL_RESULT relay from node {} guid {:016X} proposal={} accept={}",
                       sourceNodeId, guid, proposalId, accept ? 1 : 0);
-            sLFGMgr->UpdateProposal(proposalId, ObjectGuid(guid), accept);
+            // sLFGMgr is not thread-safe; post to world update thread.
+            sWorld->QueueCallback([proposalId, guid, accept]()
+            {
+                sLFGMgr->UpdateProposal(proposalId, ObjectGuid(guid), accept);
+            });
             break;
         }
 

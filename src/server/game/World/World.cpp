@@ -1397,6 +1397,12 @@ void World::Update(uint32 diff)
     }
 
     {
+        METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process pending callbacks"));
+        // Drain callbacks posted from I/O threads (e.g. ProxyClient → LFGMgr calls)
+        ProcessPendingCallbacks();
+    }
+
+    {
         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process cli commands"));
         // And last, but not least handle the issued cli commands
         ProcessCliCommands();
@@ -1640,6 +1646,13 @@ void World::ShutdownCancel()
     LOG_DEBUG("server.worldserver", "Server {} cancelled.", (_shutdownMask & SHUTDOWN_MASK_RESTART ? "restart" : "shuttingdown"));
 
     sScriptMgr->OnShutdownCancel();
+}
+
+void World::ProcessPendingCallbacks()
+{
+    std::function<void()> cb;
+    while (_callbackQueue.next(cb))
+        cb();
 }
 
 // This handles the issued and queued CLI commands

@@ -125,13 +125,13 @@ public:
 			trickleDown(0, m_heap[m_size]);
 		return result;
 	}
-	
+
 	inline void push(dtNode* node)
 	{
 		m_size++;
 		bubbleUp(m_size-1, node);
 	}
-	
+
 	inline void modify(dtNode* node)
 	{
 		// O(log n) via tracked heap index instead of O(n) linear scan

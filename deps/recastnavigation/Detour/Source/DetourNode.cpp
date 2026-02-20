@@ -177,12 +177,12 @@ void dtNodeQueue::bubbleUp(int i, dtNode* node)
 	while ((i > 0) && (m_heap[parent]->total > node->total))
 	{
 		m_heap[i] = m_heap[parent];
-		m_heap[i]->heapIdx = i;   // track index on every swap
+		m_heap[i]->heapIdx = i;
 		i = parent;
 		parent = (i-1)/2;
 	}
 	m_heap[i] = node;
-	m_heap[i]->heapIdx = i;       // track final position
+	node->heapIdx = i;
 }
 
 void dtNodeQueue::trickleDown(int i, dtNode* node)
@@ -196,7 +196,7 @@ void dtNodeQueue::trickleDown(int i, dtNode* node)
 			child++;
 		}
 		m_heap[i] = m_heap[child];
-		m_heap[i]->heapIdx = i;   // track index on every swap
+		m_heap[i]->heapIdx = i;
 		i = child;
 		child = (i*2)+1;
 	}

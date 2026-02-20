@@ -217,8 +217,10 @@ public:
     // our: needed for arena spectator subscriptions
     uint32 GetNextWhoListUpdateDelaySecs() override;
 
+    void ProcessPendingCallbacks();
     void ProcessCliCommands() override;
     void QueueCliCommand(CliCommandHolder* commandHolder) override { _cliCmdQueue.add(commandHolder); }
+    void QueueCallback(std::function<void()> cb) override { _callbackQueue.add(std::move(cb)); }
 
     void ForceGameEventUpdate() override;
 
@@ -288,6 +290,9 @@ private:
 
     // CLI command holder to be thread safe
     LockedQueue<CliCommandHolder*> _cliCmdQueue;
+
+    // General callback queue: I/O threads post here, world update thread drains it.
+    LockedQueue<std::function<void()>> _callbackQueue;
 
     // next daily quests and random bg reset time
     Seconds _nextDailyQuestReset;

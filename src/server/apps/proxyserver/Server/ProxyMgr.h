@@ -196,6 +196,7 @@ private:
     uint8 _nextNodeId{ 1 };
     std::map<uint8, std::pair<std::string, uint16>> _nodeAddresses;
     std::map<uint8, uint32> _nodePlayerCounts;
+    std::map<uint8, uint8>  _nodeServerTypes;   ///< 0 = worldserver, 1 = instance server
 
     // ── nodemgr map ────────────────────────────────────────────────────────────
     // Keyed by the node ID they manage (matches _nodeAddresses keys).

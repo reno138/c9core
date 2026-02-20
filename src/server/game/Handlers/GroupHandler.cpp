@@ -312,8 +312,16 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
             return;
         }
 
-        // If we're about to create a group there really should be a leader present
-        ASSERT(leader);
+        // If we're about to create a group there really should be a leader present.
+        // (leader was already null-checked above; this guards against race conditions
+        //  that could null it between the check and here — abort → log instead of crash)
+        if (!leader)
+        {
+            LOG_ERROR("network.opcode", "HandleGroupAcceptOpcode: leader became null unexpectedly for group with LeaderGUID {}; aborting group creation",
+                group->GetLeaderGUID().ToString());
+            group->RemoveAllInvites();
+            return;
+        }
         group->RemoveInvite(leader);
         group->Create(leader);
         sGroupMgr->AddGroup(group);

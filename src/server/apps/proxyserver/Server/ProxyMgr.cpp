@@ -102,13 +102,18 @@ std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
     if (_nodeAddresses.empty())
         return { 0, "127.0.0.1", 8086 };
 
-    // Collect running nodes (those with an active ControlSocket).
+    // Collect running worldserver nodes (active ControlSocket, serverType == 0).
+    // Instance-server nodes (serverType != 0) are excluded from direct player routing.
     std::vector<uint8> running;
     for (auto const& [nodeId, _] : _nodeAddresses)
     {
         auto it = _nodes.find(nodeId);
-        if (it != _nodes.end() && !it->second.expired())
-            running.push_back(nodeId);
+        if (it == _nodes.end() || it->second.expired())
+            continue;
+        auto typeIt = _nodeServerTypes.find(nodeId);
+        if (typeIt != _nodeServerTypes.end() && typeIt->second != 0)
+            continue; // skip instance servers
+        running.push_back(nodeId);
     }
 
     if (running.empty())
@@ -156,10 +161,13 @@ std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseLeastLoadedNode()
 
     for (auto const& [nodeId, addr] : _nodeAddresses)
     {
-        // Only consider nodes with an active (non-expired) ControlSocket.
+        // Only consider active worldserver nodes (not instance servers).
         auto it = _nodes.find(nodeId);
         if (it == _nodes.end() || it->second.expired())
             continue;
+        auto typeIt = _nodeServerTypes.find(nodeId);
+        if (typeIt != _nodeServerTypes.end() && typeIt->second != 0)
+            continue; // skip instance servers
 
         uint32 cnt = _nodePlayerCounts.count(nodeId) ? _nodePlayerCounts.at(nodeId) : 0;
         if (best == 0 || cnt < minCount)
@@ -229,17 +237,16 @@ uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 server
     {
         std::lock_guard<std::mutex> lock(_nodeMutex);
 
-        if (serverType != 0)
-            return 0;
-
         for (auto const& [nodeId, addrPort] : _nodeAddresses)
         {
             if (addrPort.second == gamePort && !_nodes.count(nodeId))
             {
-                _nodes[nodeId] = socket;
+                _nodes[nodeId]           = socket;
+                _nodeServerTypes[nodeId] = serverType;
                 if (_nodeStatus.count(nodeId))
                     _nodeStatus[nodeId].state = NodeState::Running;
-                LOG_INFO("proxy", "ProxyMgr: Worldserver node {} online (game_port={})", nodeId, gamePort);
+                LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={})",
+                         serverType == 0 ? "Worldserver" : "Instance-server", nodeId, gamePort);
                 assignedNodeId = nodeId;
                 break;
             }
@@ -257,10 +264,12 @@ uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 server
             }
 
             assignedNodeId = _nextNodeId++;
-            _nodes[assignedNodeId] = socket;
+            _nodes[assignedNodeId]           = socket;
+            _nodeServerTypes[assignedNodeId] = serverType;
             if (_nodeStatus.count(assignedNodeId))
                 _nodeStatus[assignedNodeId].state = NodeState::Running;
-            LOG_INFO("proxy", "ProxyMgr: Worldserver node {} online (game_port={}, assigned)", assignedNodeId, gamePort);
+            LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={}, assigned)",
+                     serverType == 0 ? "Worldserver" : "Instance-server", assignedNodeId, gamePort);
         }
     } // _nodeMutex released before PushStatusToSubscribers
     PushStatusToSubscribers();
@@ -272,6 +281,7 @@ void ProxyMgr::UnregisterNode(uint8 nodeId)
     {
         std::lock_guard<std::mutex> lock(_nodeMutex);
         _nodes.erase(nodeId);
+        _nodeServerTypes.erase(nodeId);
         if (_nodeStatus.count(nodeId))
             _nodeStatus[nodeId].state = NodeState::Stopped;
         // Clear stale player count so the dead node isn't picked as least-loaded.
