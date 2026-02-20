@@ -91,6 +91,12 @@ public:
 
     // ── LFG relay (non-master nodes → proxy → master) ─────────────────────────
 
+    /// Inner type for group-wide cross-node map reroute (carried in MSG_CLUSTER_RELAY_TO_NODE).
+    static constexpr uint8 GROUP_INNER_REROUTE_TO_MAP = 0x03;
+
+    /// Ask the proxy to reroute this player to the node handling mapId.
+    void SendRerouteToMap(uint64 playerGuid, uint32 mapId);
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid
@@ -148,6 +154,7 @@ private:
     static constexpr uint8 MSG_CLUSTER_GROUP_DISBAND   = 0x08;
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY       = 0x09;
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY_RESP  = 0x0A;
+    static constexpr uint8 MSG_REROUTE_TO_MAP          = 0x0B;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
 
     // ── Parse state machine for incoming data ─────────────────────────────────

@@ -16,9 +16,51 @@
  */
 
 #include "ClusterMgr.h"
+#include "Config.h"
 #include "Log.h"
 #include <algorithm>
 #include <cstring>
+#include <sstream>
+
+void ClusterMgr::LoadLocalMaps()
+{
+    std::string raw = sConfigMgr->GetOption<std::string>("ClusterServer.Maps", "");
+
+    std::lock_guard<std::mutex> lock(_localMapsMutex);
+    _localMaps.clear();
+
+    if (raw.empty())
+    {
+        LOG_INFO("server.worldserver", "ClusterMgr: ClusterServer.Maps is empty — all maps local");
+        return;
+    }
+
+    std::istringstream ss(raw);
+    std::string token;
+    while (std::getline(ss, token, ','))
+    {
+        // Trim whitespace
+        token.erase(0, token.find_first_not_of(" \t"));
+        token.erase(token.find_last_not_of(" \t") + 1);
+        if (token.empty())
+            continue;
+        uint32 mapId = static_cast<uint32>(std::stoul(token));
+        _localMaps.insert(mapId);
+    }
+
+    std::string mapList;
+    for (uint32 m : _localMaps)
+        mapList += std::to_string(m) + " ";
+    LOG_INFO("server.worldserver", "ClusterMgr: Local maps: [{}]", mapList);
+}
+
+bool ClusterMgr::IsMapLocal(uint32 mapId) const
+{
+    std::lock_guard<std::mutex> lock(_localMapsMutex);
+    if (_localMaps.empty())
+        return true;
+    return _localMaps.count(mapId) > 0;
+}
 
 void ClusterMgr::OnRemotePlayerOnline(uint64 guid, std::string name,
                                        uint32 zoneId, uint8 level, uint8 classId,

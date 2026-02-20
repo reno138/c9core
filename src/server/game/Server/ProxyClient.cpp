@@ -17,6 +17,7 @@
 
 #include "ProxyClient.h"
 #include "ClusterMgr.h"
+#include "DBCStores.h"
 #include "LFGMgr.h"
 #include "Entities/Player/Player.h"
 #include "Globals/ObjectAccessor.h"
@@ -471,6 +472,26 @@ void ProxyClient::SendReroute(uint64 playerGuid, std::string const& address, uin
     EnqueueRaw(std::move(msg));
 }
 
+void ProxyClient::SendRerouteToMap(uint64 playerGuid, uint32 mapId)
+{
+    if (!_connected)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: SendRerouteToMap called but not connected");
+        return;
+    }
+
+    // Wire: MSG_REROUTE_TO_MAP | guid(8 LE) | mapId(4 LE)  = 13 bytes total
+    std::vector<uint8> msg;
+    msg.reserve(1 + 8 + 4);
+    msg.push_back(MSG_REROUTE_TO_MAP);
+    for (int i = 0; i < 8; ++i)
+        msg.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
+    for (int i = 0; i < 4; ++i)
+        msg.push_back(static_cast<uint8>((mapId >> (i * 8)) & 0xFF));
+
+    EnqueueRaw(std::move(msg));
+}
+
 void ProxyClient::AnnounceOnline(Player const* player)
 {
     if (!_connected || !player)
@@ -574,6 +595,7 @@ void ProxyClient::SendGroupDisband(uint64 groupGuid)
 
 static constexpr uint8 CLUSTER_INNER_GROUP_INVITE        = 0x01;
 static constexpr uint8 CLUSTER_INNER_GROUP_INVITE_RESULT = 0x02;
+static constexpr uint8 CLUSTER_INNER_GROUP_REROUTE_TO_MAP = 0x03;
 
 void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const& payload)
 {
@@ -632,6 +654,32 @@ void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const&
 
             // Queue the invite result to be processed on the game update thread.
             sClusterMgr.QueueCrossNodeInviteResult(inviteeGuid, result);
+            break;
+        }
+
+        case CLUSTER_INNER_GROUP_REROUTE_TO_MAP:
+        {
+            // payload: guid(8) + mapId(4)
+            if (payload.size() < 12)
+                return;
+            uint64 guid  = 0;
+            uint32 mapId = 0;
+            std::memcpy(&guid,  payload.data(),     8);
+            std::memcpy(&mapId, payload.data() + 8, 4);
+
+            LOG_DEBUG("server.worldserver", "ProxyClient: GROUP_REROUTE_TO_MAP GUID {:016X} → map {}", guid, mapId);
+
+            sWorld->QueueCallback([guid, mapId]()
+            {
+                Player* player = ObjectAccessor::FindPlayer(ObjectGuid(guid));
+                if (!player)
+                    return;
+                MapEntry const* mEntry = sMapStore.LookupEntry(mapId);
+                if (!mEntry)
+                    return;
+                player->TeleportTo(mapId, player->GetPositionX(), player->GetPositionY(),
+                                   player->GetPositionZ(), player->GetOrientation());
+            });
             break;
         }
 

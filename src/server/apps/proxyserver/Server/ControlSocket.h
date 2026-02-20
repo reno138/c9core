@@ -116,6 +116,7 @@ private:
     void HandleGroupDisband(uint64 groupGuid);
     void HandleLFGRelay(std::vector<uint8> payload);
     void HandleLFGRelayResponse(uint8 targetNodeId, std::vector<uint8> payload);
+    void HandleRerouteToMap(uint64 guid, uint32 mapId);
 
     // ── Message type constants ─────────────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -128,6 +129,7 @@ private:
     static constexpr uint8 MSG_CLUSTER_GROUP_DISBAND   = 0x08;
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY       = 0x09;
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY_RESP  = 0x0A;
+    static constexpr uint8 MSG_REROUTE_TO_MAP          = 0x0B;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
@@ -143,6 +145,7 @@ private:
     static constexpr std::size_t GROUP_DISBAND_SIZE       = 8; ///< uint64 group_guid
     static constexpr std::size_t LFG_RELAY_HEADER_SIZE    = 2; ///< uint16 payload_len
     static constexpr std::size_t LFG_RELAY_RESP_HDR_SIZE  = 3; ///< uint8 target_node + uint16 payload_len
+    static constexpr std::size_t REROUTE_TO_MAP_SIZE      = 12;///< uint64 guid + uint32 mapId
 
     // ── Parse state machine ───────────────────────────────────────────────────
     enum class ParseState
@@ -165,6 +168,7 @@ private:
         ReadLFGRelayBody,       ///< payload_len bytes
         ReadLFGRelayRespHeader, ///< 3 bytes: uint8 target_node + uint16 payload_len
         ReadLFGRelayRespBody,   ///< payload_len bytes
+        ReadRerouteToMap,       ///< 12 bytes: uint64 guid + uint32 mapId
     };
     ParseState _parseState{ ParseState::WaitType };
 

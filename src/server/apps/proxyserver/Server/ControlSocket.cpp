@@ -98,6 +98,7 @@ void ControlSocket::ProcessBuffer()
                     case MSG_CLUSTER_GROUP_DISBAND: _parseState = ParseState::ReadGroupDisband;      break;
                     case MSG_CLUSTER_LFG_RELAY:     _parseState = ParseState::ReadLFGRelayHeader;   break;
                     case MSG_CLUSTER_LFG_RELAY_RESP:_parseState = ParseState::ReadLFGRelayRespHeader;break;
+                    case MSG_REROUTE_TO_MAP:        _parseState = ParseState::ReadRerouteToMap;     break;
                     default:
                         LOG_WARN("proxy.control", "ControlSocket: Unknown message type 0x{:02X} — closing", msgType);
                         CloseSocket();
@@ -376,6 +377,24 @@ void ControlSocket::ProcessBuffer()
                 _parseState = ParseState::WaitType;
                 break;
             }
+
+            // ── MSG_REROUTE_TO_MAP ────────────────────────────────────────────
+            case ParseState::ReadRerouteToMap:
+            {
+                if (_accumBuffer.GetActiveSize() < REROUTE_TO_MAP_SIZE)
+                    return;
+
+                uint8* p = _accumBuffer.GetReadPointer();
+                uint64 guid  = 0;
+                uint32 mapId = 0;
+                std::memcpy(&guid,  p,     8);
+                std::memcpy(&mapId, p + 8, 4);
+                _accumBuffer.ReadCompleted(REROUTE_TO_MAP_SIZE);
+
+                HandleRerouteToMap(guid, mapId);
+                _parseState = ParseState::WaitType;
+                break;
+            }
         }
     }
 
@@ -507,4 +526,10 @@ void ControlSocket::HandleLFGRelayResponse(uint8 targetNodeId, std::vector<uint8
     msg.insert(msg.end(), payload.begin(), payload.end());
 
     sProxyMgr.RelayToNode(targetNodeId, msg);
+}
+
+void ControlSocket::HandleRerouteToMap(uint64 guid, uint32 mapId)
+{
+    LOG_INFO("proxy.control", "ControlSocket: RerouteToMap — GUID {:016X} → map {}", guid, mapId);
+    sProxyMgr.RerouteToMap(guid, mapId);
 }

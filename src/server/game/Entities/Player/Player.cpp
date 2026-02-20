@@ -39,6 +39,7 @@
 #include "Common.h"
 #include "ConditionMgr.h"
 #include "Config.h"
+#include "ClusterMgr.h"
 #include "ProxyClient.h"
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
@@ -1590,23 +1591,38 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 SendSavedInstances();
             }
 
-            // Cross-server teleport: if a proxy is enabled and the destination is an
-            // instanced map (dungeon, raid, BG, arena), hand the player off to the
-            // instance server rather than doing a local map transfer.
+            // Cross-node teleport: if a proxy is enabled and the destination map is
+            // handled by a different cluster node, reroute the player via the proxy.
             if (!GetSession()->PlayerLogout()
                 && sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
                 && sProxyClient.IsConnected()
-                && mEntry->Instanceable())
+                && !sClusterMgr.IsMapLocal(mapid))
             {
                 // Player position is already set to teleportStore_dest (set above).
-                // Save to DB so the instance server can load the character at this position.
+                // Save to DB so the target node can load the character at this position.
                 SaveToDB(false, false);
 
-                // Ask the proxy to connect to the instance server on this player's behalf.
-                sProxyClient.SendReroute(
-                    GetGUID().GetRawValue(),
-                    sConfigMgr->GetOption<std::string>("InstanceServer.Address", "127.0.0.1"),
-                    static_cast<uint16>(sConfigMgr->GetOption<int32>("InstanceServer.Port", 8087)));
+                // Ask the proxy to reroute this player to whichever node handles mapid.
+                sProxyClient.SendRerouteToMap(GetGUID().GetRawValue(), mapid);
+
+                // For group/raid cross-node entry: relay reroute to remote member nodes
+                // so the whole group lands on the same instance node together.
+                if (Group* grp = GetGroup())
+                {
+                    uint64 myGuid  = GetGUID().GetRawValue();
+                    uint64 grpGuid = grp->GetGUID().GetRawValue();
+                    for (auto const& member : sClusterMgr.GetGroupRemoteMembers(grpGuid))
+                    {
+                        if (member.guid == myGuid)
+                            continue;
+                        std::vector<uint8> payload(12);
+                        std::memcpy(payload.data(),     &member.guid, 8);
+                        std::memcpy(payload.data() + 8, &mapid,       4);
+                        sProxyClient.RelayToNode(member.nodeId,
+                                                 ProxyClient::GROUP_INNER_REROUTE_TO_MAP,
+                                                 payload);
+                    }
+                }
 
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
                 return true;

@@ -95,6 +95,72 @@ std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseNode()
     return _useRoundRobin ? ChooseRoundRobinNode() : ChooseLeastLoadedNode();
 }
 
+// ── Map-based routing ─────────────────────────────────────────────────────────
+
+void ProxyMgr::LoadMapRoutingConfig()
+{
+    std::lock_guard<std::mutex> lock(_mapRoutingMutex);
+    _mapRouting.clear();
+
+    uint32 count = sConfigMgr->GetOption<uint32>("MapRouting.Count", 0);
+    for (uint32 i = 1; i <= count; ++i)
+    {
+        uint32 mapId  = static_cast<uint32>(sConfigMgr->GetOption<int32>(
+            "MapRouting." + std::to_string(i) + ".MapId", -1));
+        uint8  nodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>(
+            "MapRouting." + std::to_string(i) + ".NodeId", 0));
+        if (mapId == static_cast<uint32>(-1) || nodeId == 0)
+            continue;
+        _mapRouting[mapId] = nodeId;
+        LOG_INFO("proxy", "ProxyMgr: MapRouting  map {} → node {}", mapId, nodeId);
+    }
+
+    _defaultNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("MapRouting.DefaultNode", 0));
+    LOG_INFO("proxy", "ProxyMgr: MapRouting loaded {} entries, default node={}",
+             _mapRouting.size(), _defaultNodeId);
+}
+
+uint8 ProxyMgr::GetNodeForMap(uint32 mapId) const
+{
+    std::lock_guard<std::mutex> lock(_mapRoutingMutex);
+    auto it = _mapRouting.find(mapId);
+    if (it != _mapRouting.end())
+        return it->second;
+    return _defaultNodeId;
+}
+
+void ProxyMgr::RerouteToMap(uint64 guid, uint32 mapId)
+{
+    uint8 nodeId = GetNodeForMap(mapId);
+    if (nodeId == 0)
+    {
+        // No route configured — fall back to round-robin ChooseNode
+        auto [nid, addr, port] = ChooseNode();
+        LOG_INFO("proxy", "ProxyMgr: RerouteToMap GUID {:016X} map {} — no route, using node {} ({}:{})",
+                 guid, mapId, nid, addr, port);
+        ReroutePlayer(guid, addr, port);
+        return;
+    }
+
+    // Look up address/port in a short-lived lock scope, then reroute.
+    std::string addr;
+    uint16      port = 0;
+    {
+        std::lock_guard<std::mutex> lock(_nodeMutex);
+        auto it = _nodeAddresses.find(nodeId);
+        if (it == _nodeAddresses.end())
+        {
+            LOG_ERROR("proxy", "ProxyMgr: RerouteToMap — node {} not in address table", nodeId);
+            return;
+        }
+        addr = it->second.first;
+        port = it->second.second;
+    }
+    LOG_INFO("proxy", "ProxyMgr: RerouteToMap GUID {:016X} map {} → node {} ({}:{})",
+             guid, mapId, nodeId, addr, port);
+    ReroutePlayer(guid, addr, port);
+}
+
 std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
 {
     std::lock_guard<std::mutex> lock(_nodeMutex);
@@ -239,7 +305,7 @@ uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 server
 
         for (auto const& [nodeId, addrPort] : _nodeAddresses)
         {
-            if (addrPort.second == gamePort && !_nodes.count(nodeId))
+            if (addrPort.second == gamePort && (!_nodes.count(nodeId) || _nodes.at(nodeId).expired()))
             {
                 _nodes[nodeId]           = socket;
                 _nodeServerTypes[nodeId] = serverType;

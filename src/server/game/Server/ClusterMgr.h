@@ -23,6 +23,7 @@
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 /**
@@ -85,6 +86,16 @@ public:
     /// True if any remote players are tracked (cluster is active).
     bool HasRemotePlayers() const;
 
+    // ── Local map set (zone-based routing) ───────────────────────────────────
+
+    /// Parse ClusterServer.Maps from config and populate _localMaps.
+    /// Empty string means all maps are local (standalone / dev mode).
+    void LoadLocalMaps();
+
+    /// Returns true if mapId is handled locally by this node.
+    /// Always true when ClusterServer.Maps is empty.
+    bool IsMapLocal(uint32 mapId) const;
+
     // ── Cross-node group invite state ─────────────────────────────────────────
 
     struct CrossNodeInvite
@@ -134,6 +145,10 @@ private:
     mutable std::shared_mutex _mutex;
     std::unordered_map<uint64, ClusterPlayerInfo> _byGuid;
     std::unordered_map<std::string, uint64>       _byName; ///< lowercase name → guid
+
+    // ── Local map set ──────────────────────────────────────────────────────
+    mutable std::mutex _localMapsMutex;
+    std::unordered_set<uint32> _localMaps; ///< empty = all maps local
 
     // ── Cross-node group state ─────────────────────────────────────────────
     mutable std::mutex _groupMutex;

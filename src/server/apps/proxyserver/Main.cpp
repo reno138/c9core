@@ -182,6 +182,7 @@ int main(int argc, char** argv)
 
     sProxyMgr.LoadAutoScaleConfig();
     sProxyMgr.LoadNodeConfig();
+    sProxyMgr.LoadMapRoutingConfig();
 
     uint8 lfgMasterNode = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
     sProxyMgr.SetLFGMasterNode(lfgMasterNode);

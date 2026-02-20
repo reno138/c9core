@@ -154,6 +154,17 @@ public:
     /// Load auto-scale and routing config from proxyserver.conf.
     void LoadAutoScaleConfig();
 
+    // ── Map-based routing ─────────────────────────────────────────────────────
+
+    /// Load MapRouting.X.MapId / MapRouting.X.NodeId entries from proxyserver.conf.
+    void LoadMapRoutingConfig();
+
+    /// Reroute the player GUID to whichever cluster node handles mapId.
+    void RerouteToMap(uint64 guid, uint32 mapId);
+
+    /// Return the node ID responsible for mapId (falls back to _defaultNodeId).
+    uint8 GetNodeForMap(uint32 mapId) const;
+
     // ── Cluster player directory ───────────────────────────────────────────────
     void OnPlayerOnline(uint64 guid, uint8 nodeId, std::string name,
                         uint32 zoneId, uint8 level, uint8 classId, uint8 raceId, uint8 teamId);
@@ -229,6 +240,11 @@ private:
 
     // ── LFG master routing ────────────────────────────────────────────────────
     uint8 _lfgMasterNodeId{ 1 };
+
+    // ── Map routing table ─────────────────────────────────────────────────────
+    mutable std::mutex _mapRoutingMutex;
+    std::unordered_map<uint32, uint8> _mapRouting;  ///< mapId → nodeId
+    uint8 _defaultNodeId{ 0 };                      ///< fallback node (0 = round-robin)
 
     // ── Routing strategy ──────────────────────────────────────────────────────
     bool  _useRoundRobin{ true };

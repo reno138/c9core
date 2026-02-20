@@ -49,6 +49,7 @@
 #include "SharedDefines.h"
 #include "SteadyTimer.h"
 #include "Systemd.h"
+#include "ClusterMgr.h"
 #include "ProxyClient.h"
 #include "World.h"
 #include "WorldSessionMgr.h"
@@ -372,6 +373,8 @@ int main(int argc, char** argv)
     // Connect to proxy control channel if configured.
     if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false))
     {
+        sClusterMgr.LoadLocalMaps();
+
         std::string proxyAddress = sConfigMgr->GetOption<std::string>("ProxyServer.Address", "127.0.0.1");
         uint16 proxyControlPort  = static_cast<uint16>(sConfigMgr->GetOption<int32>("ProxyServer.ControlPort", 8090));
         uint16 gamePort          = static_cast<uint16>(sWorld->getIntConfig(CONFIG_PORT_WORLD));

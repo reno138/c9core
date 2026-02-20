@@ -4812,4 +4812,17 @@ WorldServer.Port = 8086
 ClusterServer.LFGMasterNode = 1
 
 #
+#    ClusterServer.Maps
+#        Description: Comma-separated list of map IDs that this worldserver node handles locally.
+#                     When a player teleports to a map NOT in this list, the proxy is asked to
+#                     reroute the player to whichever node handles that map (zone-based routing).
+#                     Leave empty ("") to treat ALL maps as local (standalone or dev mode).
+#        Example:     Node 1: "0,1"       (Eastern Kingdoms + Kalimdor)
+#                     Node 2: "530,571"   (Outland + Northrend)
+#                     Node 3: ""          (all instances — default catch-all)
+#        Default:     ""
+
+ClusterServer.Maps = ""
+
+#
 ###################################################################################################

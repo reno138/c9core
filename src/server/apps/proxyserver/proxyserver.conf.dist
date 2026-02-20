@@ -221,6 +221,49 @@ InstanceServer.Port = 8087
 
 #
 ###################################################################################################
+# ZONE-BASED MAP ROUTING
+#
+# MapRouting maps specific map IDs to specific cluster nodes.
+# When a worldserver sends MSG_REROUTE_TO_MAP, the proxy consults this table to decide
+# which node's backend address/port to forward the player to.
+#
+# Each entry is a pair of MapId and NodeId:
+#    MapRouting.Count          = number of routing entries
+#    MapRouting.X.MapId        = WoW map ID (from Map.dbc)
+#    MapRouting.X.NodeId       = cluster node ID (matches WorldServer.Node.X config)
+#    MapRouting.DefaultNode    = node ID for any map not explicitly listed (0 = round-robin)
+#
+# Example (3-node cluster):
+#    Node 1 handles Eastern Kingdoms (0) + Kalimdor (1)
+#    Node 2 handles Outland (530) + Northrend (571)
+#    Node 3 handles all instances (default)
+#
+#    MapRouting.Count       = 4
+#    MapRouting.1.MapId     = 0
+#    MapRouting.1.NodeId    = 1
+#    MapRouting.2.MapId     = 1
+#    MapRouting.2.NodeId    = 1
+#    MapRouting.3.MapId     = 530
+#    MapRouting.3.NodeId    = 2
+#    MapRouting.4.MapId     = 571
+#    MapRouting.4.NodeId    = 2
+#    MapRouting.DefaultNode = 3
+#
+###################################################################################################
+
+MapRouting.Count       = 4
+MapRouting.1.MapId     = 0
+MapRouting.1.NodeId    = 1
+MapRouting.2.MapId     = 1
+MapRouting.2.NodeId    = 1
+MapRouting.3.MapId     = 530
+MapRouting.3.NodeId    = 2
+MapRouting.4.MapId     = 571
+MapRouting.4.NodeId    = 2
+MapRouting.DefaultNode = 3
+
+#
+###################################################################################################
 # INSTANCED MAP REFERENCE (WotLK 3.3.5a)
 #
 # The following maps are type MAP_INSTANCE (1), MAP_RAID (2), MAP_BATTLEGROUND (3),
