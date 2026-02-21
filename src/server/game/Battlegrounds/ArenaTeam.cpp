@@ -20,10 +20,12 @@
 #include "ArenaSeasonMgr.h"
 #include "BattlegroundMgr.h"
 #include "CharacterCache.h"
+#include "Config.h"
 #include "Group.h"
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "ProxyClient.h"
 #include "ScriptMgr.h"
 #include "World.h"
 #include "WorldPacket.h"
@@ -512,6 +514,12 @@ void ArenaTeam::NotifyStatsChanged()
     for (MemberList::const_iterator itr = Members.begin(); itr != Members.end(); ++itr)
         if (Player* player = ObjectAccessor::FindConnectedPlayer(itr->Guid))
             SendStats(player->GetSession());
+
+    // Relay updated stats to all other cluster nodes so their in-memory ArenaTeam objects
+    // reflect the new rating without requiring a relog.
+    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+        sProxyClient.SendArenaResult(TeamId, Stats.Rating, Stats.WeekGames, Stats.WeekWins,
+                                     Stats.SeasonGames, Stats.SeasonWins, Stats.Rank);
 }
 
 void ArenaTeam::Inspect(WorldSession* session, ObjectGuid guid)

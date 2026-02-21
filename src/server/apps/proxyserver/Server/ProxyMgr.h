@@ -200,6 +200,8 @@ public:
     void BroadcastChatRelay(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload);
     /// Route a new-mail notification to the node that hosts recipientGuid's session.
     void RouteMailNotification(uint64 recipientGuid);
+    /// Broadcast arena team stat update to all nodes except the source.
+    void BroadcastArenaResult(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload);
 
 private:
     ProxyMgr() = default;

@@ -1034,6 +1034,19 @@ void ProxyMgr::BroadcastChatRelay(uint8 sourceNodeId, uint16 payloadLen, std::ve
     BroadcastToOtherNodes(msg, sourceNodeId);
 }
 
+// ── Cross-node arena result broadcast ────────────────────────────────────────
+
+void ProxyMgr::BroadcastArenaResult(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload)
+{
+    std::vector<uint8> msg;
+    msg.reserve(3 + payload.size());
+    msg.push_back(0x16); // MSG_CLUSTER_ARENA_RESULT
+    msg.push_back(static_cast<uint8>(payloadLen & 0xFF));
+    msg.push_back(static_cast<uint8>(payloadLen >> 8));
+    msg.insert(msg.end(), payload.begin(), payload.end());
+    BroadcastToOtherNodes(msg, sourceNodeId);
+}
+
 // ── Cross-node mail notification routing ──────────────────────────────────────
 
 void ProxyMgr::RouteMailNotification(uint64 recipientGuid)

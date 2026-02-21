@@ -123,6 +123,8 @@ private:
     void HandleChatRelay(std::vector<uint8> payload);
     /// Route a new-mail notification to the node hosting the recipient's session.
     void HandleNotifyMail(uint64 recipientGuid);
+    /// Broadcast arena team stat update to all other nodes.
+    void HandleArenaResult(std::vector<uint8> payload);
 
     // ── Message type constants ─────────────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -142,6 +144,7 @@ private:
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
     static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
     static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12; ///< Notify a player's node that new mail arrived
+    static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16; ///< Broadcast arena team stat update after a rated match
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
     static constexpr std::size_t REGISTER_PAYLOAD_SIZE    = 5; ///< uint8 + uint16 + uint16 map_count
@@ -160,6 +163,7 @@ private:
     static constexpr std::size_t UNIT_UPDATE_LEN_SIZE     = 2; ///< uint16 payload_len
     static constexpr std::size_t CHAT_RELAY_LEN_SIZE      = 2; ///< uint16 payload_len
     static constexpr std::size_t NOTIFY_MAIL_SIZE         = 8; ///< uint64 recipient_guid
+    static constexpr std::size_t ARENA_RESULT_LEN_SIZE    = 2; ///< uint16 payload_len
 
     // ── Parse state machine ───────────────────────────────────────────────────
     enum class ParseState
@@ -189,6 +193,8 @@ private:
         ReadChatRelayLen,       ///< 2 bytes: uint16 payload_len
         ReadChatRelayBody,      ///< payload_len bytes
         ReadNotifyMail,         ///< 8 bytes: uint64 recipient_guid
+        ReadArenaResultLen,     ///< 2 bytes: uint16 payload_len
+        ReadArenaResultBody,    ///< payload_len bytes
         ReadPongTimestamp,      ///< 8 bytes: echoed uint64 timestamp_ms
     };
     std::chrono::steady_clock::time_point _pingSentAt{};
@@ -219,6 +225,7 @@ private:
     uint16 _lfgRelayRespPayloadLen{ 0 };
     uint16 _unitUpdatePayloadLen{ 0 };
     uint16 _chatRelayPayloadLen{ 0 };
+    uint16 _arenaResultPayloadLen{ 0 };
 
     /// Server info learned from MSG_REGISTER.
     uint8  _serverType{ 0xFF };

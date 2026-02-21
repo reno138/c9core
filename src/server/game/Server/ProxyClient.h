@@ -111,6 +111,17 @@ public:
     /// route SMSG_RECEIVED_MAIL to whichever node hosts the recipient's session.
     void SendMailNotify(uint64 recipientGuid);
 
+    /// Broadcast updated arena team stats to all other nodes after a rated match.
+    /// @param teamId       ArenaTeam ID.
+    /// @param rating       New team rating.
+    /// @param weekGames    Games played this week.
+    /// @param weekWins     Wins this week.
+    /// @param seasonGames  Games played this season.
+    /// @param seasonWins   Wins this season.
+    /// @param rank         New rank.
+    void SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames, uint16 weekWins,
+                         uint16 seasonGames, uint16 seasonWins, uint32 rank);
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid
@@ -159,6 +170,7 @@ private:
     void HandleUnitUpdate(std::vector<uint8> const& payload);
     void HandleIncomingChat(std::vector<uint8> const& payload);
     void HandleIncomingMailNotify(uint64 recipientGuid);
+    void HandleIncomingArenaResult(std::vector<uint8> const& payload);
 
     // ── Control protocol message types ────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -178,6 +190,7 @@ private:
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
     static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
     static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12; ///< New-mail notification for a player on this node
+    static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16; ///< Broadcast arena team stat update after a rated match
 
     // ── Parse state machine for incoming data ─────────────────────────────────
     enum class InParseState
@@ -201,6 +214,8 @@ private:
         ReadChatRelayLen,       ///< 2 bytes: uint16 payload_len
         ReadChatRelayBody,      ///< payload_len bytes
         ReadNotifyMail,         ///< 8 bytes: uint64 recipient_guid
+        ReadArenaResultLen,     ///< 2 bytes: uint16 payload_len
+        ReadArenaResultBody,    ///< payload_len bytes
         ReadPingTimestamp,      ///< 8 bytes: uint64 timestamp_ms
     };
     InParseState _inParseState{ InParseState::WaitType };
@@ -218,6 +233,7 @@ private:
     static constexpr std::size_t UNIT_UPDATE_LEN_SIZE    = 2; ///< uint16 payload_len
     static constexpr std::size_t CHAT_RELAY_LEN_SIZE     = 2; ///< uint16 payload_len
     static constexpr std::size_t NOTIFY_MAIL_SIZE        = 8; ///< uint64 recipient_guid
+    static constexpr std::size_t ARENA_RESULT_LEN_SIZE   = 2; ///< uint16 payload_len
 
     // ── Socket and connection state ───────────────────────────────────────────
     boost::asio::io_context* _ioContext{ nullptr };
@@ -260,6 +276,7 @@ private:
 
     uint16 _unitUpdatePayloadLen{ 0 };
     uint16 _chatRelayPayloadLen{ 0 };
+    uint16 _arenaResultPayloadLen{ 0 };
 };
 
 #define sProxyClient ProxyClient::Instance()

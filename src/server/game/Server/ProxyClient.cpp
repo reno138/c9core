@@ -16,7 +16,10 @@
  */
 
 #include "ProxyClient.h"
+#include "ArenaTeam.h"
+#include "ArenaTeamMgr.h"
 #include "ClusterMgr.h"
+#include "Config.h"
 #include "SpellAuras.h"
 #include "DBCStores.h"
 #include "LFGMgr.h"
@@ -254,6 +257,7 @@ void ProxyClient::ParseIncoming()
                     case MSG_CLUSTER_UNIT_UPDATE:    _inParseState = InParseState::ReadUnitUpdateLen;     break;
                     case MSG_CLUSTER_CHAT:           _inParseState = InParseState::ReadChatRelayLen;      break;
                     case MSG_CLUSTER_NOTIFY_MAIL:    _inParseState = InParseState::ReadNotifyMail;        break;
+                    case MSG_CLUSTER_ARENA_RESULT:   _inParseState = InParseState::ReadArenaResultLen;   break;
                     case MSG_PING:                   _inParseState = InParseState::ReadPingTimestamp;    break;
                     case MSG_PONG:                   /* ignore: only proxy sends pong */ break;
                     default:
@@ -483,6 +487,29 @@ void ProxyClient::ParseIncoming()
                 std::memcpy(&guid, _accumBuf.data(), 8);
                 _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + NOTIFY_MAIL_SIZE);
                 HandleIncomingMailNotify(guid);
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_ARENA_RESULT (header: uint16 payload_len) ────────
+            case InParseState::ReadArenaResultLen:
+            {
+                if (_accumBuf.size() < ARENA_RESULT_LEN_SIZE)
+                    return;
+                _arenaResultPayloadLen = static_cast<uint16>(_accumBuf[0]) | (static_cast<uint16>(_accumBuf[1]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + ARENA_RESULT_LEN_SIZE);
+                _inParseState = InParseState::ReadArenaResultBody;
+                break;
+            }
+
+            case InParseState::ReadArenaResultBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_arenaResultPayloadLen))
+                    return;
+                std::vector<uint8> payload(_accumBuf.begin(), _accumBuf.begin() + _arenaResultPayloadLen);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _arenaResultPayloadLen);
+                HandleIncomingArenaResult(payload);
+                _arenaResultPayloadLen = 0;
                 _inParseState = InParseState::WaitType;
                 break;
             }
@@ -1313,6 +1340,100 @@ void ProxyClient::HandleIncomingChat(std::vector<uint8> const& payload)
         {
             if (player && player->IsInWorld() && player->GetZoneId() == zoneId)
                 player->SendDirectMessage(&pkt);
+        }
+    });
+}
+
+// ── Outgoing: arena team stat broadcast ───────────────────────────────────────
+
+void ProxyClient::SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames, uint16 weekWins,
+                                  uint16 seasonGames, uint16 seasonWins, uint32 rank)
+{
+    if (!_connected || _nodeId == 0)
+        return;
+
+    // Payload: uint32 team_id | uint16 rating | uint16 weekGames | uint16 weekWins
+    //          | uint16 seasonGames | uint16 seasonWins | uint32 rank  → 18 bytes
+    static constexpr uint16 PAYLOAD_LEN = 18;
+    std::vector<uint8> msg;
+    msg.reserve(3 + PAYLOAD_LEN);
+
+    msg.push_back(MSG_CLUSTER_ARENA_RESULT);
+    msg.push_back(static_cast<uint8>(PAYLOAD_LEN & 0xFF));
+    msg.push_back(static_cast<uint8>(PAYLOAD_LEN >> 8));
+
+    auto pushU16 = [&](uint16 v) {
+        msg.push_back(static_cast<uint8>(v & 0xFF));
+        msg.push_back(static_cast<uint8>(v >> 8));
+    };
+    auto pushU32 = [&](uint32 v) {
+        pushU16(static_cast<uint16>(v & 0xFFFF));
+        pushU16(static_cast<uint16>(v >> 16));
+    };
+
+    pushU32(teamId);
+    pushU16(rating);
+    pushU16(weekGames);
+    pushU16(weekWins);
+    pushU16(seasonGames);
+    pushU16(seasonWins);
+    pushU32(rank);
+
+    EnqueueRaw(std::move(msg));
+}
+
+// ── Incoming: arena team stat broadcast ───────────────────────────────────────
+
+void ProxyClient::HandleIncomingArenaResult(std::vector<uint8> const& payload)
+{
+    // Payload: uint32 teamId | uint16 rating | uint16 weekGames | uint16 weekWins
+    //          | uint16 seasonGames | uint16 seasonWins | uint32 rank  → 18 bytes
+    static constexpr std::size_t EXPECTED = 18;
+    if (payload.size() < EXPECTED)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleIncomingArenaResult — payload too small ({})", payload.size());
+        return;
+    }
+
+    uint32 teamId      = 0;
+    uint16 rating      = 0;
+    uint16 weekGames   = 0;
+    uint16 weekWins    = 0;
+    uint16 seasonGames = 0;
+    uint16 seasonWins  = 0;
+    uint32 rank        = 0;
+    std::memcpy(&teamId,      payload.data() +  0, 4);
+    std::memcpy(&rating,      payload.data() +  4, 2);
+    std::memcpy(&weekGames,   payload.data() +  6, 2);
+    std::memcpy(&weekWins,    payload.data() +  8, 2);
+    std::memcpy(&seasonGames, payload.data() + 10, 2);
+    std::memcpy(&seasonWins,  payload.data() + 12, 2);
+    std::memcpy(&rank,        payload.data() + 14, 4);
+
+    LOG_DEBUG("server.worldserver", "ProxyClient: IncomingArenaResult team={} rating={} rank={}", teamId, rating, rank);
+
+    sWorld->QueueCallback([teamId, rating, weekGames, weekWins, seasonGames, seasonWins, rank]()
+    {
+        ArenaTeam* team = sArenaTeamMgr->GetArenaTeamById(teamId);
+        if (!team)
+            return;
+
+        // Update in-memory stats.
+        ArenaTeamStats newStats;
+        newStats.Rating      = rating;
+        newStats.WeekGames   = weekGames;
+        newStats.WeekWins    = weekWins;
+        newStats.SeasonGames = seasonGames;
+        newStats.SeasonWins  = seasonWins;
+        newStats.Rank        = rank;
+        team->SetArenaTeamStats(newStats);
+
+        // Send SMSG_ARENA_TEAM_STATS to every locally-connected member.
+        for (ArenaTeam::MemberList::const_iterator itr = team->GetMembers().begin();
+             itr != team->GetMembers().end(); ++itr)
+        {
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(itr->Guid))
+                team->SendStats(player->GetSession());
         }
     });
 }
