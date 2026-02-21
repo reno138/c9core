@@ -18,30 +18,50 @@
 #include "ClusterMgr.h"
 #include "Config.h"
 #include "Log.h"
+#include "DBCStores.h"
 #include <algorithm>
 #include <cstring>
 #include <sstream>
 
 void ClusterMgr::LoadLocalMaps()
 {
-    std::string raw = sConfigMgr->GetOption<std::string>("ClusterServer.Maps", "");
-
     std::lock_guard<std::mutex> lock(_localMapsMutex);
     _localMaps.clear();
+    _instanceServerMode = false;
+    _allMapsMode        = false;
 
+    // Mode 1: Instance-server — handle all instanceable maps (dungeons/raids/BGs/arenas)
+    if (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false))
+    {
+        _instanceServerMode = true;
+        LOG_INFO("server.worldserver", "ClusterMgr: InstanceServer mode — handling all instanceable maps");
+        return;
+    }
+
+    std::string raw = sConfigMgr->GetOption<std::string>("ClusterServer.Maps", "");
+
+    // Mode 2: All-maps — no rerouting (standalone or mega-node)
+    if (raw == "-1")
+    {
+        _allMapsMode = true;
+        LOG_INFO("server.worldserver", "ClusterMgr: ClusterServer.Maps = -1 — all maps local (no rerouting)");
+        return;
+    }
+
+    // Mode 3: Empty — all maps local (standalone/dev mode)
     if (raw.empty())
     {
         LOG_INFO("server.worldserver", "ClusterMgr: ClusterServer.Maps is empty — all maps local");
         return;
     }
 
+    // Mode 4: Explicit comma-separated map ID list
     std::istringstream ss(raw);
     std::string token;
     while (std::getline(ss, token, ','))
     {
-        // Trim whitespace
-        token.erase(0, token.find_first_not_of(" \t"));
-        token.erase(token.find_last_not_of(" \t") + 1);
+        token.erase(0, token.find_first_not_of(" 	"));
+        token.erase(token.find_last_not_of(" 	") + 1);
         if (token.empty())
             continue;
         uint32 mapId = static_cast<uint32>(std::stoul(token));
@@ -57,8 +77,19 @@ void ClusterMgr::LoadLocalMaps()
 bool ClusterMgr::IsMapLocal(uint32 mapId) const
 {
     std::lock_guard<std::mutex> lock(_localMapsMutex);
+
+    if (_allMapsMode)
+        return true;
+
+    if (_instanceServerMode)
+    {
+        MapEntry const* entry = sMapStore.LookupEntry(mapId);
+        return entry && entry->Instanceable();
+    }
+
     if (_localMaps.empty())
         return true;
+
     return _localMaps.count(mapId) > 0;
 }
 

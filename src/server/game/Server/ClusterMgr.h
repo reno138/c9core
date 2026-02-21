@@ -88,12 +88,14 @@ public:
 
     // ── Local map set (zone-based routing) ───────────────────────────────────
 
-    /// Parse ClusterServer.Maps from config and populate _localMaps.
-    /// Empty string means all maps are local (standalone / dev mode).
+    /// Parse ClusterServer.Maps / ClusterServer.InstanceServer from config.
+    ///   ClusterServer.InstanceServer = 1  -> handle all instanceable maps (dungeons/raids/BGs/arenas)
+    ///   ClusterServer.Maps = "-1"         -> handle all maps (no rerouting)
+    ///   ClusterServer.Maps = "0,530,571"  -> explicit comma-separated list
+    ///   ClusterServer.Maps = ""           -> all maps local (standalone/dev mode)
     void LoadLocalMaps();
 
     /// Returns true if mapId is handled locally by this node.
-    /// Always true when ClusterServer.Maps is empty.
     bool IsMapLocal(uint32 mapId) const;
     std::unordered_set<uint32> GetLocalMaps() const;
 
@@ -178,7 +180,9 @@ private:
 
     // ── Local map set ──────────────────────────────────────────────────────
     mutable std::mutex _localMapsMutex;
-    std::unordered_set<uint32> _localMaps; ///< empty = all maps local
+    std::unordered_set<uint32> _localMaps; ///< non-empty explicit map list
+    bool _instanceServerMode{false}; ///< true = handle all instanceable maps
+    bool _allMapsMode{false};        ///< true = handle all maps (no rerouting)
 
     // ── Cross-node group state ─────────────────────────────────────────────
     mutable std::mutex _groupMutex;
