@@ -86,7 +86,11 @@ SRP6::SRP6(std::string const& username, Salt const& salt, Verifier const& verifi
 
 std::optional<SessionKey> SRP6::VerifyChallengeResponse(EphemeralKey const& A, SHA1::Digest const& clientM)
 {
-    ASSERT(!_used, "A single SRP6 object must only ever be used to verify ONCE!");
+    // Enforce single-use in all build configurations.  ASSERT is a no-op in
+    // Release builds, which would allow the same SRP6 instance to be verified
+    // multiple times — potentially enabling a replay attack.
+    if (_used)
+        return std::nullopt;
     _used = true;
 
     BigNumber const _A(A);

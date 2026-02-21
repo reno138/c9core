@@ -121,6 +121,19 @@ void ControlSocket::ProcessBuffer()
                 _registerMapCount = static_cast<uint16>(p[3]) | (static_cast<uint16>(p[4]) << 8);
                 _accumBuffer.ReadCompleted(REGISTER_PAYLOAD_SIZE);
 
+                // Sanity-bound the map count: a worldserver cannot own more than
+                // MAX_REGISTER_MAP_COUNT maps. Reject connections that claim otherwise
+                // to prevent memory exhaustion (65535 × 4 = 262 KB stall per attempt).
+                static constexpr uint16 MAX_REGISTER_MAP_COUNT = 128;
+                if (_registerMapCount > MAX_REGISTER_MAP_COUNT)
+                {
+                    LOG_WARN("proxy.control",
+                             "ControlSocket: MSG_REGISTER map count {} exceeds limit {}; closing",
+                             _registerMapCount, MAX_REGISTER_MAP_COUNT);
+                    CloseSocket();
+                    return;
+                }
+
                 if (_registerMapCount > 0)
                     _parseState = ParseState::ReadRegisterMaps;
                 else
@@ -549,7 +562,10 @@ void ControlSocket::HandlePlayerOnline()
     uint8 classId = p[1];
     uint8 raceId  = p[2];
     uint8 teamId  = p[3];
-    uint8 nodeId  = p[4]; // use the node_id from the wire message tail byte
+    // Use the sender's registered node ID rather than the wire-provided value.
+    // Trusting a node-supplied nodeId would allow a compromised or malicious
+    // backend to falsely report players as residing on arbitrary nodes.
+    uint8 nodeId  = _nodeId;
 
     LOG_INFO("proxy.control", "ControlSocket: Player ONLINE  GUID {:016X} '{}' zone={} level={} from node={}",
              _playerOnlineGuid, name, zoneId, level, nodeId);

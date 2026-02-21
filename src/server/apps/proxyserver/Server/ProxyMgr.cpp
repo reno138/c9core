@@ -1025,9 +1025,20 @@ void ProxyMgr::BroadcastUnitUpdate(uint8 sourceNodeId, uint16 payloadLen, std::v
 
 void ProxyMgr::RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps)
 {
+    // WoW 3.3.5a (build 12340) has no valid map ID beyond this value.
+    // Reject anything higher to prevent routing-table pollution from a
+    // misconfigured or malicious backend.
+    static constexpr uint32 MAX_VALID_MAP_ID = 720;
+
     std::lock_guard<std::mutex> lock(_mapRoutingMutex);
     for (uint32 mapId : maps)
     {
+        if (mapId > MAX_VALID_MAP_ID)
+        {
+            LOG_WARN("proxy", "ProxyMgr: RegisterNodeMaps — node {} sent invalid mapId {}; skipping",
+                     nodeId, mapId);
+            continue;
+        }
         _mapRouting[mapId] = nodeId;
         LOG_INFO("proxy", "ProxyMgr: Dynamic routing map {} → node {}", mapId, nodeId);
     }
