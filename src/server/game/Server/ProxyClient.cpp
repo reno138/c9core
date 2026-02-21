@@ -253,6 +253,7 @@ void ProxyClient::ParseIncoming()
                     case MSG_CLUSTER_LFG_RELAY_RESP: _inParseState = InParseState::ReadLFGRelayRespHeader;break;
                     case MSG_CLUSTER_UNIT_UPDATE:    _inParseState = InParseState::ReadUnitUpdateLen;     break;
                     case MSG_CLUSTER_CHAT:           _inParseState = InParseState::ReadChatRelayLen;      break;
+                    case MSG_CLUSTER_NOTIFY_MAIL:    _inParseState = InParseState::ReadNotifyMail;        break;
                     case MSG_PING:                   _inParseState = InParseState::ReadPingTimestamp;    break;
                     case MSG_PONG:                   /* ignore: only proxy sends pong */ break;
                     default:
@@ -469,6 +470,19 @@ void ProxyClient::ParseIncoming()
                 _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _chatRelayPayloadLen);
                 HandleIncomingChat(payload);
                 _chatRelayPayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_NOTIFY_MAIL ───────────────────────────────────────
+            case InParseState::ReadNotifyMail:
+            {
+                if (_accumBuf.size() < NOTIFY_MAIL_SIZE)
+                    return;
+                uint64 guid = 0;
+                std::memcpy(&guid, _accumBuf.data(), 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + NOTIFY_MAIL_SIZE);
+                HandleIncomingMailNotify(guid);
                 _inParseState = InParseState::WaitType;
                 break;
             }
@@ -1195,6 +1209,33 @@ void ProxyClient::HandleUnitUpdate(std::vector<uint8> const& payload)
 
     LOG_DEBUG("server.worldserver", "ProxyClient: UnitUpdate GUID {:016X} HP {}/{}", state.guid, state.health, state.maxHealth);
     sClusterMgr.UpdateUnitState(std::move(state));
+}
+
+// ── Outgoing: cross-node mail notification ────────────────────────────────────
+
+void ProxyClient::SendMailNotify(uint64 recipientGuid)
+{
+    if (!_connected || _nodeId == 0)
+        return;
+
+    // MSG_CLUSTER_NOTIFY_MAIL: type(1) + guid(8)
+    std::vector<uint8> msg(9);
+    msg[0] = MSG_CLUSTER_NOTIFY_MAIL;
+    std::memcpy(msg.data() + 1, &recipientGuid, 8);
+    EnqueueRaw(std::move(msg));
+}
+
+// ── Incoming: cross-node mail notification ────────────────────────────────────
+
+void ProxyClient::HandleIncomingMailNotify(uint64 recipientGuid)
+{
+    LOG_DEBUG("server.worldserver", "ProxyClient: IncomingMailNotify for GUID {:016X}", recipientGuid);
+
+    sWorld->QueueCallback([recipientGuid]()
+    {
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(ObjectGuid(recipientGuid)))
+            player->SendNewMail();
+    });
 }
 
 // ── Outgoing: cross-node chat relay ───────────────────────────────────────────

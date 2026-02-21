@@ -198,6 +198,8 @@ public:
     void BroadcastUnitUpdate(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload);
     /// Broadcast a cross-node SAY/YELL/EMOTE chat message to all nodes except the source.
     void BroadcastChatRelay(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload);
+    /// Route a new-mail notification to the node that hosts recipientGuid's session.
+    void RouteMailNotification(uint64 recipientGuid);
 
 private:
     ProxyMgr() = default;

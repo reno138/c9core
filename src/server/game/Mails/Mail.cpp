@@ -20,12 +20,14 @@
 #include "BattlegroundMgr.h"
 #include "CalendarMgr.h"
 #include "CharacterCache.h"
+#include "Config.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
 #include "Item.h"
 #include "Log.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ProxyClient.h"
 #include "ScriptMgr.h"
 #include "World.h"
 
@@ -294,5 +296,16 @@ void MailDraft::SendMailTo(CharacterDatabaseTransaction trans, MailReceiver cons
     else if (!m_items.empty())
     {
         deleteIncludedItems(CharacterDatabaseTransaction(nullptr));
+    }
+
+    // Cross-node: recipient not on this node — ask proxy to forward SMSG_RECEIVED_MAIL
+    // to whichever node hosts the recipient's session. Only notify for immediate mail
+    // (no delivery delay) since delayed mail is announced at login via AddNewMailDeliverTime.
+    if (!pReceiver && deliver_delay == 0
+        && sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
+        && sProxyClient.IsConnected())
+    {
+        uint64 rawGuid = ObjectGuid(HighGuid::Player, receiver.GetPlayerGUIDLow()).GetRawValue();
+        sProxyClient.SendMailNotify(rawGuid);
     }
 }

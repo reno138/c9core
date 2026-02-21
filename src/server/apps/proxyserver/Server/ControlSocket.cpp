@@ -101,6 +101,7 @@ void ControlSocket::ProcessBuffer()
                     case MSG_REROUTE_TO_MAP:        _parseState = ParseState::ReadRerouteToMap;     break;
                     case MSG_CLUSTER_UNIT_UPDATE:   _parseState = ParseState::ReadUnitUpdateLen;     break;
                     case MSG_CLUSTER_CHAT:          _parseState = ParseState::ReadChatRelayLen;      break;
+                    case MSG_CLUSTER_NOTIFY_MAIL:   _parseState = ParseState::ReadNotifyMail;        break;
                     case MSG_PONG:                  _parseState = ParseState::ReadPongTimestamp;     break;
                     default:
                         LOG_WARN("proxy.control", "ControlSocket: Unknown message type 0x{:02X} — closing", msgType);
@@ -501,6 +502,21 @@ void ControlSocket::ProcessBuffer()
                 break;
             }
 
+            // ── MSG_CLUSTER_NOTIFY_MAIL ───────────────────────────────────────
+            case ParseState::ReadNotifyMail:
+            {
+                if (_accumBuffer.GetActiveSize() < NOTIFY_MAIL_SIZE)
+                    return;
+
+                uint64 recipientGuid = 0;
+                std::memcpy(&recipientGuid, _accumBuffer.GetReadPointer(), 8);
+                _accumBuffer.ReadCompleted(NOTIFY_MAIL_SIZE);
+
+                HandleNotifyMail(recipientGuid);
+                _parseState = ParseState::WaitType;
+                break;
+            }
+
             // ── MSG_PONG: worldserver echoed our timestamp — compute RTT ──────
             case ParseState::ReadPongTimestamp:
             {
@@ -684,6 +700,12 @@ void ControlSocket::HandleUnitUpdate(std::vector<uint8> payload)
     uint16 len = static_cast<uint16>(payload.size());
     LOG_DEBUG("proxy.control", "ControlSocket: UnitUpdate from node {} payload={} bytes", _nodeId, len);
     sProxyMgr.BroadcastUnitUpdate(_nodeId, len, payload);
+}
+
+void ControlSocket::HandleNotifyMail(uint64 recipientGuid)
+{
+    LOG_DEBUG("proxy.control", "ControlSocket: NotifyMail — recipient GUID {:016X} from node {}", recipientGuid, _nodeId);
+    sProxyMgr.RouteMailNotification(recipientGuid);
 }
 
 void ControlSocket::HandleChatRelay(std::vector<uint8> payload)

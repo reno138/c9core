@@ -121,6 +121,8 @@ private:
     void HandleUnitUpdate(std::vector<uint8> payload);
     /// Broadcast a cross-node SAY/YELL/EMOTE chat message to all other nodes.
     void HandleChatRelay(std::vector<uint8> payload);
+    /// Route a new-mail notification to the node hosting the recipient's session.
+    void HandleNotifyMail(uint64 recipientGuid);
 
     // ── Message type constants ─────────────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -139,6 +141,7 @@ private:
     static constexpr uint8 MSG_PONG                      = 0x0E;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
     static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
+    static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12; ///< Notify a player's node that new mail arrived
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
     static constexpr std::size_t REGISTER_PAYLOAD_SIZE    = 5; ///< uint8 + uint16 + uint16 map_count
@@ -156,6 +159,7 @@ private:
     static constexpr std::size_t REROUTE_TO_MAP_SIZE      = 12;///< uint64 guid + uint32 mapId
     static constexpr std::size_t UNIT_UPDATE_LEN_SIZE     = 2; ///< uint16 payload_len
     static constexpr std::size_t CHAT_RELAY_LEN_SIZE      = 2; ///< uint16 payload_len
+    static constexpr std::size_t NOTIFY_MAIL_SIZE         = 8; ///< uint64 recipient_guid
 
     // ── Parse state machine ───────────────────────────────────────────────────
     enum class ParseState
@@ -184,6 +188,7 @@ private:
         ReadUnitUpdateBody,     ///< payload_len bytes
         ReadChatRelayLen,       ///< 2 bytes: uint16 payload_len
         ReadChatRelayBody,      ///< payload_len bytes
+        ReadNotifyMail,         ///< 8 bytes: uint64 recipient_guid
         ReadPongTimestamp,      ///< 8 bytes: echoed uint64 timestamp_ms
     };
     std::chrono::steady_clock::time_point _pingSentAt{};

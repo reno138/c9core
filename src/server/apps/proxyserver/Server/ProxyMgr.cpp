@@ -1034,6 +1034,31 @@ void ProxyMgr::BroadcastChatRelay(uint8 sourceNodeId, uint16 payloadLen, std::ve
     BroadcastToOtherNodes(msg, sourceNodeId);
 }
 
+// ── Cross-node mail notification routing ──────────────────────────────────────
+
+void ProxyMgr::RouteMailNotification(uint64 recipientGuid)
+{
+    uint8 targetNodeId = 0;
+    {
+        std::lock_guard<std::mutex> lock(_dirMutex);
+        auto itr = _playerByGuid.find(recipientGuid);
+        if (itr == _playerByGuid.end())
+            return; // recipient not online on any node — nothing to do
+        targetNodeId = itr->second.nodeId;
+    }
+
+    if (targetNodeId == 0)
+        return;
+
+    // Build MSG_CLUSTER_NOTIFY_MAIL: type(1) + guid(8)
+    std::vector<uint8> msg(9);
+    msg[0] = 0x12; // MSG_CLUSTER_NOTIFY_MAIL
+    std::memcpy(msg.data() + 1, &recipientGuid, 8);
+    RelayToNode(targetNodeId, msg);
+
+    LOG_DEBUG("proxy", "ProxyMgr: Routed mail notification for GUID {:016X} → node {}", recipientGuid, targetNodeId);
+}
+
 // ── Dynamic map routing (populated at node registration) ─────────────────────
 
 void ProxyMgr::RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps)

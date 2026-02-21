@@ -107,6 +107,10 @@ public:
     /// @param pkt          The fully-built SMSG_MESSAGECHAT WorldPacket.
     void SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const& pkt);
 
+    /// Notify the proxy that new mail arrived for recipientGuid so the proxy can
+    /// route SMSG_RECEIVED_MAIL to whichever node hosts the recipient's session.
+    void SendMailNotify(uint64 recipientGuid);
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid
@@ -154,6 +158,7 @@ private:
     void HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> const& payload);
     void HandleUnitUpdate(std::vector<uint8> const& payload);
     void HandleIncomingChat(std::vector<uint8> const& payload);
+    void HandleIncomingMailNotify(uint64 recipientGuid);
 
     // ── Control protocol message types ────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -172,6 +177,7 @@ private:
     static constexpr uint8 MSG_PONG                    = 0x0E; ///< node→proxy: pong echoed timestamp(8)
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
     static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
+    static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12; ///< New-mail notification for a player on this node
 
     // ── Parse state machine for incoming data ─────────────────────────────────
     enum class InParseState
@@ -194,6 +200,7 @@ private:
         ReadUnitUpdateBody,     ///< payload_len bytes
         ReadChatRelayLen,       ///< 2 bytes: uint16 payload_len
         ReadChatRelayBody,      ///< payload_len bytes
+        ReadNotifyMail,         ///< 8 bytes: uint64 recipient_guid
         ReadPingTimestamp,      ///< 8 bytes: uint64 timestamp_ms
     };
     InParseState _inParseState{ InParseState::WaitType };
@@ -210,6 +217,7 @@ private:
     static constexpr std::size_t LFG_RELAY_RESP_HDR_SIZE = 3; ///< uint8 target_node + uint16 len
     static constexpr std::size_t UNIT_UPDATE_LEN_SIZE    = 2; ///< uint16 payload_len
     static constexpr std::size_t CHAT_RELAY_LEN_SIZE     = 2; ///< uint16 payload_len
+    static constexpr std::size_t NOTIFY_MAIL_SIZE        = 8; ///< uint64 recipient_guid
 
     // ── Socket and connection state ───────────────────────────────────────────
     boost::asio::io_context* _ioContext{ nullptr };
