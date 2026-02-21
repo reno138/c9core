@@ -693,6 +693,20 @@ void ProxyClient::HandleGroupUpdate(uint64 groupGuid, uint8 memberCount, std::ve
 {
     LOG_DEBUG("server.worldserver", "ProxyClient: GroupUpdate group {:016X} {} members", groupGuid, memberCount);
     sClusterMgr.OnGroupUpdate(groupGuid, memberCount, memberData);
+
+    // Trigger a full stats push from local players so remote group members
+    // see their health/mana immediately after group formation or membership change.
+    uint8 localNodeId = _nodeId;
+    sWorld->QueueCallback([groupGuid, localNodeId]()
+    {
+        for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(groupGuid))
+        {
+            if (rm.nodeId != localNodeId)
+                continue;
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(ObjectGuid(rm.guid)))
+                player->SetGroupUpdateFlag(GROUP_UPDATE_FULL);
+        }
+    });
 }
 
 void ProxyClient::HandleGroupDisband(uint64 groupGuid)

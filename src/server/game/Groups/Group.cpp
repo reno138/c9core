@@ -1758,6 +1758,13 @@ void Group::UpdatePlayerOutOfRange(Player* player)
         if (member && (!member->IsInMap(player) || !member->IsWithinDist(player, member->GetSightRange(player), false)))
             member->SendDirectMessage(&data);
     }
+    // Deliver stats update to remote group members on other cluster nodes.
+    if (data.size() > 0 && sProxyClient.IsConnected())
+    {
+        uint64 groupGuid = GetGUID().GetRawValue();
+        for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(groupGuid))
+            sProxyClient.DeliverPacketToPlayer(rm.guid, data);
+    }
 }
 
 void Group::BroadcastPacket(WorldPacket const* packet, bool ignorePlayersInBGRaid, int group, ObjectGuid ignore)
