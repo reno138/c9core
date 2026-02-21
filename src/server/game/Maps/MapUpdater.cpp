@@ -65,6 +65,11 @@ public:
     void call() override
     {
         Map* map = sMapMgr->CreateBaseMap(_mapId);
+        if (!map)   // nullptr when InstanceServer.Enable rejects this map type
+        {
+            _updater.update_finished();
+            return;
+        }
         LOG_INFO("server.loading", ">> Loading All Grids For Map {} ({})", map->GetId(), map->GetMapName());
         map->LoadAllGrids();
         _updater.update_finished();

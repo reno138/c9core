@@ -722,6 +722,8 @@ void OutdoorPvP::SetMapFromZone(uint32 zone)
     ASSERT(areaTable);
 
     Map* map = sMapMgr->CreateBaseMap(areaTable->mapid);
+    if (!map)   // nullptr when InstanceServer.Enable rejects this map type (continent maps)
+        return;
     ASSERT(!map->Instanceable());
     _map = map;
 }

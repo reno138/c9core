@@ -1453,6 +1453,8 @@ void GameEventMgr::GameEventSpawn(int16 eventId)
 
             // Spawn if necessary (loaded grids only)
             Map* map = sMapMgr->CreateBaseMap(data->mapid);
+            if (!map)   // nullptr when InstanceServer.Enable rejects this map type
+                continue;
             // We use spawn coords to spawn
             if (!map->Instanceable() && map->IsGridLoaded(data->posX, data->posY))
             {
@@ -1479,6 +1481,8 @@ void GameEventMgr::GameEventSpawn(int16 eventId)
             // Spawn if necessary (loaded grids only)
             // this base map checked as non-instanced and then only existed
             Map* map = sMapMgr->CreateBaseMap(data->mapid);
+            if (!map)   // nullptr when InstanceServer.Enable rejects this map type
+                continue;
             // We use current coords to unspawn, not spawn coords since creature can have changed grid
             if (!map->Instanceable() && map->IsGridLoaded(data->posX, data->posY))
             {
