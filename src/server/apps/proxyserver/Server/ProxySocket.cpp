@@ -46,8 +46,10 @@ ProxySocket::~ProxySocket()
 
 void ProxySocket::Start()
 {
-    // Create and connect the backend session immediately.
-    // The backend (worldserver) will send SMSG_AUTH_CHALLENGE as soon as we connect.
+    // Create and connect the backend session.
+    // Client reads are deliberately deferred until OnBackendConnected() fires — this
+    // prevents a race where the client sends CMSG_AUTH_SESSION before the backend TCP
+    // socket is open, which would cause SendRaw() to silently drop the packet.
     _backend = std::make_shared<BackendSession>(
         sProxySocketMgr.GetIoContext(),
         shared_from_this());
@@ -55,8 +57,7 @@ void ProxySocket::Start()
     auto [backendNodeId, backendHost, backendPort] = sProxyMgr.ChooseNode();
     _backendNodeId = backendNodeId;
     _backend->Connect(backendHost, backendPort);
-
-    AsyncRead();
+    // NOTE: AsyncRead() is NOT called here — see OnBackendConnected().
 }
 
 bool ProxySocket::Update()
@@ -280,6 +281,13 @@ void ProxySocket::HandleAuthSessionCallback(PreparedQueryResult result)
     _backend->InitCrypt(sessionKey);
 
     ResumeAfterAuth();
+}
+
+void ProxySocket::OnBackendConnected()
+{
+    // Backend TCP handshake is established — now safe to read from the client.
+    // The backend is ready to receive CMSG_AUTH_SESSION, so no packet will be dropped.
+    AsyncRead();
 }
 
 void ProxySocket::ResumeAfterAuth()

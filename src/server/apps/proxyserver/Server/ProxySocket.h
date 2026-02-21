@@ -60,6 +60,11 @@ public:
     /// This method re-encrypts the header for the client direction before sending.
     void QueuePacketForClient(uint8 const* plainHeader, std::size_t headerLen, MessageBuffer& payload);
 
+    /// Called by BackendSession once the backend TCP connection is established.
+    /// Client reads are deferred until this point to prevent a race where the client
+    /// sends CMSG_AUTH_SESSION before the backend is ready to receive it.
+    void OnBackendConnected();
+
     /// Called by BackendSession when reroute handshake with instance server completes.
     void OnRerouteComplete(std::shared_ptr<BackendSession> newBackend);
 

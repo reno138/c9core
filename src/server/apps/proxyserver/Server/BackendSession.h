@@ -22,6 +22,8 @@
 #include "AuthDefines.h"
 #include "MessageBuffer.h"
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <chrono>
 #include <memory>
 #include <queue>
 #include <string>
@@ -97,6 +99,7 @@ private:
     std::weak_ptr<ProxySocket> _owner;
     boost::asio::ip::tcp::socket _socket;
     boost::asio::ip::tcp::resolver _resolver;
+    boost::asio::steady_timer _connectTimer; ///< Fires if backend connect takes > 10 seconds.
 
     /// Inverted AuthCrypt: EncryptSend() decrypts S→C, DecryptRecv() encrypts C→S.
     AuthCrypt _backendCrypt;

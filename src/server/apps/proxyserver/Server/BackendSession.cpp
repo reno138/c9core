@@ -28,6 +28,7 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
     : _owner(std::move(owner))
     , _socket(static_cast<boost::asio::io_context&>(ioContext))
     , _resolver(static_cast<boost::asio::io_context&>(ioContext))
+    , _connectTimer(static_cast<boost::asio::io_context&>(ioContext))
     , _readBuffer(READ_SIZE)
     , _payloadBuffer(0)
 {
@@ -39,6 +40,7 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
     : _owner(std::move(owner))
     , _socket(static_cast<boost::asio::io_context&>(ioContext))
     , _resolver(static_cast<boost::asio::io_context&>(ioContext))
+    , _connectTimer(static_cast<boost::asio::io_context&>(ioContext))
     , _readBuffer(READ_SIZE)
     , _payloadBuffer(0)
     , _isReroute(true)
@@ -57,12 +59,30 @@ BackendSession::~BackendSession()
 
 void BackendSession::Connect(std::string const& host, uint16 port)
 {
+    // Arm a 10-second watchdog. If the backend is unreachable the client would
+    // otherwise hang for the OS-level TCP timeout (30+ seconds). The timer fires
+    // the callback with ec == 0; a successful connect cancels it (ec == operation_aborted).
+    _connectTimer.expires_after(std::chrono::seconds(10));
+    _connectTimer.async_wait([self = shared_from_this()](boost::system::error_code const& ec)
+    {
+        if (ec) return; // cancelled because connect succeeded in time
+        LOG_WARN("proxy", "BackendSession: Backend connect timed out — dropping client");
+        self->_resolver.cancel();
+        boost::system::error_code closeEc;
+        self->_socket.close(closeEc);
+        if (auto owner = self->_owner.lock())
+            owner->CloseSocket();
+    });
+
     _resolver.async_resolve(host, std::to_string(port),
         [self = shared_from_this(), host](boost::system::error_code const& error, boost::asio::ip::tcp::resolver::results_type results)
         {
             if (error)
             {
+                if (error == boost::asio::error::operation_aborted)
+                    return; // timer already fired and closed the socket
                 LOG_ERROR("proxy", "BackendSession: Failed to resolve '{}': {}", host, error.message());
+                self->_connectTimer.cancel();
                 if (auto owner = self->_owner.lock())
                     owner->CloseSocket();
                 return;
@@ -77,8 +97,12 @@ void BackendSession::Connect(std::string const& host, uint16 port)
 
 void BackendSession::OnConnect(boost::system::error_code const& error)
 {
+    _connectTimer.cancel(); // disarm watchdog — connect completed (success or failure)
+
     if (error)
     {
+        if (error == boost::asio::error::operation_aborted)
+            return; // timer already fired and closed things down
         LOG_ERROR("proxy", "BackendSession: Connection failed: {}", error.message());
         if (auto owner = _owner.lock())
             owner->CloseSocket();
@@ -86,6 +110,16 @@ void BackendSession::OnConnect(boost::system::error_code const& error)
     }
 
     LOG_DEBUG("proxy", "BackendSession: Connected to backend.");
+
+    // For non-reroute sessions: signal the owner to start reading from the client.
+    // This prevents the race where CMSG_AUTH_SESSION arrives before the backend
+    // socket is open and would be silently dropped by SendRaw().
+    // For reroute sessions the owner already has client reads paused via _rerouting;
+    // OnRerouteComplete() handles the resume after the handshake.
+    if (!_isReroute)
+        if (auto owner = _owner.lock())
+            owner->OnBackendConnected();
+
     AsyncRead();
 }
 
@@ -403,7 +437,10 @@ void BackendSession::InitCrypt(SessionKey const& key)
 void BackendSession::SendRaw(std::vector<uint8> const& data)
 {
     if (!IsOpen())
+    {
+        LOG_WARN("proxy", "BackendSession::SendRaw: backend not open, dropping {} bytes", data.size());
         return;
+    }
 
     // Queue the data for async writing.
     bool wasEmpty = _sendQueue.empty();
