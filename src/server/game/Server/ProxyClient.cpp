@@ -16,7 +16,6 @@
  */
 
 #include "ProxyClient.h"
-#include "AuraApplication.h"
 #include "ClusterMgr.h"
 #include "SpellAuras.h"
 #include "DBCStores.h"
@@ -1009,7 +1008,7 @@ void ProxyClient::DeliverPacketToPlayer(uint64 targetGuid, WorldPacket const& pa
 
 // ── Outgoing: cluster unit update ─────────────────────────────────────────────
 
-void ProxyClient::SendClusterUnitUpdate(Player const* player)
+void ProxyClient::SendClusterUnitUpdate(Player* player)
 {
     if (!_connected || _nodeId == 0)
         return;

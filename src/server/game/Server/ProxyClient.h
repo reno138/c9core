@@ -99,7 +99,7 @@ public:
 
     /// Broadcast this player's unit state (HP/power/auras) to all other cluster nodes.
     /// Safe to call from the game update thread.
-    void SendClusterUnitUpdate(Player const* player);
+    void SendClusterUnitUpdate(Player* player);
 
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
