@@ -409,19 +409,14 @@ uint32 Aura::GetId() const
 
 Unit* Aura::GetCaster() const
 {
-    if (m_cachedCaster && m_cachedCaster->IsInWorld() && m_cachedCaster->GetGUID() == GetCasterGUID())
-        return m_cachedCaster;
-
-    Unit* caster = nullptr;
+    // Always look up by GUID — never cache a raw Unit* since the caster (e.g. a
+    // TempSummon) may be freed while this aura still lives on another unit, which
+    // would leave a dangling pointer that causes a SIGSEGV on dereference.
     if (GetOwner()->GetGUID() == GetCasterGUID())
-        caster = GetUnitOwner();
-    else if (AuraApplication const* aurApp = GetApplicationOfTarget(GetCasterGUID()))
-        caster = aurApp->GetTarget();
-    else
-        caster = ObjectAccessor::GetUnit(*GetOwner(), GetCasterGUID());
-
-    m_cachedCaster = caster;
-    return caster;
+        return GetUnitOwner();
+    if (AuraApplication const* aurApp = GetApplicationOfTarget(GetCasterGUID()))
+        return aurApp->GetTarget();
+    return ObjectAccessor::GetUnit(*GetOwner(), GetCasterGUID());
 }
 
 AuraObjectType Aura::GetType() const

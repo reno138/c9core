@@ -250,7 +250,6 @@ private:
 protected:
     SpellInfo const* const m_spellInfo;
     ObjectGuid const m_casterGuid;
-    mutable Unit* m_cachedCaster{nullptr};
     ObjectGuid const m_castItemGuid;                    // it is NOT safe to keep a pointer to the item because it may get deleted
     uint32 const m_castItemEntry;                       // when deleted, we could retrieve some information from template instead
     time_t const m_applyTime;
