@@ -212,15 +212,34 @@ bool ProxySocket::ReadDataHandler()
 
 void ProxySocket::HandleAuthSessionIntercepted()
 {
-    // Forward CMSG_AUTH_SESSION to the backend as-is (headers still plaintext at this point).
+    // Forward CMSG_AUTH_SESSION to the backend with the real client IP appended
+    // as a null-terminated string after the addon data.  The worldserver reads
+    // the extra bytes (guarded by ProxyServer.Enable) and uses them to override
+    // the socket peer address (proxy IP) for IP-ban, IP-lock, country-lock, and
+    // last-IP logging.
+    std::string const realIp = GetRemoteIpAddress().to_string();
+    std::size_t const ipLen  = realIp.size() + 1; // +1 for null terminator
+
     std::vector<uint8> packet;
-    packet.reserve(CLIENT_HEADER_SIZE + _packetBuffer.GetActiveSize());
+    packet.reserve(CLIENT_HEADER_SIZE + _packetBuffer.GetActiveSize() + ipLen);
     packet.insert(packet.end(),
         _headerBuffer.GetReadPointer(),
         _headerBuffer.GetReadPointer() + CLIENT_HEADER_SIZE);
     packet.insert(packet.end(),
         _packetBuffer.GetReadPointer(),
         _packetBuffer.GetReadPointer() + _packetBuffer.GetActiveSize());
+
+    // Append the real client IP (null-terminated).
+    packet.insert(packet.end(), realIp.begin(), realIp.end());
+    packet.push_back(0);
+
+    // Update the big-endian uint16 size field (bytes 0-1).
+    // size = original_payload_size + 4 (opcode) → we add ipLen more bytes to payload.
+    uint16 oldSize = (static_cast<uint16>(packet[0]) << 8) | packet[1];
+    uint16 newSize = static_cast<uint16>(oldSize + ipLen);
+    packet[0] = static_cast<uint8>(newSize >> 8);
+    packet[1] = static_cast<uint8>(newSize & 0xFF);
+
     _backend->SendRaw(packet);
 
     // Extract account name from payload:

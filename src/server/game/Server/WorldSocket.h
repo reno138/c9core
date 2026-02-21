@@ -137,6 +137,11 @@ private:
     QueryCallbackProcessor _queryProcessor;
     std::string _ipCountry;
 
+    /// In cluster mode the proxy appends the real client IP to CMSG_AUTH_SESSION.
+    /// We store it here and use it to override the socket's peer address (proxy IP)
+    /// for all IP-dependent checks: last_ip logging, IP-lock, country-lock, script hooks.
+    std::string _proxyForwardedIp;
+
     bool _loggingPackets;
 };
 

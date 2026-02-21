@@ -325,6 +325,46 @@ void SocialMgr::BroadcastToFriendListers(Player* player, WorldPacket* packet)
     }
 }
 
+void SocialMgr::NotifyRemoteFriendOnline(ObjectGuid const& remoteGuid, uint32 areaId, uint8 level, uint8 classId)
+{
+    // Build SMSG_FRIEND_STATUS (FRIEND_ONLINE) for a player on another cluster node.
+    // We can't call SendFriendStatus() because the remote player has no local Player object;
+    // build the packet manually with the data provided by the ProxyClient.
+    WorldPacket data(SMSG_FRIEND_STATUS, 9 + 4 + 4 + 4);
+    data << uint8(FRIEND_ONLINE);
+    data << remoteGuid;
+    data << uint8(FRIEND_STATUS_ONLINE);
+    data << uint32(areaId);
+    data << uint32(level);
+    data << uint32(classId);
+
+    // Deliver to every local player who lists remoteGuid as a friend.
+    for (auto const& [ownerGuid, social] : m_socialMap)
+    {
+        auto const it = social.m_playerSocialMap.find(remoteGuid);
+        if (it == social.m_playerSocialMap.end() || !(it->second.Flags & SOCIAL_FLAG_FRIEND))
+            continue;
+        if (Player* owner = ObjectAccessor::FindConnectedPlayer(ownerGuid))
+            owner->SendDirectMessage(&data);
+    }
+}
+
+void SocialMgr::NotifyRemoteFriendOffline(ObjectGuid const& remoteGuid)
+{
+    WorldPacket data(SMSG_FRIEND_STATUS, 9);
+    data << uint8(FRIEND_OFFLINE);
+    data << remoteGuid;
+
+    for (auto const& [ownerGuid, social] : m_socialMap)
+    {
+        auto const it = social.m_playerSocialMap.find(remoteGuid);
+        if (it == social.m_playerSocialMap.end() || !(it->second.Flags & SOCIAL_FLAG_FRIEND))
+            continue;
+        if (Player* owner = ObjectAccessor::FindConnectedPlayer(ownerGuid))
+            owner->SendDirectMessage(&data);
+    }
+}
+
 PlayerSocial* SocialMgr::LoadFromDB(PreparedQueryResult result, ObjectGuid const& guid)
 {
     PlayerSocial* social = &m_socialMap[guid];

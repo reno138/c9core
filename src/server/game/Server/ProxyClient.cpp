@@ -20,6 +20,7 @@
 #include "SpellAuras.h"
 #include "DBCStores.h"
 #include "LFGMgr.h"
+#include "SocialMgr.h"
 #include "Entities/Player/Player.h"
 #include "Globals/ObjectAccessor.h"
 #include "Groups/Group.h"
@@ -497,12 +498,38 @@ void ProxyClient::HandleRemotePlayerOnline()
 
     sClusterMgr.OnRemotePlayerOnline(_remotePlayerGuid, std::move(name),
                                       zoneId, level, classId, raceId, teamId, nodeId);
+
+    // Capture player info for world-thread callbacks.
+    uint64 const remoteGuid   = _remotePlayerGuid;
+    uint32 const remoteZoneId = zoneId;
+    uint8  const remoteLevel  = level;
+    uint8  const remoteClass  = classId;
+
+    sWorld->QueueCallback([remoteGuid, remoteZoneId, remoteLevel, remoteClass]()
+    {
+        // Cross-node session cleanup: if this node holds a stale live session
+        // for this GUID (player reconnected to another node), kick it now.
+        if (Player* ghost = ObjectAccessor::FindConnectedPlayer(ObjectGuid(remoteGuid)))
+            ghost->GetSession()->KickPlayer("cross-node reconnect");
+
+        // Friend notification: tell local players who have this remote player as
+        // a friend that they have come online.
+        sSocialMgr->NotifyRemoteFriendOnline(ObjectGuid(remoteGuid),
+                                              remoteZoneId, remoteLevel, remoteClass);
+    });
 }
 
 void ProxyClient::HandleRemotePlayerOffline(uint64 guid)
 {
     LOG_INFO("server.worldserver", "ProxyClient: Remote player OFFLINE GUID {:016X}", guid);
     sClusterMgr.OnRemotePlayerOffline(guid);
+
+    // Friend notification: tell local players who have this remote player as a
+    // friend that they have gone offline.
+    sWorld->QueueCallback([guid]()
+    {
+        sSocialMgr->NotifyRemoteFriendOffline(ObjectGuid(guid));
+    });
 }
 
 // ── Outgoing cluster messages ─────────────────────────────────────────────────

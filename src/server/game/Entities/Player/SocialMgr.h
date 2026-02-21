@@ -137,6 +137,10 @@ class SocialMgr
         void MakeFriendStatusPacket(FriendsResult result, ObjectGuid const& friend_guid, WorldPacket* data);
         void SendFriendStatus(Player* player, FriendsResult result, ObjectGuid const& friend_guid, bool broadcast);
         void BroadcastToFriendListers(Player* player, WorldPacket* packet);
+        /// Notify local online players that a remote cluster-node player came online/offline.
+        /// Used by ProxyClient when MSG_CLUSTER_PLAYER_ONLINE/OFFLINE arrives from another node.
+        void NotifyRemoteFriendOnline(ObjectGuid const& remoteGuid, uint32 areaId, uint8 level, uint8 classId);
+        void NotifyRemoteFriendOffline(ObjectGuid const& remoteGuid);
         // Loading
         PlayerSocial* LoadFromDB(PreparedQueryResult result, ObjectGuid const& guid);
     private:

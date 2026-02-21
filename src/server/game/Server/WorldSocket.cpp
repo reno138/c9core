@@ -544,6 +544,25 @@ void WorldSocket::HandleAuthSession(WorldPacket & recvPacket)
     authSession->AddonInfo.resize(recvPacket.size() - recvPacket.rpos());
     recvPacket.read(authSession->AddonInfo.contents(), authSession->AddonInfo.size()); // .contents will throw if empty, thats what we want
 
+    // In cluster mode the proxy appends the real client IP as a null-terminated
+    // string after the addon data.  Extract it so we can override the socket peer
+    // address (which is the proxy's IP) for all subsequent IP-dependent checks.
+    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && recvPacket.rpos() < recvPacket.size())
+    {
+        std::size_t remaining = recvPacket.size() - recvPacket.rpos();
+        std::string forwardedIp;
+        forwardedIp.resize(remaining);
+        recvPacket.read(reinterpret_cast<uint8*>(forwardedIp.data()), remaining);
+        // Strip trailing null terminator(s) if present.
+        while (!forwardedIp.empty() && forwardedIp.back() == '\0')
+            forwardedIp.pop_back();
+        if (!forwardedIp.empty())
+        {
+            _proxyForwardedIp = std::move(forwardedIp);
+            LOG_DEBUG("network", "WorldSocket::HandleAuthSession: Proxy-forwarded client IP: {}", _proxyForwardedIp);
+        }
+    }
+
     // Get the account information from the auth database
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_INFO_BY_NAME);
     stmt->SetData(0, int32(realm.Id.Realm));
@@ -566,8 +585,14 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
 
     AccountInfo account(result->Fetch());
 
-    // For hook purposes, we get Remoteaddress at this point.
-    std::string address = sConfigMgr->GetOption<bool>("AllowLoggingIPAddressesInDatabase", true, true) ? GetRemoteIpAddress().to_string() : "0.0.0.0";
+    // Determine the address to use for all IP-dependent checks.
+    // In cluster mode the proxy forwarded the real client IP via HandleAuthSession;
+    // use it instead of the socket peer address (which is the proxy's internal IP).
+    std::string address;
+    if (!_proxyForwardedIp.empty())
+        address = _proxyForwardedIp;
+    else
+        address = sConfigMgr->GetOption<bool>("AllowLoggingIPAddressesInDatabase", true, true) ? GetRemoteIpAddress().to_string() : "0.0.0.0";
 
     LoginDatabasePreparedStatement* stmt = nullptr;
 
