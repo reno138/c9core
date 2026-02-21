@@ -101,6 +101,12 @@ public:
     /// Safe to call from the game update thread.
     void SendClusterUnitUpdate(Player* player);
 
+    /// Relay a SAY/YELL/EMOTE chat message to all other cluster nodes.
+    /// @param chatMsgType  CHAT_MSG_SAY / CHAT_MSG_YELL / CHAT_MSG_EMOTE
+    /// @param zoneId       Sender's current zone (used for delivery filtering).
+    /// @param pkt          The fully-built SMSG_MESSAGECHAT WorldPacket.
+    void SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const& pkt);
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid
@@ -147,6 +153,7 @@ private:
     void HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& payload);
     void HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> const& payload);
     void HandleUnitUpdate(std::vector<uint8> const& payload);
+    void HandleIncomingChat(std::vector<uint8> const& payload);
 
     // ── Control protocol message types ────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -164,6 +171,7 @@ private:
     static constexpr uint8 MSG_PING                    = 0x0D; ///< proxy→node: ping timestamp(8)
     static constexpr uint8 MSG_PONG                    = 0x0E; ///< node→proxy: pong echoed timestamp(8)
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
+    static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
 
     // ── Parse state machine for incoming data ─────────────────────────────────
     enum class InParseState
@@ -184,6 +192,8 @@ private:
         ReadLFGRelayRespBody,   ///< payload_len bytes
         ReadUnitUpdateLen,      ///< 2 bytes: uint16 payload_len
         ReadUnitUpdateBody,     ///< payload_len bytes
+        ReadChatRelayLen,       ///< 2 bytes: uint16 payload_len
+        ReadChatRelayBody,      ///< payload_len bytes
         ReadPingTimestamp,      ///< 8 bytes: uint64 timestamp_ms
     };
     InParseState _inParseState{ InParseState::WaitType };
@@ -199,6 +209,7 @@ private:
     static constexpr std::size_t LFG_RELAY_HEADER_SIZE   = 2; ///< uint16 payload_len
     static constexpr std::size_t LFG_RELAY_RESP_HDR_SIZE = 3; ///< uint8 target_node + uint16 len
     static constexpr std::size_t UNIT_UPDATE_LEN_SIZE    = 2; ///< uint16 payload_len
+    static constexpr std::size_t CHAT_RELAY_LEN_SIZE     = 2; ///< uint16 payload_len
 
     // ── Socket and connection state ───────────────────────────────────────────
     boost::asio::io_context* _ioContext{ nullptr };
@@ -240,6 +251,7 @@ private:
     uint16 _lfgRelayRespPayloadLen{ 0 };
 
     uint16 _unitUpdatePayloadLen{ 0 };
+    uint16 _chatRelayPayloadLen{ 0 };
 };
 
 #define sProxyClient ProxyClient::Instance()

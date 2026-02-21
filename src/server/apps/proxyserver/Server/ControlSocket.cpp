@@ -100,6 +100,7 @@ void ControlSocket::ProcessBuffer()
                     case MSG_CLUSTER_LFG_RELAY_RESP:_parseState = ParseState::ReadLFGRelayRespHeader;break;
                     case MSG_REROUTE_TO_MAP:        _parseState = ParseState::ReadRerouteToMap;     break;
                     case MSG_CLUSTER_UNIT_UPDATE:   _parseState = ParseState::ReadUnitUpdateLen;     break;
+                    case MSG_CLUSTER_CHAT:          _parseState = ParseState::ReadChatRelayLen;      break;
                     case MSG_PONG:                  _parseState = ParseState::ReadPongTimestamp;     break;
                     default:
                         LOG_WARN("proxy.control", "ControlSocket: Unknown message type 0x{:02X} — closing", msgType);
@@ -472,6 +473,34 @@ void ControlSocket::ProcessBuffer()
                 break;
             }
 
+            // ── MSG_CLUSTER_CHAT ──────────────────────────────────────────────
+            case ParseState::ReadChatRelayLen:
+            {
+                if (_accumBuffer.GetActiveSize() < CHAT_RELAY_LEN_SIZE)
+                    return;
+
+                uint8* p = _accumBuffer.GetReadPointer();
+                std::memcpy(&_chatRelayPayloadLen, p, 2);
+                _accumBuffer.ReadCompleted(CHAT_RELAY_LEN_SIZE);
+                _parseState = ParseState::ReadChatRelayBody;
+                break;
+            }
+
+            case ParseState::ReadChatRelayBody:
+            {
+                if (_accumBuffer.GetActiveSize() < static_cast<std::size_t>(_chatRelayPayloadLen))
+                    return;
+
+                std::vector<uint8> payload(_chatRelayPayloadLen);
+                std::memcpy(payload.data(), _accumBuffer.GetReadPointer(), _chatRelayPayloadLen);
+                _accumBuffer.ReadCompleted(_chatRelayPayloadLen);
+
+                HandleChatRelay(std::move(payload));
+                _chatRelayPayloadLen = 0;
+                _parseState = ParseState::WaitType;
+                break;
+            }
+
             // ── MSG_PONG: worldserver echoed our timestamp — compute RTT ──────
             case ParseState::ReadPongTimestamp:
             {
@@ -655,4 +684,13 @@ void ControlSocket::HandleUnitUpdate(std::vector<uint8> payload)
     uint16 len = static_cast<uint16>(payload.size());
     LOG_DEBUG("proxy.control", "ControlSocket: UnitUpdate from node {} payload={} bytes", _nodeId, len);
     sProxyMgr.BroadcastUnitUpdate(_nodeId, len, payload);
+}
+
+void ControlSocket::HandleChatRelay(std::vector<uint8> payload)
+{
+    if (_nodeId == 0)
+        return;
+    uint16 len = static_cast<uint16>(payload.size());
+    LOG_DEBUG("proxy.control", "ControlSocket: ChatRelay from node {} payload={} bytes", _nodeId, len);
+    sProxyMgr.BroadcastChatRelay(_nodeId, len, payload);
 }

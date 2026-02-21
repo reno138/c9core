@@ -33,6 +33,7 @@
 #include <boost/asio/write.hpp>
 #include <chrono>
 #include <cstring>
+#include <shared_mutex>
 
 void ProxyClient::Initialize(Acore::Asio::IoContext& ioContext, std::string const& address,
                               uint16 controlPort, uint8 serverType, uint16 gamePort)
@@ -251,6 +252,7 @@ void ProxyClient::ParseIncoming()
                     case MSG_CLUSTER_LFG_RELAY:      _inParseState = InParseState::ReadLFGRelayHeader;   break;
                     case MSG_CLUSTER_LFG_RELAY_RESP: _inParseState = InParseState::ReadLFGRelayRespHeader;break;
                     case MSG_CLUSTER_UNIT_UPDATE:    _inParseState = InParseState::ReadUnitUpdateLen;     break;
+                    case MSG_CLUSTER_CHAT:           _inParseState = InParseState::ReadChatRelayLen;      break;
                     case MSG_PING:                   _inParseState = InParseState::ReadPingTimestamp;    break;
                     case MSG_PONG:                   /* ignore: only proxy sends pong */ break;
                     default:
@@ -444,6 +446,29 @@ void ProxyClient::ParseIncoming()
                 _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _unitUpdatePayloadLen);
                 HandleUnitUpdate(payload);
                 _unitUpdatePayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_CHAT (header: uint16 payload_len) ─────────────────
+            case InParseState::ReadChatRelayLen:
+            {
+                if (_accumBuf.size() < CHAT_RELAY_LEN_SIZE)
+                    return;
+                _chatRelayPayloadLen = static_cast<uint16>(_accumBuf[0]) | (static_cast<uint16>(_accumBuf[1]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + CHAT_RELAY_LEN_SIZE);
+                _inParseState = InParseState::ReadChatRelayBody;
+                break;
+            }
+
+            case InParseState::ReadChatRelayBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_chatRelayPayloadLen))
+                    return;
+                std::vector<uint8> payload(_accumBuf.begin(), _accumBuf.begin() + _chatRelayPayloadLen);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _chatRelayPayloadLen);
+                HandleIncomingChat(payload);
+                _chatRelayPayloadLen = 0;
                 _inParseState = InParseState::WaitType;
                 break;
             }
@@ -1170,4 +1195,83 @@ void ProxyClient::HandleUnitUpdate(std::vector<uint8> const& payload)
 
     LOG_DEBUG("server.worldserver", "ProxyClient: UnitUpdate GUID {:016X} HP {}/{}", state.guid, state.health, state.maxHealth);
     sClusterMgr.UpdateUnitState(std::move(state));
+}
+
+// ── Outgoing: cross-node chat relay ───────────────────────────────────────────
+
+void ProxyClient::SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const& pkt)
+{
+    if (!_connected || _nodeId == 0)
+        return;
+
+    // Payload layout: uint8 chatMsgType | uint32 zoneId | uint16 innerLen | uint8 inner[innerLen]
+    uint16 innerLen    = static_cast<uint16>(pkt.size());
+    uint16 payloadLen  = static_cast<uint16>(1 + 4 + 2 + innerLen);
+
+    std::vector<uint8> msg;
+    msg.reserve(3 + payloadLen);
+
+    auto pushU8  = [&](uint8  v){ msg.push_back(v); };
+    auto pushU16 = [&](uint16 v){ msg.push_back(static_cast<uint8>(v & 0xFF)); msg.push_back(static_cast<uint8>(v >> 8)); };
+    auto pushU32 = [&](uint32 v){ pushU16(static_cast<uint16>(v & 0xFFFF)); pushU16(static_cast<uint16>(v >> 16)); };
+
+    pushU8(MSG_CLUSTER_CHAT);
+    pushU16(payloadLen);
+    pushU8(chatMsgType);
+    pushU32(zoneId);
+    pushU16(innerLen);
+    if (innerLen > 0)
+        msg.insert(msg.end(), pkt.contents(), pkt.contents() + innerLen);
+
+    EnqueueRaw(std::move(msg));
+}
+
+// ── Incoming: cross-node chat relay ───────────────────────────────────────────
+
+void ProxyClient::HandleIncomingChat(std::vector<uint8> const& payload)
+{
+    // Payload layout: uint8 chatMsgType | uint32 zoneId | uint16 innerLen | uint8 inner[innerLen]
+    static constexpr std::size_t HEADER_SIZE = 7; // 1 + 4 + 2
+    if (payload.size() < HEADER_SIZE)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleIncomingChat — payload too small ({})", payload.size());
+        return;
+    }
+
+    uint8  chatMsgType = payload[0];
+    uint32 zoneId      = 0;
+    uint16 innerLen    = 0;
+    std::memcpy(&zoneId,   payload.data() + 1, 4);
+    std::memcpy(&innerLen, payload.data() + 5, 2);
+
+    if (payload.size() < HEADER_SIZE + innerLen)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleIncomingChat — truncated inner packet ({} < {})",
+                 payload.size(), HEADER_SIZE + innerLen);
+        return;
+    }
+
+    if (innerLen == 0)
+        return;
+
+    // Copy inner packet bytes into a vector for capture.
+    std::vector<uint8> innerData(payload.begin() + HEADER_SIZE, payload.begin() + HEADER_SIZE + innerLen);
+
+    LOG_DEBUG("server.worldserver", "ProxyClient: IncomingChat msgType={} zone={} innerLen={}",
+              chatMsgType, zoneId, innerLen);
+
+    sWorld->QueueCallback([zoneId, innerData = std::move(innerData)]()
+    {
+        // Reconstruct the SMSG_MESSAGECHAT WorldPacket and deliver to all
+        // local players in the matching zone.
+        WorldPacket pkt(SMSG_MESSAGECHAT, innerData.size());
+        pkt.append(innerData.data(), innerData.size());
+
+        std::shared_lock<std::shared_mutex> slock(*HashMapHolder<Player>::GetLock());
+        for (auto const& [guid, player] : ObjectAccessor::GetPlayers())
+        {
+            if (player && player->IsInWorld() && player->GetZoneId() == zoneId)
+                player->SendDirectMessage(&pkt);
+        }
+    });
 }

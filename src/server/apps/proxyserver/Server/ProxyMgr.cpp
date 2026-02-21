@@ -1021,6 +1021,19 @@ void ProxyMgr::BroadcastUnitUpdate(uint8 sourceNodeId, uint16 payloadLen, std::v
     BroadcastToOtherNodes(msg, sourceNodeId);
 }
 
+// ── Cross-node chat relay broadcast ──────────────────────────────────────────
+
+void ProxyMgr::BroadcastChatRelay(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload)
+{
+    std::vector<uint8> msg;
+    msg.reserve(3 + payload.size());
+    msg.push_back(0x11); // MSG_CLUSTER_CHAT
+    msg.push_back(static_cast<uint8>(payloadLen & 0xFF));
+    msg.push_back(static_cast<uint8>(payloadLen >> 8));
+    msg.insert(msg.end(), payload.begin(), payload.end());
+    BroadcastToOtherNodes(msg, sourceNodeId);
+}
+
 // ── Dynamic map routing (populated at node registration) ─────────────────────
 
 void ProxyMgr::RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps)

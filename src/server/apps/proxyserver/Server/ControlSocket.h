@@ -119,6 +119,8 @@ private:
     void HandleLFGRelayResponse(uint8 targetNodeId, std::vector<uint8> payload);
     void HandleRerouteToMap(uint64 guid, uint32 mapId);
     void HandleUnitUpdate(std::vector<uint8> payload);
+    /// Broadcast a cross-node SAY/YELL/EMOTE chat message to all other nodes.
+    void HandleChatRelay(std::vector<uint8> payload);
 
     // ── Message type constants ─────────────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -136,6 +138,7 @@ private:
     static constexpr uint8 MSG_PING                      = 0x0D;
     static constexpr uint8 MSG_PONG                      = 0x0E;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
+    static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
     static constexpr std::size_t REGISTER_PAYLOAD_SIZE    = 5; ///< uint8 + uint16 + uint16 map_count
@@ -152,6 +155,7 @@ private:
     static constexpr std::size_t LFG_RELAY_RESP_HDR_SIZE  = 3; ///< uint8 target_node + uint16 payload_len
     static constexpr std::size_t REROUTE_TO_MAP_SIZE      = 12;///< uint64 guid + uint32 mapId
     static constexpr std::size_t UNIT_UPDATE_LEN_SIZE     = 2; ///< uint16 payload_len
+    static constexpr std::size_t CHAT_RELAY_LEN_SIZE      = 2; ///< uint16 payload_len
 
     // ── Parse state machine ───────────────────────────────────────────────────
     enum class ParseState
@@ -178,6 +182,8 @@ private:
         ReadRerouteToMap,       ///< 12 bytes: uint64 guid + uint32 mapId
         ReadUnitUpdateLen,      ///< 2 bytes: uint16 payload_len
         ReadUnitUpdateBody,     ///< payload_len bytes
+        ReadChatRelayLen,       ///< 2 bytes: uint16 payload_len
+        ReadChatRelayBody,      ///< payload_len bytes
         ReadPongTimestamp,      ///< 8 bytes: echoed uint64 timestamp_ms
     };
     std::chrono::steady_clock::time_point _pingSentAt{};
@@ -207,6 +213,7 @@ private:
     uint8  _lfgRelayRespTargetNode{ 0 };
     uint16 _lfgRelayRespPayloadLen{ 0 };
     uint16 _unitUpdatePayloadLen{ 0 };
+    uint16 _chatRelayPayloadLen{ 0 };
 
     /// Server info learned from MSG_REGISTER.
     uint8  _serverType{ 0xFF };

@@ -9421,6 +9421,10 @@ void Player::Say(std::string_view text, Language language, WorldObject const* /*
     // Special handling for messages, do not use visibility map for stealthed units
     Acore::MessageDistDeliverer notifier(this, &data, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY), false, nullptr, true);
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY));
+
+    // Relay to players on other cluster nodes in the same zone.
+    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+        sProxyClient.SendChatRelay(CHAT_MSG_SAY, GetZoneId(), data);
 }
 
 void Player::Say(uint32 textId, WorldObject const* target /*= nullptr*/)
@@ -9443,6 +9447,10 @@ void Player::Yell(std::string_view text, Language language, WorldObject const* /
     // Special handling for messages, do not use visibility map for stealthed units
     Acore::MessageDistDeliverer notifier(this, &data, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_YELL), false, nullptr, true);
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_YELL));
+
+    // Relay to players on other cluster nodes in the same zone.
+    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+        sProxyClient.SendChatRelay(CHAT_MSG_YELL, GetZoneId(), data);
 }
 
 void Player::Yell(uint32 textId, WorldObject const* target /*= nullptr*/)
@@ -9465,6 +9473,10 @@ void Player::TextEmote(std::string_view text, WorldObject const* /*= nullptr*/, 
     // Special handling for messages, do not use visibility map for stealthed units
     Acore::MessageDistDeliverer notifier(this, &data, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_TEXTEMOTE), !sWorld->getBoolConfig(CONFIG_ALLOW_TWO_SIDE_INTERACTION_EMOTE), nullptr, true);
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_TEXTEMOTE));
+
+    // Relay to players on other cluster nodes in the same zone.
+    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+        sProxyClient.SendChatRelay(CHAT_MSG_EMOTE, GetZoneId(), data);
 }
 
 void Player::TextEmote(uint32 textId, WorldObject const* target /*= nullptr*/, bool /*isBossEmote = false*/)
