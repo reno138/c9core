@@ -49,6 +49,14 @@ bool BattlefieldWG::SetupBattlefield()
     m_BattleId = BATTLEFIELD_BATTLEID_WG;
     m_ZoneId = AREA_WINTERGRASP;
     m_MapId = MAP_NORTHREND;
+
+    // Cluster: skip Wintergrasp on nodes that don't manage this continent map
+    if (!sMapMgr->CreateBaseMap(m_MapId))
+    {
+        LOG_INFO("server.loading", "Battlefield: Wintergrasp skipped — map {} not managed by this node.", m_MapId);
+        return false;
+    }
+
     m_Map = sMapMgr->FindMap(m_MapId, 0);
 
     // init stalker AFTER setting map id... we spawn it at map=random memory value?...
