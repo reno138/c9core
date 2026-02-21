@@ -29,6 +29,31 @@
 #include <utility>
 #include <vector>
 
+/// Lightweight BG queue entry maintained on the proxy side.
+struct BgQueueEntry
+{
+    uint64 guid{ 0 };
+    uint8  nodeId{ 0 };
+    uint8  teamId{ 0 };  ///< 0=Alliance, 1=Horde
+};
+
+/// Proxy-side per-bgType+bracket queue state.
+struct ProxyBgMatchState
+{
+    std::vector<BgQueueEntry> alliance;
+    std::vector<BgQueueEntry> horde;
+    uint8  minPlayersPerTeam{ 1 };  ///< From the first join message for this bracket
+};
+
+/// A match that has been sent to the instance server for BG creation; awaiting MSG_CLUSTER_BG_INST_CREATED.
+struct PendingBgMatch
+{
+    uint32 bgTypeId{ 0 };
+    uint8  bracketId{ 0 };
+    std::vector<BgQueueEntry> alliance;
+    std::vector<BgQueueEntry> horde;
+};
+
 class ControlSocket;
 class ManagementSocket;
 class NodeMgrSocket;
@@ -203,6 +228,16 @@ public:
     /// Broadcast arena team stat update to all nodes except the source.
     void BroadcastArenaResult(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload);
 
+    // ── Cross-node BG queue aggregation ──────────────────────────────────────
+    /// Called when a player on any node joins a BG queue.
+    void OnBgQueueJoin(uint64 guid, uint8 nodeId, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam);
+    /// Called when a player on any node leaves a BG queue (or logs out).
+    void OnBgQueueLeave(uint64 guid, uint32 bgTypeId);
+    /// Called when the instance node confirms a BG instance was created.
+    void OnBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId);
+    /// Return the node ID of the registered instance server (serverType==1), or 0 if none.
+    uint8 GetInstanceNodeId();
+
 private:
     ProxyMgr() = default;
 
@@ -262,6 +297,14 @@ private:
     mutable std::mutex _mapRoutingMutex;
     std::unordered_map<uint32, uint8> _mapRouting;  ///< mapId → nodeId
     uint8 _defaultNodeId{ 0 };                      ///< fallback node (0 = round-robin)
+
+    // ── BG queue aggregation ──────────────────────────────────────────────────
+    std::mutex _bgQueueMutex;
+    /// bgTypeId → bracketId → match state
+    std::unordered_map<uint32, std::unordered_map<uint8, ProxyBgMatchState>> _bgQueues;
+    /// matchId → pending match awaiting BG creation confirmation from instance node
+    std::unordered_map<uint32, PendingBgMatch> _pendingBgMatches;
+    uint32 _nextBgMatchId{ 1 };  ///< Monotonically increasing match identifier
 
     // ── Routing strategy ──────────────────────────────────────────────────────
     bool  _useRoundRobin{ true };

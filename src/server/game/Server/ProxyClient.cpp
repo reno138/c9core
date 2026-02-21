@@ -18,7 +18,11 @@
 #include "ProxyClient.h"
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
+#include "Battleground.h"
+#include "BattlegroundMgr.h"
+#include "BattlegroundQueue.h"
 #include "ClusterMgr.h"
+#include "GameTime.h"
 #include "Config.h"
 #include "SpellAuras.h"
 #include "DBCStores.h"
@@ -257,7 +261,9 @@ void ProxyClient::ParseIncoming()
                     case MSG_CLUSTER_UNIT_UPDATE:    _inParseState = InParseState::ReadUnitUpdateLen;     break;
                     case MSG_CLUSTER_CHAT:           _inParseState = InParseState::ReadChatRelayLen;      break;
                     case MSG_CLUSTER_NOTIFY_MAIL:    _inParseState = InParseState::ReadNotifyMail;        break;
-                    case MSG_CLUSTER_ARENA_RESULT:   _inParseState = InParseState::ReadArenaResultLen;   break;
+                    case MSG_CLUSTER_ARENA_RESULT:   _inParseState = InParseState::ReadArenaResultLen;    break;
+                    case MSG_CLUSTER_BG_CREATE_INST: _inParseState = InParseState::ReadBgCreateInstLen;  break;
+                    case MSG_CLUSTER_BG_READY:       _inParseState = InParseState::ReadBgReadyLen;       break;
                     case MSG_PING:                   _inParseState = InParseState::ReadPingTimestamp;    break;
                     case MSG_PONG:                   /* ignore: only proxy sends pong */ break;
                     default:
@@ -510,6 +516,52 @@ void ProxyClient::ParseIncoming()
                 _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _arenaResultPayloadLen);
                 HandleIncomingArenaResult(payload);
                 _arenaResultPayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_BG_CREATE_INST (header: uint16 payload_len) ──────
+            case InParseState::ReadBgCreateInstLen:
+            {
+                if (_accumBuf.size() < BG_CREATE_INST_LEN_SIZE)
+                    return;
+                _bgCreateInstPayloadLen = static_cast<uint16>(_accumBuf[0]) | (static_cast<uint16>(_accumBuf[1]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + BG_CREATE_INST_LEN_SIZE);
+                _inParseState = InParseState::ReadBgCreateInstBody;
+                break;
+            }
+
+            case InParseState::ReadBgCreateInstBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_bgCreateInstPayloadLen))
+                    return;
+                std::vector<uint8> payload(_accumBuf.begin(), _accumBuf.begin() + _bgCreateInstPayloadLen);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _bgCreateInstPayloadLen);
+                HandleBgCreateInst(payload);
+                _bgCreateInstPayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_BG_READY (header: uint16 payload_len) ────────────
+            case InParseState::ReadBgReadyLen:
+            {
+                if (_accumBuf.size() < BG_READY_LEN_SIZE)
+                    return;
+                _bgReadyPayloadLen = static_cast<uint16>(_accumBuf[0]) | (static_cast<uint16>(_accumBuf[1]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + BG_READY_LEN_SIZE);
+                _inParseState = InParseState::ReadBgReadyBody;
+                break;
+            }
+
+            case InParseState::ReadBgReadyBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_bgReadyPayloadLen))
+                    return;
+                std::vector<uint8> payload(_accumBuf.begin(), _accumBuf.begin() + _bgReadyPayloadLen);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _bgReadyPayloadLen);
+                HandleBgReady(payload);
+                _bgReadyPayloadLen = 0;
                 _inParseState = InParseState::WaitType;
                 break;
             }
@@ -1434,6 +1486,257 @@ void ProxyClient::HandleIncomingArenaResult(std::vector<uint8> const& payload)
         {
             if (Player* player = ObjectAccessor::FindConnectedPlayer(itr->Guid))
                 team->SendStats(player->GetSession());
+        }
+    });
+}
+
+// ── BG queue relay — outgoing ─────────────────────────────────────────────────
+
+void ProxyClient::SendBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam)
+{
+    if (!_connected || _nodeId == 0)
+        return;
+
+    // type(1)+guid(8)+bgTypeId(4)+bracketId(1)+teamId(1)+minPerTeam(1) = 16 bytes
+    std::vector<uint8> msg(16);
+    msg[0] = MSG_CLUSTER_BG_QUEUE_JOIN;
+    std::memcpy(msg.data() + 1, &guid,     8);
+    std::memcpy(msg.data() + 9, &bgTypeId, 4);
+    msg[13] = bracketId;
+    msg[14] = teamId;
+    msg[15] = minPerTeam;
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::SendBgQueueLeave(uint64 guid, uint32 bgTypeId)
+{
+    if (!_connected || _nodeId == 0)
+        return;
+
+    // type(1)+guid(8)+bgTypeId(4) = 13 bytes
+    std::vector<uint8> msg(13);
+    msg[0] = MSG_CLUSTER_BG_QUEUE_LEAVE;
+    std::memcpy(msg.data() + 1, &guid,     8);
+    std::memcpy(msg.data() + 9, &bgTypeId, 4);
+    EnqueueRaw(std::move(msg));
+}
+
+void ProxyClient::SendBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId)
+{
+    if (!_connected || _nodeId == 0)
+        return;
+
+    // type(1)+matchId(4)+instanceId(4)+mapId(4)+clientInstanceId(4) = 17 bytes
+    std::vector<uint8> msg(17);
+    msg[0] = MSG_CLUSTER_BG_INST_CREATED;
+    std::memcpy(msg.data() + 1,  &matchId,          4);
+    std::memcpy(msg.data() + 5,  &instanceId,       4);
+    std::memcpy(msg.data() + 9,  &mapId,            4);
+    std::memcpy(msg.data() + 13, &clientInstanceId, 4);
+    EnqueueRaw(std::move(msg));
+}
+
+// ── BG queue relay — incoming handlers ────────────────────────────────────────
+
+void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
+{
+    // Payload: matchId(4)+bgTypeId(4)+bracketId(1)+allianceCount(1)+hordeCount(1)+guids
+    static constexpr std::size_t HDR_SIZE = 11; // 4+4+1+1+1
+    if (payload.size() < HDR_SIZE)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleBgCreateInst — payload too small ({})", payload.size());
+        return;
+    }
+
+    uint32 matchId    = 0;
+    uint32 bgTypeId   = 0;
+    std::memcpy(&matchId,  payload.data(),     4);
+    std::memcpy(&bgTypeId, payload.data() + 4, 4);
+    uint8 bracketId      = payload[8];
+    uint8 allianceCount  = payload[9];
+    uint8 hordeCount     = payload[10];
+
+    std::size_t expectedSize = HDR_SIZE + static_cast<std::size_t>(allianceCount + hordeCount) * 8;
+    if (payload.size() < expectedSize)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleBgCreateInst — payload size mismatch (got {} need {})",
+                 payload.size(), expectedSize);
+        return;
+    }
+
+    // Copy guids (they'll be passed into the world callback).
+    std::vector<uint64> allianceGuids(allianceCount);
+    std::vector<uint64> hordeGuids(hordeCount);
+    for (uint8 i = 0; i < allianceCount; ++i)
+        std::memcpy(&allianceGuids[i], payload.data() + HDR_SIZE + i * 8, 8);
+    for (uint8 i = 0; i < hordeCount; ++i)
+        std::memcpy(&hordeGuids[i],    payload.data() + HDR_SIZE + allianceCount * 8 + i * 8, 8);
+
+    LOG_INFO("server.worldserver", "ProxyClient: HandleBgCreateInst matchId={} bgType={} bracket={} ally={} horde={}",
+             matchId, bgTypeId, bracketId, allianceCount, hordeCount);
+
+    sWorld->QueueCallback([matchId, bgTypeId, bracketId, allianceGuids = std::move(allianceGuids),
+                           hordeGuids = std::move(hordeGuids)]()
+    {
+        BattlegroundTypeId bgType = static_cast<BattlegroundTypeId>(bgTypeId);
+        Battleground* bgt = sBattlegroundMgr->GetBattlegroundTemplate(bgType);
+        if (!bgt)
+        {
+            LOG_ERROR("server.worldserver", "ProxyClient: BgCreateInst matchId={} — no template for bgType {}", matchId, bgTypeId);
+            return;
+        }
+
+        PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bgt->GetMapId(),
+                                                                              static_cast<BattlegroundBracketId>(bracketId));
+        if (!bracketEntry)
+        {
+            LOG_ERROR("server.worldserver", "ProxyClient: BgCreateInst matchId={} — no bracket {} for mapId {}",
+                      matchId, bracketId, bgt->GetMapId());
+            return;
+        }
+
+        Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgType, bracketEntry, 0, false);
+        if (!bg)
+        {
+            LOG_ERROR("server.worldserver", "ProxyClient: BgCreateInst matchId={} — CreateNewBattleground failed for bgType {}", matchId, bgTypeId);
+            return;
+        }
+
+        sBattlegroundMgr->AddBattleground(bg);
+
+        uint32 instanceId       = bg->GetInstanceID();
+        uint32 mapId            = bg->GetMapId();
+        uint32 clientInstanceId = bg->GetClientInstanceID();
+
+        LOG_INFO("server.worldserver", "ProxyClient: BgCreateInst matchId={} → instanceId={} mapId={} clientId={}",
+                 matchId, instanceId, mapId, clientInstanceId);
+
+        sProxyClient.SendBgInstCreated(matchId, instanceId, mapId, clientInstanceId);
+    });
+}
+
+void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
+{
+    // Payload: instanceId(4)+bgTypeId(4)+mapId(4)+clientInstanceId(4)+count(1)+{guid(8)+team(1)}×count
+    static constexpr std::size_t HDR_SIZE = 17; // 4+4+4+4+1
+    if (payload.size() < HDR_SIZE)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — payload too small ({})", payload.size());
+        return;
+    }
+
+    uint32 instanceId       = 0;
+    uint32 bgTypeId         = 0;
+    uint32 mapId            = 0;
+    uint32 clientInstanceId = 0;
+    std::memcpy(&instanceId,       payload.data(),      4);
+    std::memcpy(&bgTypeId,         payload.data() + 4,  4);
+    std::memcpy(&mapId,            payload.data() + 8,  4);
+    std::memcpy(&clientInstanceId, payload.data() + 12, 4);
+    uint8 count = payload[16];
+
+    if (payload.size() < HDR_SIZE + static_cast<std::size_t>(count) * 9)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — payload size mismatch (got {} need {})",
+                 payload.size(), HDR_SIZE + count * 9);
+        return;
+    }
+
+    struct BgReadyEntry { uint64 guid; uint8 teamId; };
+    std::vector<BgReadyEntry> players(count);
+    for (uint8 i = 0; i < count; ++i)
+    {
+        std::memcpy(&players[i].guid, payload.data() + HDR_SIZE + i * 9, 8);
+        players[i].teamId = payload[HDR_SIZE + i * 9 + 8];
+    }
+
+    LOG_INFO("server.worldserver", "ProxyClient: HandleBgReady instanceId={} bgType={} mapId={} count={}",
+             instanceId, bgTypeId, mapId, count);
+
+    sWorld->QueueCallback([instanceId, bgTypeId, mapId, clientInstanceId,
+                           players = std::move(players)]()
+    {
+        BattlegroundTypeId bgType    = static_cast<BattlegroundTypeId>(bgTypeId);
+        BattlegroundQueueTypeId bgQueueTypeId = BattlegroundMgr::BGQueueTypeId(bgType, 0);
+        if (bgQueueTypeId == BATTLEGROUND_QUEUE_NONE)
+            return;
+
+        Battleground* bgt = sBattlegroundMgr->GetBattlegroundTemplate(bgType);
+        if (!bgt)
+            return;
+
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
+
+        // Build a minimal STATUS_WAIT_JOIN packet manually (we don't have the BG object locally).
+        // Packet: SMSG_BATTLEFIELD_STATUS
+        //   uint32 queueSlot
+        //   uint8  arenatype (0)
+        //   uint8  0x0
+        //   uint32 bgTypeId
+        //   uint16 0x1F90
+        //   uint8  minLevel
+        //   uint8  maxLevel
+        //   uint32 clientInstanceId
+        //   uint8  isRated (0)
+        //   uint32 STATUS_WAIT_JOIN
+        //   uint32 mapId
+        //   uint64 0 (unknown)
+        //   uint32 INVITE_ACCEPT_WAIT_TIME
+
+        uint32 removeTime = GameTime::GetGameTimeMS().count() + 60000u; // INVITE_ACCEPT_WAIT_TIME = 60s
+
+        for (auto const& entry : players)
+        {
+            ObjectGuid guid{ HighGuid::Player, static_cast<uint32>(entry.guid) };
+            Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+            if (!player)
+            {
+                LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — player {:016X} not found locally", entry.guid);
+                continue;
+            }
+
+            TeamId teamId = static_cast<TeamId>(entry.teamId);
+
+            // Find this player's GroupQueueInfo in the local queue and set the invite.
+            GroupQueueInfo ginfo;
+            if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
+            {
+                LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — player {} not in local queue", player->GetName());
+                continue;
+            }
+
+            // Mark the player as invited (mirrors what InviteGroupToBG does).
+            player->SetInviteForBattlegroundQueueType(bgQueueTypeId, instanceId);
+
+            uint32 queueSlot = player->GetBattlegroundQueueIndex(bgQueueTypeId);
+            if (queueSlot >= PLAYER_MAX_BATTLEGROUND_QUEUES)
+                continue;
+
+            // Build SMSG_BATTLEFIELD_STATUS with STATUS_WAIT_JOIN
+            WorldPacket data(SMSG_BATTLEFIELD_STATUS, 4 + 8 + 1 + 1 + 4 + 4 + 4);
+            data << uint32(queueSlot);
+            data << uint8(0);                // arenatype
+            data << uint8(0x0);              // not arena
+            data << uint32(bgTypeId);
+            data << uint16(0x1F90);
+            data << uint8(bgt->GetMinLevel());
+            data << uint8(bgt->GetMaxLevel());
+            data << uint32(clientInstanceId);
+            data << uint8(0);                // not rated
+            data << uint32(STATUS_WAIT_JOIN);
+            data << uint32(mapId);
+            data << uint64(0);
+            data << uint32(60000);           // 60 second accept window
+
+            player->SendDirectMessage(&data);
+
+            // Schedule BGQueueRemoveEvent so the invite expires if not accepted.
+            BGQueueRemoveEvent* removeEvent = new BGQueueRemoveEvent(
+                player->GetGUID(), instanceId, bgType, bgQueueTypeId, removeTime);
+            bgQueue.AddEvent(removeEvent, 60000u);
+
+            LOG_DEBUG("server.worldserver", "ProxyClient: BgReady — invited player {} instanceId={} team={}",
+                      player->GetName(), instanceId, entry.teamId);
         }
     });
 }

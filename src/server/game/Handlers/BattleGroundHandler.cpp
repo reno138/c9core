@@ -22,6 +22,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "Chat.h"
+#include "Config.h"
 #include "DisableMgr.h"
 #include "GameTime.h"
 #include "Group.h"
@@ -30,6 +31,7 @@
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "ProxyClient.h"
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -213,6 +215,18 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
         SendPacket(&data);
 
         sScriptMgr->OnPlayerJoinBG(_player);
+
+        // Cluster mode: relay queue join to proxy for cross-node matching.
+        // Skip ScheduleQueueUpdate so the local queue doesn't try to create BG instances.
+        if (sProxyClient.IsConnected())
+        {
+            uint8 minPerTeam = static_cast<uint8>(bg->GetMinPlayersPerTeam());
+            sProxyClient.SendBgQueueJoin(_player->GetGUID().GetRawValue(), bgTypeId,
+                                          static_cast<uint8>(bracketEntry->GetBracketId()),
+                                          static_cast<uint8>(_player->GetTeamId()),
+                                          minPerTeam);
+            return; // skip ScheduleQueueUpdate — proxy handles matching
+        }
     }
     // check if group can queue:
     else
@@ -290,6 +304,21 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
 
             sScriptMgr->OnPlayerJoinBG(member);
         });
+
+        // Cluster mode: relay each group member's join to proxy for cross-node matching.
+        // Skip ScheduleQueueUpdate so the local queue doesn't try to create BG instances.
+        if (sProxyClient.IsConnected())
+        {
+            uint8 minPerTeam = static_cast<uint8>(bg->GetMinPlayersPerTeam());
+            grp->DoForAllMembers([bgTypeId, bracketEntry, minPerTeam](Player* member)
+            {
+                sProxyClient.SendBgQueueJoin(member->GetGUID().GetRawValue(), bgTypeId,
+                                              static_cast<uint8>(bracketEntry->GetBracketId()),
+                                              static_cast<uint8>(member->GetTeamId()),
+                                              minPerTeam);
+            });
+            return; // skip ScheduleQueueUpdate — proxy handles matching
+        }
     }
 
     sBattlegroundMgr->ScheduleQueueUpdate(0, 0, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
@@ -450,8 +479,80 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
     {
         if (action)
         {
-            LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} ArenaType: {}, Unk: {}, BgType: {}, Action: {}. Cant find BG with id {}!",
-                GetPlayerInfo(), arenaType, unk2, bgTypeId_, action, ginfo.IsInvitedToBGInstanceGUID);
+            if (!sProxyClient.IsConnected())
+            {
+                LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} BgType: {}: BG {} not found locally (not in cluster).",
+                    GetPlayerInfo(), bgTypeId_, ginfo.IsInvitedToBGInstanceGUID);
+                return;
+            }
+
+            // ── Cluster mode: BG lives on the instance node ──────────────────────────
+            Battleground* bgt = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+            if (!bgt)
+            {
+                LOG_ERROR("network", "HandleBattleFieldPortOpcode: no BG template for type {} in cluster mode.", bgTypeId);
+                return;
+            }
+
+            // Deserter debuff blocks BG entry.
+            if (ginfo.ArenaType == 0 && !_player->CanJoinToBattleground())
+            {
+                WorldPacket errData;
+                sBattlegroundMgr->BuildGroupJoinedBattlegroundPacket(&errData, ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS);
+                SendPacket(&errData);
+                return;
+            }
+
+            TeamId teamId = ginfo.teamId;
+            uint32 cqSlot = _player->GetBattlegroundQueueIndex(bgQueueTypeId);
+
+            // Inform client we are entering the BG (STATUS_IN_PROGRESS using template data).
+            {
+                WorldPacket statusData;
+                sBattlegroundMgr->BuildBattlegroundStatusPacket(&statusData, bgt, cqSlot,
+                                                                  STATUS_IN_PROGRESS, 0, 0,
+                                                                  bgt->GetArenaType(), teamId);
+                SendPacket(&statusData);
+            }
+
+            bgQueue.RemovePlayer(_player->GetGUID(), false);
+
+            if (Battleground* currentBg = _player->GetBattleground())
+                currentBg->RemovePlayerAtLeave(_player);
+
+            for (uint8 i = 0; i < PLAYER_MAX_BATTLEGROUND_QUEUES; ++i)
+            {
+                auto otherQueueTypeId = _player->GetBattlegroundQueueTypeId(i);
+                if (otherQueueTypeId != BATTLEGROUND_QUEUE_NONE && otherQueueTypeId != bgQueueTypeId)
+                {
+                    _player->RemoveBattlegroundQueueId(otherQueueTypeId);
+                    sBattlegroundMgr->GetBattlegroundQueue(otherQueueTypeId).RemovePlayer(_player->GetGUID(), true);
+                }
+            }
+
+            sLFGMgr->LeaveAllLfgQueues(_player->GetGUID(), false);
+
+            if (!_player->InBattleground())
+                _player->SetEntryPoint();
+
+            if (!_player->IsAlive())
+            {
+                _player->ResurrectPlayer(1.0f);
+                _player->SpawnCorpseBones();
+            }
+
+            // Bind player to the remote BG instance.
+            // MapInstanced::CreateInstanceForPlayer uses GetBattlegroundId() to find the right
+            // BG map on the instance node when the player arrives there.
+            _player->SetBattlegroundId(ginfo.IsInvitedToBGInstanceGUID, bgTypeId, cqSlot,
+                                        true, bgTypeId == BATTLEGROUND_RB, teamId);
+
+            // TeleportTo → Player::IsMapLocal() check → SendRerouteToMap() → proxy routes player to instance node.
+            Position const* startPos = bgt->GetTeamStartPosition(teamId);
+            if (!startPos)
+                startPos = bgt->GetTeamStartPosition(TEAM_ALLIANCE); // fallback
+            _player->TeleportTo(bgt->GetMapId(), startPos->GetPositionX(), startPos->GetPositionY(),
+                                startPos->GetPositionZ(), startPos->GetOrientation());
             return;
         }
 
@@ -563,10 +664,14 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
             player->SendDirectMessage(&data);
 
             LOG_DEBUG("bg.battleground", "Battleground: player {} {} left queue for bgtype {}, queue type {}.", player->GetName(), playerGuid.ToString(), bg->GetBgTypeID(), bgQueueTypeId);
+
+            // Cluster mode: notify proxy that this player has left the BG queue.
+            if (sProxyClient.IsConnected())
+                sProxyClient.SendBgQueueLeave(playerGuid.GetRawValue(), static_cast<uint32>(bgTypeId));
         }
 
-        // player left queue, we should update it - do not update Arena Queue
-        if (!ginfo.ArenaType)
+        // player left queue — skip ScheduleQueueUpdate in cluster mode (proxy handles all matching).
+        if (!ginfo.ArenaType && !sProxyClient.IsConnected())
             sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
 
         // track if player refuses to join the BG after being invited

@@ -103,6 +103,9 @@ void ControlSocket::ProcessBuffer()
                     case MSG_CLUSTER_CHAT:          _parseState = ParseState::ReadChatRelayLen;      break;
                     case MSG_CLUSTER_NOTIFY_MAIL:   _parseState = ParseState::ReadNotifyMail;        break;
                     case MSG_CLUSTER_ARENA_RESULT:  _parseState = ParseState::ReadArenaResultLen;    break;
+                    case MSG_CLUSTER_BG_QUEUE_JOIN: _parseState = ParseState::ReadBgQueueJoin;       break;
+                    case MSG_CLUSTER_BG_QUEUE_LEAVE:_parseState = ParseState::ReadBgQueueLeave;      break;
+                    case MSG_CLUSTER_BG_INST_CREATED:_parseState = ParseState::ReadBgInstCreated;    break;
                     case MSG_PONG:                  _parseState = ParseState::ReadPongTimestamp;     break;
                     default:
                         LOG_WARN("proxy.control", "ControlSocket: Unknown message type 0x{:02X} — closing", msgType);
@@ -546,6 +549,67 @@ void ControlSocket::ProcessBuffer()
                 break;
             }
 
+            // ── MSG_CLUSTER_BG_QUEUE_JOIN ─────────────────────────────────────
+            case ParseState::ReadBgQueueJoin:
+            {
+                if (_accumBuffer.GetActiveSize() < BG_QUEUE_JOIN_SIZE)
+                    return;
+
+                uint8* p = _accumBuffer.GetReadPointer();
+                uint64 guid      = 0;
+                uint32 bgTypeId  = 0;
+                std::memcpy(&guid,     p,     8);
+                std::memcpy(&bgTypeId, p + 8, 4);
+                uint8 bracketId   = p[12];
+                uint8 teamId      = p[13];
+                uint8 minPerTeam  = p[14];
+                _accumBuffer.ReadCompleted(BG_QUEUE_JOIN_SIZE);
+
+                HandleBgQueueJoin(guid, bgTypeId, bracketId, teamId, minPerTeam);
+                _parseState = ParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_BG_QUEUE_LEAVE ────────────────────────────────────
+            case ParseState::ReadBgQueueLeave:
+            {
+                if (_accumBuffer.GetActiveSize() < BG_QUEUE_LEAVE_SIZE)
+                    return;
+
+                uint8* p = _accumBuffer.GetReadPointer();
+                uint64 guid     = 0;
+                uint32 bgTypeId = 0;
+                std::memcpy(&guid,     p,     8);
+                std::memcpy(&bgTypeId, p + 8, 4);
+                _accumBuffer.ReadCompleted(BG_QUEUE_LEAVE_SIZE);
+
+                HandleBgQueueLeave(guid, bgTypeId);
+                _parseState = ParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_BG_INST_CREATED ───────────────────────────────────
+            case ParseState::ReadBgInstCreated:
+            {
+                if (_accumBuffer.GetActiveSize() < BG_INST_CREATED_SIZE)
+                    return;
+
+                uint8* p = _accumBuffer.GetReadPointer();
+                uint32 matchId          = 0;
+                uint32 instanceId       = 0;
+                uint32 mapId            = 0;
+                uint32 clientInstanceId = 0;
+                std::memcpy(&matchId,          p,      4);
+                std::memcpy(&instanceId,       p + 4,  4);
+                std::memcpy(&mapId,            p + 8,  4);
+                std::memcpy(&clientInstanceId, p + 12, 4);
+                _accumBuffer.ReadCompleted(BG_INST_CREATED_SIZE);
+
+                HandleBgInstCreated(matchId, instanceId, mapId, clientInstanceId);
+                _parseState = ParseState::WaitType;
+                break;
+            }
+
             // ── MSG_PONG: worldserver echoed our timestamp — compute RTT ──────
             case ParseState::ReadPongTimestamp:
             {
@@ -753,4 +817,31 @@ void ControlSocket::HandleChatRelay(std::vector<uint8> payload)
     uint16 len = static_cast<uint16>(payload.size());
     LOG_DEBUG("proxy.control", "ControlSocket: ChatRelay from node {} payload={} bytes", _nodeId, len);
     sProxyMgr.BroadcastChatRelay(_nodeId, len, payload);
+}
+
+void ControlSocket::HandleBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam)
+{
+    if (_nodeId == 0)
+        return;
+    LOG_DEBUG("proxy.control", "ControlSocket: BgQueueJoin GUID {:016X} bgType={} bracket={} team={} min={} from node {}",
+              guid, bgTypeId, bracketId, teamId, minPerTeam, _nodeId);
+    sProxyMgr.OnBgQueueJoin(guid, _nodeId, bgTypeId, bracketId, teamId, minPerTeam);
+}
+
+void ControlSocket::HandleBgQueueLeave(uint64 guid, uint32 bgTypeId)
+{
+    if (_nodeId == 0)
+        return;
+    LOG_DEBUG("proxy.control", "ControlSocket: BgQueueLeave GUID {:016X} bgType={} from node {}",
+              guid, bgTypeId, _nodeId);
+    sProxyMgr.OnBgQueueLeave(guid, bgTypeId);
+}
+
+void ControlSocket::HandleBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId)
+{
+    if (_nodeId == 0)
+        return;
+    LOG_INFO("proxy.control", "ControlSocket: BgInstCreated matchId={} instanceId={} mapId={} clientId={} from node {}",
+             matchId, instanceId, mapId, clientInstanceId, _nodeId);
+    sProxyMgr.OnBgInstCreated(matchId, instanceId, mapId, clientInstanceId);
 }

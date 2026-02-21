@@ -111,6 +111,23 @@ public:
     /// route SMSG_RECEIVED_MAIL to whichever node hosts the recipient's session.
     void SendMailNotify(uint64 recipientGuid);
 
+    // ── BG queue relay (non-instance nodes ↔ proxy) ───────────────────────────
+
+    /// Notify the proxy that a player joined a BG queue on this node.
+    /// @param guid           Raw player GUID (ObjectGuid::GetRawValue()).
+    /// @param bgTypeId       BattlegroundTypeId value.
+    /// @param bracketId      PvPDifficulty bracket (BattlegroundBracketId).
+    /// @param teamId         0=Alliance, 1=Horde.
+    /// @param minPerTeam     Minimum players per team required by this BG/bracket.
+    void SendBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam);
+
+    /// Notify the proxy that a player left a BG queue on this node.
+    void SendBgQueueLeave(uint64 guid, uint32 bgTypeId);
+
+    /// Tell the proxy that a BG instance was created on this (instance) node.
+    /// Called after CreateNewBattleground() + AddBattleground() succeed.
+    void SendBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId);
+
     /// Broadcast updated arena team stats to all other nodes after a rated match.
     /// @param teamId       ArenaTeam ID.
     /// @param rating       New team rating.
@@ -171,6 +188,10 @@ private:
     void HandleIncomingChat(std::vector<uint8> const& payload);
     void HandleIncomingMailNotify(uint64 recipientGuid);
     void HandleIncomingArenaResult(std::vector<uint8> const& payload);
+    /// Instance server: create BG instance from proxy request and respond.
+    void HandleBgCreateInst(std::vector<uint8> const& payload);
+    /// Player node: proxy signalled a BG is ready — invite local players.
+    void HandleBgReady(std::vector<uint8> const& payload);
 
     // ── Control protocol message types ────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -191,6 +212,11 @@ private:
     static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
     static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12; ///< New-mail notification for a player on this node
     static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16; ///< Broadcast arena team stat update after a rated match
+    static constexpr uint8 MSG_CLUSTER_BG_INST_CREATED = 0x17; ///< node→proxy: BG instance created on this node
+    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_JOIN   = 0x13; ///< node→proxy: player joined BG queue
+    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_LEAVE  = 0x14; ///< node→proxy: player left BG queue
+    static constexpr uint8 MSG_CLUSTER_BG_CREATE_INST  = 0x15; ///< proxy→node: create a BG instance (instance server only)
+    static constexpr uint8 MSG_CLUSTER_BG_READY        = 0x18; ///< proxy→node: BG ready — invite listed players
 
     // ── Parse state machine for incoming data ─────────────────────────────────
     enum class InParseState
@@ -216,6 +242,10 @@ private:
         ReadNotifyMail,         ///< 8 bytes: uint64 recipient_guid
         ReadArenaResultLen,     ///< 2 bytes: uint16 payload_len
         ReadArenaResultBody,    ///< payload_len bytes
+        ReadBgCreateInstLen,    ///< 2 bytes: uint16 payload_len
+        ReadBgCreateInstBody,   ///< payload_len bytes
+        ReadBgReadyLen,         ///< 2 bytes: uint16 payload_len
+        ReadBgReadyBody,        ///< payload_len bytes
         ReadPingTimestamp,      ///< 8 bytes: uint64 timestamp_ms
     };
     InParseState _inParseState{ InParseState::WaitType };
@@ -234,6 +264,8 @@ private:
     static constexpr std::size_t CHAT_RELAY_LEN_SIZE     = 2; ///< uint16 payload_len
     static constexpr std::size_t NOTIFY_MAIL_SIZE        = 8; ///< uint64 recipient_guid
     static constexpr std::size_t ARENA_RESULT_LEN_SIZE   = 2; ///< uint16 payload_len
+    static constexpr std::size_t BG_CREATE_INST_LEN_SIZE = 2; ///< uint16 payload_len
+    static constexpr std::size_t BG_READY_LEN_SIZE       = 2; ///< uint16 payload_len
 
     // ── Socket and connection state ───────────────────────────────────────────
     boost::asio::io_context* _ioContext{ nullptr };
@@ -277,6 +309,8 @@ private:
     uint16 _unitUpdatePayloadLen{ 0 };
     uint16 _chatRelayPayloadLen{ 0 };
     uint16 _arenaResultPayloadLen{ 0 };
+    uint16 _bgCreateInstPayloadLen{ 0 };
+    uint16 _bgReadyPayloadLen{ 0 };
 };
 
 #define sProxyClient ProxyClient::Instance()

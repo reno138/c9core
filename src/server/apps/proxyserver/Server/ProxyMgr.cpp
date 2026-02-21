@@ -1094,3 +1094,214 @@ void ProxyMgr::RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps)
         LOG_INFO("proxy", "ProxyMgr: Dynamic routing map {} → node {}", mapId, nodeId);
     }
 }
+
+// ── Cross-node BG queue aggregation ──────────────────────────────────────────
+
+uint8 ProxyMgr::GetInstanceNodeId()
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    for (auto const& [nodeId, serverType] : _nodeServerTypes)
+        if (serverType == 1 && _nodes.count(nodeId) && !_nodes.at(nodeId).expired())
+            return nodeId;
+    return 0;
+}
+
+void ProxyMgr::OnBgQueueJoin(uint64 guid, uint8 nodeId, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam)
+{
+    std::vector<BgQueueEntry> toCreate_alliance;
+    std::vector<BgQueueEntry> toCreate_horde;
+    uint32 matchId   = 0;
+    uint32 matchBgTypeId  = 0;
+    uint8  matchBracketId = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(_bgQueueMutex);
+
+        auto& bracketMap = _bgQueues[bgTypeId];
+        auto& state      = bracketMap[bracketId];
+
+        if (state.minPlayersPerTeam == 1)
+            state.minPlayersPerTeam = minPerTeam;
+
+        // Add to appropriate faction queue (skip if already queued).
+        auto& factionQueue = (teamId == 0) ? state.alliance : state.horde;
+        for (auto const& e : factionQueue)
+            if (e.guid == guid)
+                return; // duplicate join
+
+        factionQueue.push_back({ guid, nodeId, teamId });
+
+        LOG_DEBUG("proxy", "ProxyMgr: BgQueue bgType={} bracket={} alliance={} horde={} min={}",
+                  bgTypeId, bracketId, state.alliance.size(), state.horde.size(), state.minPlayersPerTeam);
+
+        // Check if we have enough players to form a match.
+        if (state.alliance.size() >= state.minPlayersPerTeam &&
+            state.horde.size()    >= state.minPlayersPerTeam)
+        {
+            matchId       = _nextBgMatchId++;
+            matchBgTypeId  = bgTypeId;
+            matchBracketId = bracketId;
+
+            // Take exactly minPlayersPerTeam from each side.
+            toCreate_alliance.assign(state.alliance.begin(),
+                                     state.alliance.begin() + state.minPlayersPerTeam);
+            toCreate_horde.assign(state.horde.begin(),
+                                  state.horde.begin() + state.minPlayersPerTeam);
+
+            state.alliance.erase(state.alliance.begin(),
+                                 state.alliance.begin() + state.minPlayersPerTeam);
+            state.horde.erase(state.horde.begin(),
+                              state.horde.begin() + state.minPlayersPerTeam);
+
+            // Record pending match.
+            _pendingBgMatches[matchId] = PendingBgMatch{ bgTypeId, bracketId,
+                                                          toCreate_alliance, toCreate_horde };
+        }
+    }
+
+    if (matchId == 0)
+        return; // no match yet
+
+    // Send MSG_CLUSTER_BG_CREATE_INST to the instance node.
+    uint8 instNodeId = GetInstanceNodeId();
+    if (instNodeId == 0)
+    {
+        LOG_ERROR("proxy", "ProxyMgr: OnBgQueueJoin matchId={} — no instance node registered, cannot create BG",
+                  matchId);
+        std::lock_guard<std::mutex> lock(_bgQueueMutex);
+        _pendingBgMatches.erase(matchId);
+        return;
+    }
+
+    // Build payload: matchId(4)+bgTypeId(4)+bracketId(1)+allianceCount(1)+hordeCount(1)+guids
+    uint8 allianceCount = static_cast<uint8>(toCreate_alliance.size());
+    uint8 hordeCount    = static_cast<uint8>(toCreate_horde.size());
+
+    // Payload (no type byte, no length prefix — length-prefixed below)
+    std::vector<uint8> payload;
+    payload.reserve(4 + 4 + 1 + 1 + 1 +
+                    static_cast<std::size_t>(allianceCount + hordeCount) * 8);
+    auto appendU32 = [&payload](uint32 v)
+    {
+        payload.push_back(v & 0xFF);
+        payload.push_back((v >> 8) & 0xFF);
+        payload.push_back((v >> 16) & 0xFF);
+        payload.push_back((v >> 24) & 0xFF);
+    };
+    appendU32(matchId);
+    appendU32(matchBgTypeId);
+    payload.push_back(matchBracketId);
+    payload.push_back(allianceCount);
+    payload.push_back(hordeCount);
+    for (auto const& e : toCreate_alliance)
+    {
+        uint8 tmp[8];
+        std::memcpy(tmp, &e.guid, 8);
+        payload.insert(payload.end(), tmp, tmp + 8);
+    }
+    for (auto const& e : toCreate_horde)
+    {
+        uint8 tmp[8];
+        std::memcpy(tmp, &e.guid, 8);
+        payload.insert(payload.end(), tmp, tmp + 8);
+    }
+
+    // Frame: type(1) + length(2) + payload
+    uint16 payloadLen = static_cast<uint16>(payload.size());
+    std::vector<uint8> msg;
+    msg.reserve(3 + payload.size());
+    msg.push_back(0x15); // MSG_CLUSTER_BG_CREATE_INST
+    msg.push_back(static_cast<uint8>(payloadLen & 0xFF));
+    msg.push_back(static_cast<uint8>(payloadLen >> 8));
+    msg.insert(msg.end(), payload.begin(), payload.end());
+
+    RelayToNode(instNodeId, msg);
+
+    LOG_INFO("proxy", "ProxyMgr: BG matchId={} formed bgType={} bracket={} alliance={} horde={} → inst node {}",
+             matchId, matchBgTypeId, matchBracketId, allianceCount, hordeCount, instNodeId);
+}
+
+void ProxyMgr::OnBgQueueLeave(uint64 guid, uint32 bgTypeId)
+{
+    std::lock_guard<std::mutex> lock(_bgQueueMutex);
+
+    auto bgIt = _bgQueues.find(bgTypeId);
+    if (bgIt == _bgQueues.end())
+        return;
+
+    for (auto& [bracketId, state] : bgIt->second)
+    {
+        auto& a = state.alliance;
+        auto it = std::find_if(a.begin(), a.end(), [guid](BgQueueEntry const& e){ return e.guid == guid; });
+        if (it != a.end()) { a.erase(it); return; }
+
+        auto& h = state.horde;
+        it = std::find_if(h.begin(), h.end(), [guid](BgQueueEntry const& e){ return e.guid == guid; });
+        if (it != h.end()) { h.erase(it); return; }
+    }
+}
+
+void ProxyMgr::OnBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId)
+{
+    PendingBgMatch match;
+    {
+        std::lock_guard<std::mutex> lock(_bgQueueMutex);
+        auto it = _pendingBgMatches.find(matchId);
+        if (it == _pendingBgMatches.end())
+        {
+            LOG_WARN("proxy", "ProxyMgr: OnBgInstCreated matchId={} not found in pending matches", matchId);
+            return;
+        }
+        match = it->second;
+        _pendingBgMatches.erase(it);
+    }
+
+    // Group players by nodeId so we send one MSG_CLUSTER_BG_READY per node.
+    std::unordered_map<uint8, std::vector<std::pair<uint64, uint8>>> perNode; // nodeId → [{guid, teamId}]
+    for (auto const& e : match.alliance)
+        perNode[e.nodeId].emplace_back(e.guid, 0u);
+    for (auto const& e : match.horde)
+        perNode[e.nodeId].emplace_back(e.guid, 1u);
+
+    for (auto const& [targetNodeId, players] : perNode)
+    {
+        // Build MSG_CLUSTER_BG_READY payload:
+        // instanceId(4)+bgTypeId(4)+mapId(4)+clientInstanceId(4)+count(1)+{guid(8)+team(1)}×n
+        uint8 count = static_cast<uint8>(players.size());
+        std::vector<uint8> payload;
+        payload.reserve(4 + 4 + 4 + 4 + 1 + count * 9);
+        auto appendU32 = [&payload](uint32 v)
+        {
+            payload.push_back(v & 0xFF);
+            payload.push_back((v >> 8) & 0xFF);
+            payload.push_back((v >> 16) & 0xFF);
+            payload.push_back((v >> 24) & 0xFF);
+        };
+        appendU32(instanceId);
+        appendU32(match.bgTypeId);
+        appendU32(mapId);
+        appendU32(clientInstanceId);
+        payload.push_back(count);
+        for (auto const& [pGuid, pTeam] : players)
+        {
+            uint8 tmp[8];
+            std::memcpy(tmp, &pGuid, 8);
+            payload.insert(payload.end(), tmp, tmp + 8);
+            payload.push_back(pTeam);
+        }
+
+        // Frame: type(1) + length(2) + payload
+        uint16 payloadLen = static_cast<uint16>(payload.size());
+        std::vector<uint8> msg;
+        msg.reserve(3 + payload.size());
+        msg.push_back(0x18); // MSG_CLUSTER_BG_READY
+        msg.push_back(static_cast<uint8>(payloadLen & 0xFF));
+        msg.push_back(static_cast<uint8>(payloadLen >> 8));
+        msg.insert(msg.end(), payload.begin(), payload.end());
+
+        RelayToNode(targetNodeId, msg);
+
+        LOG_INFO("proxy", "ProxyMgr: BG_READY matchId={} instanceId={} → node {} ({} players)",
+                 matchId, instanceId, targetNodeId, count);
+    }
+}

@@ -82,6 +82,23 @@
  *   MSG_CLUSTER_PLAYER_OFFLINE (0x04):  (proxy broadcasts to other nodes)
  *   MSG_CLUSTER_RELAY_TO_NODE (0x06):   (proxy routes to target node)
  *   MSG_CLUSTER_GROUP_UPDATE (0x07):    (proxy broadcasts to all member nodes)
+ *
+ *   MSG_CLUSTER_BG_CREATE_INST (0x15):  (proxy→instance node)
+ *     uint32 matchId
+ *     uint32 bgTypeId
+ *     uint8  bracketId
+ *     uint8  allianceCount
+ *     uint8  hordeCount
+ *     uint64 allianceGuids[allianceCount]
+ *     uint64 hordeGuids[hordeCount]
+ *
+ *   MSG_CLUSTER_BG_READY (0x18):        (proxy→player nodes)
+ *     uint32 instanceId
+ *     uint32 bgTypeId
+ *     uint32 mapId
+ *     uint32 clientInstanceId
+ *     uint8  count
+ *     [per player: uint64 guid + uint8 teamId]
  */
 class ControlSocket final : public Socket<ControlSocket>
 {
@@ -125,6 +142,12 @@ private:
     void HandleNotifyMail(uint64 recipientGuid);
     /// Broadcast arena team stat update to all other nodes.
     void HandleArenaResult(std::vector<uint8> payload);
+    /// Relay a player's BG queue join to the proxy BG queue manager.
+    void HandleBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam);
+    /// Relay a player's BG queue leave to the proxy BG queue manager.
+    void HandleBgQueueLeave(uint64 guid, uint32 bgTypeId);
+    /// Receive confirmation from the instance node that a BG was created.
+    void HandleBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId);
 
     // ── Message type constants ─────────────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -144,7 +167,10 @@ private:
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
     static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
     static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12; ///< Notify a player's node that new mail arrived
+    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_JOIN   = 0x13; ///< Player queued for a BG (node→proxy)
+    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_LEAVE  = 0x14; ///< Player left BG queue (node→proxy)
     static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16; ///< Broadcast arena team stat update after a rated match
+    static constexpr uint8 MSG_CLUSTER_BG_INST_CREATED = 0x17; ///< Instance created on node 3 (node→proxy)
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
     static constexpr std::size_t REGISTER_PAYLOAD_SIZE    = 5; ///< uint8 + uint16 + uint16 map_count
@@ -164,6 +190,9 @@ private:
     static constexpr std::size_t CHAT_RELAY_LEN_SIZE      = 2; ///< uint16 payload_len
     static constexpr std::size_t NOTIFY_MAIL_SIZE         = 8; ///< uint64 recipient_guid
     static constexpr std::size_t ARENA_RESULT_LEN_SIZE    = 2; ///< uint16 payload_len
+    static constexpr std::size_t BG_QUEUE_JOIN_SIZE        = 15;///< guid(8)+bgTypeId(4)+bracketId(1)+teamId(1)+minPerTeam(1)
+    static constexpr std::size_t BG_QUEUE_LEAVE_SIZE       = 12;///< guid(8)+bgTypeId(4)
+    static constexpr std::size_t BG_INST_CREATED_SIZE      = 16;///< matchId(4)+instanceId(4)+mapId(4)+clientInstanceId(4)
 
     // ── Parse state machine ───────────────────────────────────────────────────
     enum class ParseState
@@ -195,6 +224,9 @@ private:
         ReadNotifyMail,         ///< 8 bytes: uint64 recipient_guid
         ReadArenaResultLen,     ///< 2 bytes: uint16 payload_len
         ReadArenaResultBody,    ///< payload_len bytes
+        ReadBgQueueJoin,        ///< 15 bytes: guid(8)+bgTypeId(4)+bracketId(1)+teamId(1)+minPerTeam(1)
+        ReadBgQueueLeave,       ///< 12 bytes: guid(8)+bgTypeId(4)
+        ReadBgInstCreated,      ///< 16 bytes: matchId(4)+instanceId(4)+mapId(4)+clientInstanceId(4)
         ReadPongTimestamp,      ///< 8 bytes: echoed uint64 timestamp_ms
     };
     std::chrono::steady_clock::time_point _pingSentAt{};
