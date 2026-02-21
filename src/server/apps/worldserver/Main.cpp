@@ -378,8 +378,12 @@ int main(int argc, char** argv)
         std::string proxyAddress = sConfigMgr->GetOption<std::string>("ProxyServer.Address", "127.0.0.1");
         uint16 proxyControlPort  = static_cast<uint16>(sConfigMgr->GetOption<int32>("ProxyServer.ControlPort", 8090));
         uint16 gamePort          = static_cast<uint16>(sWorld->getIntConfig(CONFIG_PORT_WORLD));
-        // server_type = 0 for worldserver, 1 for instance server (set by InstanceServer.Enable)
-        uint8 serverType = sConfigMgr->GetOption<bool>("InstanceServer.Enable", false) ? 1 : 0;
+        // server_type = 1 for instance server, 0 for regular worldserver.
+        // Check ClusterServer.InstanceServer (preferred — InstanceServer.Enable can break MapMgr
+        // startup because MapMgr's pool system requires continent maps to be loaded).
+        // Also accept InstanceServer.Enable = 1 for backwards compatibility.
+        uint8 serverType = (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false) ||
+                            sConfigMgr->GetOption<bool>("InstanceServer.Enable", false)) ? 1 : 0;
         sProxyClient.Initialize(*ioContext, proxyAddress, proxyControlPort, serverType, gamePort);
     }
 
