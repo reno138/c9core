@@ -507,7 +507,7 @@ void PathGenerator::BuildPolyPath(G3D::Vector3 const& startPos, G3D::Vector3 con
                     startPoint, endPoint,
                     &_filter, DT_FINDPATH_ANY_ANGLE);
 
-                if (dtStatusSucceed(dtResult))
+                if (!dtStatusFailed(dtResult))
                 {
                     int doneIters = 0;
                     mutableQuery->updateSlicedFindPath(
