@@ -284,15 +284,21 @@ void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 por
 
 // ── Worldserver node registry ─────────────────────────────────────────────────
 
-uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort)
+uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort,
+                             std::string const& peerIp)
 {
     uint8 assignedNodeId = 0;
     {
         std::lock_guard<std::mutex> lock(_nodeMutex);
 
+        // Match by peer IP first — handles multiple nodes sharing the same WorldServerPort.
+        // Fall back to port-only match for single-machine / localhost setups.
         for (auto const& [nodeId, addrPort] : _nodeAddresses)
         {
-            if (addrPort.second == gamePort && (!_nodes.count(nodeId) || _nodes.at(nodeId).expired()))
+            bool ipMatch   = !peerIp.empty() && addrPort.first == peerIp;
+            bool portMatch = addrPort.second == gamePort;
+            bool slotFree  = !_nodes.count(nodeId) || _nodes.at(nodeId).expired();
+            if (ipMatch && slotFree)
             {
                 _nodes[nodeId]           = socket;
                 _nodeServerTypes[nodeId] = serverType;

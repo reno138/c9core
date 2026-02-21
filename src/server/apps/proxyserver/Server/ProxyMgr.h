@@ -110,7 +110,10 @@ public:
     std::tuple<uint8, std::string, uint16> ChooseNode();
 
     /// Register a worldserver control socket; return assigned node ID.
-    uint8 RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort);
+    /// peerIp is the remote IP of the control-channel TCP connection — used to match the
+    /// configured node address when multiple nodes share the same WorldServerPort value.
+    uint8 RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort,
+                       std::string const& peerIp);
 
     /// Unregister a worldserver when its control socket closes.
     void UnregisterNode(uint8 nodeId);

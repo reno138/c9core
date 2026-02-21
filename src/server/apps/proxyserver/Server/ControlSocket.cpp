@@ -504,7 +504,8 @@ void ControlSocket::HandleRegister(uint8 serverType, uint16 gamePort, std::vecto
     char const* typeStr = (serverType == 0) ? "worldserver" : "instance server";
 
     // Ask ProxyMgr to assign a node ID and track this socket.
-    _nodeId = sProxyMgr.RegisterNode(shared_from_this(), serverType, gamePort);
+    _nodeId = sProxyMgr.RegisterNode(shared_from_this(), serverType, gamePort,
+                                     GetRemoteIpAddress().to_string());
 
     // Register map routing dynamically (replaces static proxyserver.conf entries for these maps).
     if (!maps.empty())
