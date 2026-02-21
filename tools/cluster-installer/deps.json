@@ -1,0 +1,22 @@
+{
+    "_comment": "C9Core cluster build and runtime dependencies, keyed by package manager",
+    "apt": [
+        "build-essential", "cmake", "git", "clang",
+        "libssl-dev", "libbz2-dev", "libreadline-dev", "zlib1g-dev",
+        "libboost-all-dev", "libmariadb-dev", "libncurses5-dev",
+        "mariadb-server", "mariadb-client",
+        "p7zip-full", "python3", "sshpass"
+    ],
+    "pacman": [
+        "base-devel", "cmake", "git", "clang",
+        "openssl", "bzip2", "readline", "zlib",
+        "boost", "mariadb-libs", "mariadb", "ncurses",
+        "p7zip", "python", "sshpass"
+    ],
+    "dnf": [
+        "gcc", "gcc-c++", "cmake", "git", "clang",
+        "openssl-devel", "bzip2-devel", "readline-devel", "zlib-devel",
+        "boost-devel", "mariadb-connector-c-devel", "mariadb-server", "mariadb",
+        "ncurses-devel", "p7zip", "python3", "sshpass"
+    ]
+}
