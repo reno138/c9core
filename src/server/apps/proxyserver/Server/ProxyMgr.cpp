@@ -710,6 +710,12 @@ std::vector<uint8> ProxyMgr::BuildStatusPayload()
         payload.push_back(static_cast<uint8>((rxBps >> 16) & 0xFF));
         payload.push_back(static_cast<uint8>((rxBps >> 24) & 0xFF));
 
+        // latency_ms (LE uint16) — control-channel RTT in ms
+        uint32 latMs = _nodeLatencyMs.count(ns.nodeId) ? _nodeLatencyMs.at(ns.nodeId) : 0;
+        uint16 latMs16 = static_cast<uint16>(std::min(latMs, uint32{65535}));
+        payload.push_back(static_cast<uint8>(latMs16 & 0xFF));
+        payload.push_back(static_cast<uint8>((latMs16 >> 8) & 0xFF));
+
         // addr_len + addr
         payload.push_back(static_cast<uint8>(ns.address.size()));
         payload.insert(payload.end(), ns.address.begin(), ns.address.end());
@@ -720,6 +726,29 @@ std::vector<uint8> ProxyMgr::BuildStatusPayload()
     }
 
     return payload;
+}
+
+void ProxyMgr::OnNodePong(uint8 nodeId, uint32 latencyMs)
+{
+    {
+        std::lock_guard<std::mutex> lock(_nodeMutex);
+        _nodeLatencyMs[nodeId] = latencyMs;
+        if (_nodeStatus.count(nodeId))
+            _nodeStatus[nodeId].latencyMs = latencyMs;
+    }
+    PushStatusToSubscribers();
+}
+
+void ProxyMgr::SendPingsToAllNodes()
+{
+    // Called periodically (e.g. every 5s) to measure control-channel latency.
+    // Each ControlSocket handles its own _pingSentAt timestamp.
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    for (auto& [nodeId, ws] : _nodes)
+    {
+        if (auto sock = ws.lock())
+            sock->SendPing();
+    }
 }
 
 void ProxyMgr::AddNodeTraffic(uint8 nodeId, uint64 txBytes, uint64 rxBytes)

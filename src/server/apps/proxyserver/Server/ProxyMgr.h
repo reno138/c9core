@@ -69,6 +69,7 @@ struct NodeStatus
     uint32    maxPlayers{ 500 };
     std::string address;
     uint16    port{ 0 };
+    uint32    latencyMs{ 0 };   ///< Control-channel RTT in ms (0 = not measured yet)
 };
 
 /**
@@ -136,6 +137,8 @@ public:
     /// Accumulate bytes transferred to/from a worldserver node (called from ProxySocket).
     /// tx = client→worldserver bytes, rx = worldserver→client bytes.
     void AddNodeTraffic(uint8 nodeId, uint64 txBytes, uint64 rxBytes);
+    void OnNodePong(uint8 nodeId, uint32 latencyMs);
+    void SendPingsToAllNodes();
 
     /// Add a clustermgr client to the push subscriber list.
     void AddMgmtSubscriber(std::shared_ptr<ManagementSocket> sock);
@@ -224,6 +227,7 @@ private:
     std::map<uint8, uint64> _prevRxBytes;
     std::map<uint8, uint32> _nodeTxBps;     ///< Last computed TX bytes/sec
     std::map<uint8, uint32> _nodeRxBps;     ///< Last computed RX bytes/sec
+    std::map<uint8, uint32> _nodeLatencyMs; ///< Last measured control-channel RTT ms
     std::chrono::steady_clock::time_point _lastBwUpdate{ std::chrono::steady_clock::time_point::min() };
 
     // ── Management subscribers ─────────────────────────────────────────────────

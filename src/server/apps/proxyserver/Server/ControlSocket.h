@@ -98,6 +98,7 @@ public:
 
     /// Send raw bytes to this control socket (proxy → worldserver direction).
     void SendRaw(std::vector<uint8> const& data);
+    void SendPing();
 
 protected:
     SocketReadCallbackResult ReadHandler() final;
@@ -132,6 +133,8 @@ private:
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY_RESP  = 0x0A;
     static constexpr uint8 MSG_REROUTE_TO_MAP          = 0x0B;
     static constexpr uint8 MSG_CLUSTER_UNIT_UPDATE     = 0x0C;
+    static constexpr uint8 MSG_PING                      = 0x0D;
+    static constexpr uint8 MSG_PONG                      = 0x0E;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
@@ -174,7 +177,9 @@ private:
         ReadRerouteToMap,       ///< 12 bytes: uint64 guid + uint32 mapId
         ReadUnitUpdateLen,      ///< 2 bytes: uint16 payload_len
         ReadUnitUpdateBody,     ///< payload_len bytes
+        ReadPongTimestamp,      ///< 8 bytes: echoed uint64 timestamp_ms
     };
+    std::chrono::steady_clock::time_point _pingSentAt{};
     ParseState _parseState{ ParseState::WaitType };
 
     /// Accumulation buffer — bytes are copied here from GetReadBuffer() across calls.

@@ -100,6 +100,7 @@ void ControlSocket::ProcessBuffer()
                     case MSG_CLUSTER_LFG_RELAY_RESP:_parseState = ParseState::ReadLFGRelayRespHeader;break;
                     case MSG_REROUTE_TO_MAP:        _parseState = ParseState::ReadRerouteToMap;     break;
                     case MSG_CLUSTER_UNIT_UPDATE:   _parseState = ParseState::ReadUnitUpdateLen;     break;
+                    case MSG_PONG:                  _parseState = ParseState::ReadPongTimestamp;     break;
                     default:
                         LOG_WARN("proxy.control", "ControlSocket: Unknown message type 0x{:02X} — closing", msgType);
                         CloseSocket();
@@ -424,6 +425,27 @@ void ControlSocket::ProcessBuffer()
                 _parseState = ParseState::WaitType;
                 break;
             }
+
+            // ── MSG_PONG: worldserver echoed our timestamp — compute RTT ──────
+            case ParseState::ReadPongTimestamp:
+            {
+                if (_accumBuffer.GetActiveSize() < 8)
+                    return;
+                // Read the 8 echoed bytes (we don't actually use the value —
+                // wall-clock elapsed since SendPing() is the RTT).
+                _accumBuffer.ReadCompleted(8);
+                _parseState = ParseState::WaitType;
+
+                if (_pingSentAt != std::chrono::steady_clock::time_point{})
+                {
+                    auto elapsed = std::chrono::steady_clock::now() - _pingSentAt;
+                    uint32 latMs = static_cast<uint32>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+                    sProxyMgr.OnNodePong(_nodeId, latMs);
+                    _pingSentAt = {};
+                }
+                break;
+            }
         }
     }
 
@@ -431,6 +453,15 @@ void ControlSocket::ProcessBuffer()
 }
 
 // ── Message handlers ──────────────────────────────────────────────────────────
+
+void ControlSocket::SendPing()
+{
+    // Send MSG_PING with 8 zero bytes (timestamp placeholder — we measure wall-clock RTT).
+    std::vector<uint8> ping(9, 0);
+    ping[0] = MSG_PING;
+    _pingSentAt = std::chrono::steady_clock::now();
+    SendRaw(ping);
+}
 
 void ControlSocket::HandleRegister(uint8 serverType, uint16 gamePort)
 {

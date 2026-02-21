@@ -428,6 +428,23 @@ void ProxyClient::ParseIncoming()
                 _inParseState = InParseState::WaitType;
                 break;
             }
+
+            // ── MSG_PING (proxy → node): echo timestamp back as MSG_PONG ─────
+            case InParseState::ReadPingTimestamp:
+            {
+                if (_accumBuf.size() < 8)
+                    return;
+                // Echo the 8-byte timestamp unchanged.
+                std::vector<uint8> pong;
+                pong.reserve(9);
+                pong.push_back(MSG_PONG);
+                pong.insert(pong.end(), _accumBuf.begin(), _accumBuf.begin() + 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + 8);
+                if (_socket && _socket->is_open())
+                    boost::asio::write(*_socket, boost::asio::buffer(pong));
+                _inParseState = InParseState::WaitType;
+                break;
+            }
         }
     }
 }

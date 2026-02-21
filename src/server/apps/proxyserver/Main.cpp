@@ -216,6 +216,23 @@ int main(int argc, char** argv)
     }
     std::shared_ptr<void> mgmtNetHandle(nullptr, [](void*) { sManagementSocketMgr.StopNetwork(); });
 
+    // ── Ping timer (fires every 5 seconds — measures control-channel latency) ────
+    std::shared_ptr<boost::asio::steady_timer> pingTimer =
+        std::make_shared<boost::asio::steady_timer>(*ioContext);
+
+    std::function<void(boost::system::error_code const&)> pingHandler;
+    pingHandler = [&pingTimer, &pingHandler](boost::system::error_code const& error)
+    {
+        if (!error)
+        {
+            sProxyMgr.SendPingsToAllNodes();
+            pingTimer->expires_after(std::chrono::seconds(5));
+            pingTimer->async_wait(pingHandler);
+        }
+    };
+    pingTimer->expires_after(std::chrono::seconds(5));
+    pingTimer->async_wait(pingHandler);
+
     // ── Auto-scale timer (fires every 30 seconds) ─────────────────────────────
     std::shared_ptr<boost::asio::steady_timer> autoScaleTimer =
         std::make_shared<boost::asio::steady_timer>(*ioContext);

@@ -191,6 +191,10 @@ void NodeMgrSocket::HandleRegister(uint8 nodeId, uint16 gamePort)
 
     // Send ack: MSG_NODEMGR_REGISTER | assigned_node_id
     SendEncrypted({ MSG_NODEMGR_REGISTER, _assignedNodeId });
+
+    // Auto-start: immediately tell the nodemgr to launch its worldserver.
+    // This avoids needing a separate management-socket START command.
+    sProxyMgr.StartNode(_assignedNodeId);
 }
 
 void NodeMgrSocket::HandleStatus(uint8 state, uint32 pid, uint32 uptime)

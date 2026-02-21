@@ -247,8 +247,14 @@ void ClusterUI::DrawNodeTable()
         if (static_cast<int>(host.size()) > hostW)
             host = host.substr(0, hostW - 1) + ">";
 
-        // Latency
+        // Latency: prefer control-channel RTT from proxy; fall back to ICMP ping.
         int32 latMs = -1;
+        if (n.latencyMs > 0)
+        {
+            // Control-channel RTT measured by proxy via MSG_PING/MSG_PONG.
+            latMs = static_cast<int32>(n.latencyMs);
+        }
+        else
         {
             std::lock_guard<std::mutex> lock(_latencyMutex);
             auto it = _latencyMs.find(n.nodeId);

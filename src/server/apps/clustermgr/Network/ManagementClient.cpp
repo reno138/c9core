@@ -210,7 +210,7 @@ void ManagementClient::TryParseNodes()
 
             case ParseState::WaitNodeFixed:
             {
-                // Fixed part: nodeId(1)+state(1)+players(2)+max(2)+pid(4)+uptime(4)+txBps(4)+rxBps(4)+addrLen(1) = 23 bytes
+                // Fixed part: nodeId(1)+state(1)+players(2)+max(2)+pid(4)+uptime(4)+txBps(4)+rxBps(4)+latencyMs(2)+addrLen(1) = 25 bytes
                 if (_parseAccum.size() < NODE_FIXED_SIZE)
                     return;
 
@@ -236,7 +236,9 @@ void ManagementClient::TryParseNodes()
                                          | (static_cast<uint32>(p[19]) << 8)
                                          | (static_cast<uint32>(p[20]) << 16)
                                          | (static_cast<uint32>(p[21]) << 24);
-                _pendingAddrLen = p[22];
+                _currentNode.latencyMs   = static_cast<uint32>(p[22])
+                                         | (static_cast<uint32>(p[23]) << 8);
+                _pendingAddrLen = p[24];
                 _parseAccum.erase(_parseAccum.begin(), _parseAccum.begin() + NODE_FIXED_SIZE);
 
                 if (_pendingAddrLen > 0)
