@@ -16,6 +16,7 @@
  */
 
 #include "PoolMgr.h"
+#include "ClusterMgr.h"
 #include "Containers.h"
 #include "Log.h"
 #include "MapMgr.h"
@@ -195,6 +196,8 @@ void PoolGroup<Creature>::Despawn1Object(ObjectGuid::LowType guid)
         sObjectMgr->RemoveCreatureFromGrid(guid, data);
 
         Map* map = sMapMgr->CreateBaseMap(data->mapid);
+        if (!map)   // nullptr when InstanceServer.Enable rejects this map type
+            return;
         if (!map->Instanceable())
         {
             auto creatureBounds = map->GetCreatureBySpawnIdStore().equal_range(guid);
@@ -217,6 +220,8 @@ void PoolGroup<GameObject>::Despawn1Object(ObjectGuid::LowType guid)
         sObjectMgr->RemoveGameobjectFromGrid(guid, data);
 
         Map* map = sMapMgr->CreateBaseMap(data->mapid);
+        if (!map)   // nullptr when InstanceServer.Enable rejects this map type
+            return;
         if (!map->Instanceable())
         {
             auto gameobjectBounds = map->GetGameObjectBySpawnIdStore().equal_range(guid);
@@ -380,8 +385,15 @@ void PoolGroup<Creature>::Spawn1Object(PoolObject* obj)
     {
         sObjectMgr->AddCreatureToGrid(obj->guid, data);
 
+        // In cluster mode, skip maps not owned by this node — the owning node
+        // will spawn pool creatures for its maps during its own startup.
+        if (!sClusterMgr.IsMapLocal(data->mapid))
+            return;
+
         // Spawn if necessary (loaded grids only)
         Map* map = sMapMgr->CreateBaseMap(data->mapid);
+        if (!map)   // nullptr when InstanceServer.Enable rejects this map type
+            return;
         // We use spawn coords to spawn
         if (!map->Instanceable() && map->IsGridLoaded(data->posX, data->posY))
         {
@@ -403,9 +415,17 @@ void PoolGroup<GameObject>::Spawn1Object(PoolObject* obj)
     if (GameObjectData const* data = sObjectMgr->GetGameObjectData(obj->guid))
     {
         sObjectMgr->AddGameobjectToGrid(obj->guid, data);
+
+        // In cluster mode, skip maps not owned by this node — the owning node
+        // will spawn pool gameobjects for its maps during its own startup.
+        if (!sClusterMgr.IsMapLocal(data->mapid))
+            return;
+
         // Spawn if necessary (loaded grids only)
         // this base map checked as non-instanced and then only existed
         Map* map = sMapMgr->CreateBaseMap(data->mapid);
+        if (!map)   // nullptr when InstanceServer.Enable rejects this map type
+            return;
         // We use current coords to unspawn, not spawn coords since creature can have changed grid
         if (!map->Instanceable() && map->IsGridLoaded(data->posX, data->posY))
         {

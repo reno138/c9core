@@ -48,6 +48,7 @@
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
+#include "ClusterMgr.h"
 #include "ProxyClient.h"
 #include "SocialMgr.h"
 #include "SpellAuraEffects.h"
@@ -801,6 +802,23 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         KickPlayer("WorldSession::HandlePlayerLogin Player::LoadFromDB failed"); // disconnect client, player no set to session and it will not deleted or saved at kick
         delete pCurrChar; // delete it manually
         m_playerLoading = false;
+        return;
+    }
+
+    // Cluster: if the player's saved map is owned by a different node, redirect
+    // the client to that node before sending any login packets.  The proxy
+    // receives MSG_REROUTE_TO_MAP and switches the client's connection.  When
+    // the client reconnects to the correct node, HandlePlayerLoginFromDB runs
+    // again with IsMapLocal() == true and proceeds normally.
+    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
+        && sProxyClient.IsConnected()
+        && !sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
+    {
+        uint32 const mapId = pCurrChar->GetMapId();
+        SetPlayer(nullptr);         // LoadFromDB set _player; clear it before delete
+        delete pCurrChar;
+        m_playerLoading = false;
+        sProxyClient.SendRerouteToMap(playerGuid.GetRawValue(), mapId);
         return;
     }
 
