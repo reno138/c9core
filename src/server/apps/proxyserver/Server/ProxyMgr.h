@@ -186,6 +186,7 @@ public:
     // ── Node relay & broadcast helpers ────────────────────────────────────────
     void RelayToNode(uint8 targetNodeId, std::vector<uint8> const& msg);
     void BroadcastToOtherNodes(std::vector<uint8> const& data, uint8 excludeNodeId);
+    void BroadcastUnitUpdate(uint8 sourceNodeId, uint16 payloadLen, std::vector<uint8> const& payload);
 
 private:
     ProxyMgr() = default;

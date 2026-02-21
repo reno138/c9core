@@ -117,6 +117,7 @@ private:
     void HandleLFGRelay(std::vector<uint8> payload);
     void HandleLFGRelayResponse(uint8 targetNodeId, std::vector<uint8> payload);
     void HandleRerouteToMap(uint64 guid, uint32 mapId);
+    void HandleUnitUpdate(std::vector<uint8> payload);
 
     // ── Message type constants ─────────────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -130,6 +131,7 @@ private:
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY       = 0x09;
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY_RESP  = 0x0A;
     static constexpr uint8 MSG_REROUTE_TO_MAP          = 0x0B;
+    static constexpr uint8 MSG_CLUSTER_UNIT_UPDATE     = 0x0C;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
@@ -146,6 +148,7 @@ private:
     static constexpr std::size_t LFG_RELAY_HEADER_SIZE    = 2; ///< uint16 payload_len
     static constexpr std::size_t LFG_RELAY_RESP_HDR_SIZE  = 3; ///< uint8 target_node + uint16 payload_len
     static constexpr std::size_t REROUTE_TO_MAP_SIZE      = 12;///< uint64 guid + uint32 mapId
+    static constexpr std::size_t UNIT_UPDATE_LEN_SIZE     = 2; ///< uint16 payload_len
 
     // ── Parse state machine ───────────────────────────────────────────────────
     enum class ParseState
@@ -169,6 +172,8 @@ private:
         ReadLFGRelayRespHeader, ///< 3 bytes: uint8 target_node + uint16 payload_len
         ReadLFGRelayRespBody,   ///< payload_len bytes
         ReadRerouteToMap,       ///< 12 bytes: uint64 guid + uint32 mapId
+        ReadUnitUpdateLen,      ///< 2 bytes: uint16 payload_len
+        ReadUnitUpdateBody,     ///< payload_len bytes
     };
     ParseState _parseState{ ParseState::WaitType };
 
@@ -195,6 +200,7 @@ private:
     uint16 _lfgRelayPayloadLen{ 0 };
     uint8  _lfgRelayRespTargetNode{ 0 };
     uint16 _lfgRelayRespPayloadLen{ 0 };
+    uint16 _unitUpdatePayloadLen{ 0 };
 
     /// Server info learned from MSG_REGISTER.
     uint8  _serverType{ 0xFF };

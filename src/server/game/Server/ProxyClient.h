@@ -97,6 +97,10 @@ public:
     /// Ask the proxy to reroute this player to the node handling mapId.
     void SendRerouteToMap(uint64 playerGuid, uint32 mapId);
 
+    /// Broadcast this player's unit state (HP/power/auras) to all other cluster nodes.
+    /// Safe to call from the game update thread.
+    void SendClusterUnitUpdate(Player const* player);
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid
@@ -142,6 +146,7 @@ private:
     void HandleGroupDisband(uint64 groupGuid);
     void HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& payload);
     void HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> const& payload);
+    void HandleUnitUpdate(std::vector<uint8> const& payload);
 
     // ── Control protocol message types ────────────────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
@@ -155,6 +160,7 @@ private:
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY       = 0x09;
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY_RESP  = 0x0A;
     static constexpr uint8 MSG_REROUTE_TO_MAP          = 0x0B;
+    static constexpr uint8 MSG_CLUSTER_UNIT_UPDATE     = 0x0C;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
 
     // ── Parse state machine for incoming data ─────────────────────────────────
@@ -174,6 +180,8 @@ private:
         ReadLFGRelayBody,       ///< payload_len bytes
         ReadLFGRelayRespHeader, ///< 3 bytes: uint8 target_node + uint16 payload_len
         ReadLFGRelayRespBody,   ///< payload_len bytes
+        ReadUnitUpdateLen,      ///< 2 bytes: uint16 payload_len
+        ReadUnitUpdateBody,     ///< payload_len bytes
     };
     InParseState _inParseState{ InParseState::WaitType };
 
@@ -187,6 +195,7 @@ private:
     static constexpr std::size_t GROUP_DISBAND_SIZE      = 8; ///< uint64
     static constexpr std::size_t LFG_RELAY_HEADER_SIZE   = 2; ///< uint16 payload_len
     static constexpr std::size_t LFG_RELAY_RESP_HDR_SIZE = 3; ///< uint8 target_node + uint16 len
+    static constexpr std::size_t UNIT_UPDATE_LEN_SIZE    = 2; ///< uint16 payload_len
 
     // ── Socket and connection state ───────────────────────────────────────────
     boost::asio::io_context* _ioContext{ nullptr };
@@ -226,6 +235,8 @@ private:
     uint16 _lfgRelayPayloadLen{ 0 };
     uint8  _lfgRelayRespTargetNode{ 0 };
     uint16 _lfgRelayRespPayloadLen{ 0 };
+
+    uint16 _unitUpdatePayloadLen{ 0 };
 };
 
 #define sProxyClient ProxyClient::Instance()

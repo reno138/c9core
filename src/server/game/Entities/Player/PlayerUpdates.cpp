@@ -24,6 +24,11 @@
 #include "GameTime.h"
 #include "GridNotifiers.h"
 #include "Group.h"
+#include "AuraApplication.h"
+#include "ClusterMgr.h"
+#include "ProxyClient.h"
+#include "SpellAuras.h"
+#include "WorldPacket.h"
 #include "Guild.h"
 #include "InstanceScript.h"
 #include "Language.h"
@@ -392,6 +397,86 @@ void Player::Update(uint32 p_time)
 
     // group update
     SendUpdateToOutOfRangeGroupMembers();
+
+    // ── Cluster unit update (cross-node party frame sync) ─────────────────
+    if (sProxyClient.IsConnected() && sProxyClient.GetNodeId() != 0)
+    {
+        if (m_clusterUnitUpdateTimer <= p_time)
+        {
+            m_clusterUnitUpdateTimer = 2000;
+
+            Group const* grp = GetGroup();
+            if (grp)
+            {
+                // Check if any group member is on a remote node
+                bool hasRemote = false;
+                for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(grp->GetGUID().GetRawValue()))
+                {
+                    if (rm.nodeId != sProxyClient.GetNodeId())
+                    {
+                        hasRemote = true;
+                        break;
+                    }
+                }
+
+                if (hasRemote)
+                {
+                    // Send our own stats so remote nodes can display us
+                    sProxyClient.SendClusterUnitUpdate(this);
+
+                    // Synthesise SMSG_PARTY_MEMBER_STATS for each remote group member
+                    // so that the local client can display their unit frames
+                    for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(grp->GetGUID().GetRawValue()))
+                    {
+                        if (rm.nodeId == sProxyClient.GetNodeId())
+                            continue; // local — handled normally
+
+                        ClusterMgr::ClusterUnitState state;
+                        if (!sClusterMgr.GetUnitState(rm.guid, state))
+                            continue;
+
+                        // Build SMSG_PARTY_MEMBER_STATS packet from cached state
+                        constexpr uint32 mask =
+                            GROUP_UPDATE_FLAG_STATUS    |
+                            GROUP_UPDATE_FLAG_CUR_HP    |
+                            GROUP_UPDATE_FLAG_MAX_HP    |
+                            GROUP_UPDATE_FLAG_POWER_TYPE|
+                            GROUP_UPDATE_FLAG_CUR_POWER |
+                            GROUP_UPDATE_FLAG_MAX_POWER |
+                            GROUP_UPDATE_FLAG_LEVEL     |
+                            GROUP_UPDATE_FLAG_ZONE      |
+                            GROUP_UPDATE_FLAG_AURAS;
+
+                        uint16 auraCount = 0;
+                        for (uint32 i = 0; i < MAX_AURAS_GROUP_UPDATE; ++i)
+                            if (state.auraMask & (uint64(1) << i))
+                                ++auraCount;
+
+                        WorldPacket data(SMSG_PARTY_MEMBER_STATS, 8 + 4 + 2 + 4 + 4 + 1 + 2 + 2 + 2 + 2 + 8 + auraCount * 5);
+                        data << ObjectGuid(state.guid).WriteAsPacked();
+                        data << uint32(mask);
+                        data << uint16(state.status);
+                        data << uint32(state.health);
+                        data << uint32(state.maxHealth);
+                        data << uint8(state.powerType);
+                        data << uint16(state.power);
+                        data << uint16(state.maxPower);
+                        data << uint16(state.level);
+                        data << uint16(state.zoneId);
+                        data << uint64(state.auraMask);
+                        for (auto const& aura : state.auras)
+                        {
+                            data << uint32(aura.spellId);
+                            data << uint8(aura.flags);
+                        }
+                        GetSession()->SendPacket(&data);
+                    }
+                }
+            }
+        }
+        else
+            m_clusterUnitUpdateTimer -= p_time;
+    }
 
     Pet* pet = GetPet();
     if (pet && !pet->IsWithinDistInMap(this, GetMap()->GetVisibilityRange()) &&

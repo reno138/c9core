@@ -99,6 +99,7 @@ void ControlSocket::ProcessBuffer()
                     case MSG_CLUSTER_LFG_RELAY:     _parseState = ParseState::ReadLFGRelayHeader;   break;
                     case MSG_CLUSTER_LFG_RELAY_RESP:_parseState = ParseState::ReadLFGRelayRespHeader;break;
                     case MSG_REROUTE_TO_MAP:        _parseState = ParseState::ReadRerouteToMap;     break;
+                    case MSG_CLUSTER_UNIT_UPDATE:   _parseState = ParseState::ReadUnitUpdateLen;     break;
                     default:
                         LOG_WARN("proxy.control", "ControlSocket: Unknown message type 0x{:02X} — closing", msgType);
                         CloseSocket();
@@ -395,6 +396,34 @@ void ControlSocket::ProcessBuffer()
                 _parseState = ParseState::WaitType;
                 break;
             }
+
+            // ── MSG_CLUSTER_UNIT_UPDATE ───────────────────────────────────────
+            case ParseState::ReadUnitUpdateLen:
+            {
+                if (_accumBuffer.GetActiveSize() < UNIT_UPDATE_LEN_SIZE)
+                    return;
+
+                uint8* p = _accumBuffer.GetReadPointer();
+                std::memcpy(&_unitUpdatePayloadLen, p, 2);
+                _accumBuffer.ReadCompleted(UNIT_UPDATE_LEN_SIZE);
+                _parseState = ParseState::ReadUnitUpdateBody;
+                break;
+            }
+
+            case ParseState::ReadUnitUpdateBody:
+            {
+                if (_accumBuffer.GetActiveSize() < static_cast<std::size_t>(_unitUpdatePayloadLen))
+                    return;
+
+                std::vector<uint8> payload(_unitUpdatePayloadLen);
+                std::memcpy(payload.data(), _accumBuffer.GetReadPointer(), _unitUpdatePayloadLen);
+                _accumBuffer.ReadCompleted(_unitUpdatePayloadLen);
+
+                HandleUnitUpdate(std::move(payload));
+                _unitUpdatePayloadLen = 0;
+                _parseState = ParseState::WaitType;
+                break;
+            }
         }
     }
 
@@ -532,4 +561,13 @@ void ControlSocket::HandleRerouteToMap(uint64 guid, uint32 mapId)
 {
     LOG_INFO("proxy.control", "ControlSocket: RerouteToMap — GUID {:016X} → map {}", guid, mapId);
     sProxyMgr.RerouteToMap(guid, mapId);
+}
+
+void ControlSocket::HandleUnitUpdate(std::vector<uint8> payload)
+{
+    if (_nodeId == 0)
+        return;
+    uint16 len = static_cast<uint16>(payload.size());
+    LOG_DEBUG("proxy.control", "ControlSocket: UnitUpdate from node {} payload={} bytes", _nodeId, len);
+    sProxyMgr.BroadcastUnitUpdate(_nodeId, len, payload);
 }

@@ -85,13 +85,20 @@ void ClusterMgr::OnRemotePlayerOnline(uint64 guid, std::string name,
 
 void ClusterMgr::OnRemotePlayerOffline(uint64 guid)
 {
-    std::unique_lock lock(_mutex);
-    auto it = _byGuid.find(guid);
-    if (it != _byGuid.end())
     {
-        _byName.erase(it->second.name);
-        _byGuid.erase(it);
-        LOG_INFO("server.worldserver", "ClusterMgr: Remote player OFFLINE GUID {:016X} '{}'", guid, it->second.name);
+        std::unique_lock lock(_mutex);
+        auto it = _byGuid.find(guid);
+        if (it != _byGuid.end())
+        {
+            LOG_INFO("server.worldserver", "ClusterMgr: Remote player OFFLINE GUID {:016X} '{}'", guid, it->second.name);
+            _byName.erase(it->second.name);
+            _byGuid.erase(it);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> ulock(_unitStateMutex);
+        _unitStates.erase(guid);
     }
 }
 
@@ -203,4 +210,22 @@ std::vector<ClusterMgr::CrossNodeGroupMember> ClusterMgr::GetGroupRemoteMembers(
     if (it == _groupMembers.end())
         return {};
     return it->second;
+}
+
+// ── Cross-node unit state ─────────────────────────────────────────────────────
+
+void ClusterMgr::UpdateUnitState(ClusterUnitState state)
+{
+    std::lock_guard<std::mutex> lock(_unitStateMutex);
+    _unitStates[state.guid] = std::move(state);
+}
+
+bool ClusterMgr::GetUnitState(uint64 guid, ClusterUnitState& out) const
+{
+    std::lock_guard<std::mutex> lock(_unitStateMutex);
+    auto it = _unitStates.find(guid);
+    if (it == _unitStates.end())
+        return false;
+    out = it->second;
+    return true;
 }

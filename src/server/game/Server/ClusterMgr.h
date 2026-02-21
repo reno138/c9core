@@ -139,6 +139,35 @@ public:
     /// Get cross-node members of a group (for chat routing).
     std::vector<CrossNodeGroupMember> GetGroupRemoteMembers(uint64 groupGuid) const;
 
+    // ── Cross-node unit state (health/power/auras for party frames) ───────────
+
+    struct ClusterUnitState
+    {
+        uint64 guid{ 0 };
+        uint16 status{ 0 };     ///< MEMBER_STATUS_* flags
+        uint32 health{ 0 };
+        uint32 maxHealth{ 0 };
+        uint8  powerType{ 0 };
+        uint16 power{ 0 };
+        uint16 maxPower{ 0 };
+        uint16 level{ 0 };
+        uint16 zoneId{ 0 };
+        uint64 auraMask{ 0 };
+
+        struct AuraEntry
+        {
+            uint32 spellId{ 0 };
+            uint8  flags{ 0 };
+        };
+        std::vector<AuraEntry> auras; ///< one entry per set bit in auraMask
+    };
+
+    /// Update (or insert) the cached unit state for a remote player.
+    void UpdateUnitState(ClusterUnitState state);
+
+    /// Retrieve cached unit state.  Returns false if guid not found.
+    bool GetUnitState(uint64 guid, ClusterUnitState& out) const;
+
 private:
     ClusterMgr() = default;
 
@@ -153,6 +182,10 @@ private:
     // ── Cross-node group state ─────────────────────────────────────────────
     mutable std::mutex _groupMutex;
     std::unordered_map<uint64, std::vector<CrossNodeGroupMember>> _groupMembers; ///< group_guid → members
+
+    // ── Cross-node unit states ────────────────────────────────────────────
+    mutable std::mutex _unitStateMutex;
+    std::unordered_map<uint64, ClusterUnitState> _unitStates;
 
     // ── Pending invites & results (io_context → game thread) ──────────────
     std::mutex _inviteMutex;

@@ -16,7 +16,9 @@
  */
 
 #include "ProxyClient.h"
+#include "AuraApplication.h"
 #include "ClusterMgr.h"
+#include "SpellAuras.h"
 #include "DBCStores.h"
 #include "LFGMgr.h"
 #include "Entities/Player/Player.h"
@@ -232,6 +234,7 @@ void ProxyClient::ParseIncoming()
                     case MSG_CLUSTER_GROUP_DISBAND:  _inParseState = InParseState::ReadGroupDisband;      break;
                     case MSG_CLUSTER_LFG_RELAY:      _inParseState = InParseState::ReadLFGRelayHeader;   break;
                     case MSG_CLUSTER_LFG_RELAY_RESP: _inParseState = InParseState::ReadLFGRelayRespHeader;break;
+                    case MSG_CLUSTER_UNIT_UPDATE:    _inParseState = InParseState::ReadUnitUpdateLen;     break;
                     default:
                         LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming message type 0x{:02X}", msgType);
                         _accumBuf.clear(); // desync — drop buffer, reconnect
@@ -400,6 +403,29 @@ void ProxyClient::ParseIncoming()
                 _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _lfgRelayRespPayloadLen);
                 _lfgRelayRespTargetNode = 0;
                 _lfgRelayRespPayloadLen = 0;
+                _inParseState = InParseState::WaitType;
+                break;
+            }
+
+            // ── MSG_CLUSTER_UNIT_UPDATE (header: uint16 payload_len) ──────────
+            case InParseState::ReadUnitUpdateLen:
+            {
+                if (_accumBuf.size() < UNIT_UPDATE_LEN_SIZE)
+                    return;
+                _unitUpdatePayloadLen = static_cast<uint16>(_accumBuf[0]) | (static_cast<uint16>(_accumBuf[1]) << 8);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + UNIT_UPDATE_LEN_SIZE);
+                _inParseState = InParseState::ReadUnitUpdateBody;
+                break;
+            }
+
+            case InParseState::ReadUnitUpdateBody:
+            {
+                if (_accumBuf.size() < static_cast<std::size_t>(_unitUpdatePayloadLen))
+                    return;
+                std::vector<uint8> payload(_accumBuf.begin(), _accumBuf.begin() + _unitUpdatePayloadLen);
+                _accumBuf.erase(_accumBuf.begin(), _accumBuf.begin() + _unitUpdatePayloadLen);
+                HandleUnitUpdate(payload);
+                _unitUpdatePayloadLen = 0;
                 _inParseState = InParseState::WaitType;
                 break;
             }
@@ -979,4 +1005,108 @@ void ProxyClient::DeliverPacketToPlayer(uint64 targetGuid, WorldPacket const& pa
     msg.insert(msg.end(), rawPacket.begin(), rawPacket.end());
 
     EnqueueRaw(std::move(msg));
+}
+
+// ── Outgoing: cluster unit update ─────────────────────────────────────────────
+
+void ProxyClient::SendClusterUnitUpdate(Player const* player)
+{
+    if (!_connected || _nodeId == 0)
+        return;
+
+    uint64 auraMask = player->GetAuraUpdateMaskForRaid();
+    uint16 auraCount = 0;
+    for (uint32 i = 0; i < MAX_AURAS_GROUP_UPDATE; ++i)
+        if (auraMask & (uint64(1) << i))
+            ++auraCount;
+
+    // Fixed payload: guid(8)+status(2)+hp(4)+maxHp(4)+pwrType(1)+pwr(2)+maxPwr(2)+lvl(2)+zone(2)+auraMask(8) = 35
+    uint16 payloadLen = static_cast<uint16>(35 + auraCount * 5);
+
+    std::vector<uint8> msg;
+    msg.reserve(3 + payloadLen);
+
+    auto pushU8  = [&](uint8  v){ msg.push_back(v); };
+    auto pushU16 = [&](uint16 v){ msg.push_back(static_cast<uint8>(v & 0xFF)); msg.push_back(static_cast<uint8>(v >> 8)); };
+    auto pushU32 = [&](uint32 v){ pushU16(static_cast<uint16>(v & 0xFFFF)); pushU16(static_cast<uint16>(v >> 16)); };
+    auto pushU64 = [&](uint64 v){ pushU32(static_cast<uint32>(v)); pushU32(static_cast<uint32>(v >> 32)); };
+
+    pushU8(MSG_CLUSTER_UNIT_UPDATE);
+    pushU16(payloadLen);
+    pushU64(player->GetGUID().GetRawValue());
+
+    uint16 status = MEMBER_STATUS_ONLINE;
+    if (player->IsPvP())   status |= MEMBER_STATUS_PVP;
+    if (!player->IsAlive())
+    {
+        if (player->HasPlayerFlag(PLAYER_FLAGS_GHOST)) status |= MEMBER_STATUS_GHOST;
+        else                                            status |= MEMBER_STATUS_DEAD;
+    }
+    if (player->isAFK()) status |= MEMBER_STATUS_AFK;
+    if (player->isDND()) status |= MEMBER_STATUS_DND;
+
+    pushU16(status);
+    Powers power = player->getPowerType();
+    pushU32(player->GetHealth());
+    pushU32(player->GetMaxHealth());
+    pushU8(static_cast<uint8>(power));
+    pushU16(static_cast<uint16>(player->GetPower(power)));
+    pushU16(static_cast<uint16>(player->GetMaxPower(power)));
+    pushU16(static_cast<uint16>(player->GetLevel()));
+    pushU16(static_cast<uint16>(player->GetZoneId()));
+    pushU64(auraMask);
+
+    for (uint32 i = 0; i < MAX_AURAS_GROUP_UPDATE; ++i)
+    {
+        if (auraMask & (uint64(1) << i))
+        {
+            AuraApplication const* aurApp = player->GetVisibleAura(i);
+            pushU32(aurApp ? aurApp->GetBase()->GetId() : 0);
+            pushU8(1);
+        }
+    }
+
+    EnqueueRaw(std::move(msg));
+}
+
+// ── Incoming: cluster unit update ─────────────────────────────────────────────
+
+void ProxyClient::HandleUnitUpdate(std::vector<uint8> const& payload)
+{
+    static constexpr std::size_t FIXED_SIZE = 35; // see wire format
+    if (payload.size() < FIXED_SIZE)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleUnitUpdate — payload too small ({})", payload.size());
+        return;
+    }
+
+    ClusterMgr::ClusterUnitState state;
+    std::size_t off = 0;
+
+    std::memcpy(&state.guid,      payload.data() + off, 8); off += 8;
+    std::memcpy(&state.status,    payload.data() + off, 2); off += 2;
+    std::memcpy(&state.health,    payload.data() + off, 4); off += 4;
+    std::memcpy(&state.maxHealth, payload.data() + off, 4); off += 4;
+    state.powerType = payload[off++];
+    std::memcpy(&state.power,     payload.data() + off, 2); off += 2;
+    std::memcpy(&state.maxPower,  payload.data() + off, 2); off += 2;
+    std::memcpy(&state.level,     payload.data() + off, 2); off += 2;
+    std::memcpy(&state.zoneId,    payload.data() + off, 2); off += 2;
+    std::memcpy(&state.auraMask,  payload.data() + off, 8); off += 8;
+
+    for (uint32 i = 0; i < MAX_AURAS_GROUP_UPDATE; ++i)
+    {
+        if (state.auraMask & (uint64(1) << i))
+        {
+            if (off + 5 > payload.size())
+                break;
+            ClusterMgr::ClusterUnitState::AuraEntry entry;
+            std::memcpy(&entry.spellId, payload.data() + off, 4); off += 4;
+            entry.flags = payload[off++];
+            state.auras.push_back(entry);
+        }
+    }
+
+    LOG_DEBUG("server.worldserver", "ProxyClient: UnitUpdate GUID {:016X} HP {}/{}", state.guid, state.health, state.maxHealth);
+    sClusterMgr.UpdateUnitState(std::move(state));
 }
