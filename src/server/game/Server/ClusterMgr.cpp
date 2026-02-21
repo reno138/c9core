@@ -30,8 +30,11 @@ void ClusterMgr::LoadLocalMaps()
     _instanceServerMode = false;
     _allMapsMode        = false;
 
-    // Mode 1: Instance-server — handle all instanceable maps (dungeons/raids/BGs/arenas)
-    if (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false))
+    // Mode 1: Instance-server — handle all instanceable maps (dungeons/raids/BGs/arenas).
+    // Accept either the Phase 8a key (ClusterServer.InstanceServer) or the legacy key
+    // (InstanceServer.Enable) — both are set in worldserver-instance.conf for compatibility.
+    if (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false) ||
+        sConfigMgr->GetOption<bool>("InstanceServer.Enable", false))
     {
         _instanceServerMode = true;
         LOG_INFO("server.worldserver", "ClusterMgr: InstanceServer mode — handling all instanceable maps");

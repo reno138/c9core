@@ -1023,6 +1023,6 @@ void ProxyMgr::RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps)
     for (uint32 mapId : maps)
     {
         _mapRouting[mapId] = nodeId;
-        LOG_INFO(proxy, ProxyMgr: Dynamic routing map {} → node {}, mapId, nodeId);
+        LOG_INFO("proxy", "ProxyMgr: Dynamic routing map {} → node {}", mapId, nodeId);
     }
 }
