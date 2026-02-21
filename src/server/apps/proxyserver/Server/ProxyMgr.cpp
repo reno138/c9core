@@ -100,24 +100,11 @@ std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseNode()
 void ProxyMgr::LoadMapRoutingConfig()
 {
     std::lock_guard<std::mutex> lock(_mapRoutingMutex);
-    _mapRouting.clear();
-
-    uint32 count = sConfigMgr->GetOption<uint32>("MapRouting.Count", 0);
-    for (uint32 i = 1; i <= count; ++i)
-    {
-        uint32 mapId  = static_cast<uint32>(sConfigMgr->GetOption<int32>(
-            "MapRouting." + std::to_string(i) + ".MapId", -1));
-        uint8  nodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>(
-            "MapRouting." + std::to_string(i) + ".NodeId", 0));
-        if (mapId == static_cast<uint32>(-1) || nodeId == 0)
-            continue;
-        _mapRouting[mapId] = nodeId;
-        LOG_INFO("proxy", "ProxyMgr: MapRouting  map {} → node {}", mapId, nodeId);
-    }
-
-    _defaultNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("MapRouting.DefaultNode", 0));
-    LOG_INFO("proxy", "ProxyMgr: MapRouting loaded {} entries, default node={}",
-             _mapRouting.size(), _defaultNodeId);
+    // Static per-map entries are now populated dynamically via RegisterNodeMaps()
+    // at node registration time. We only load the default fallback node here.
+    _defaultNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("Cluster.MapRouting.Default", 0));
+    LOG_INFO("proxy", "ProxyMgr: MapRouting default node={} (routes populated dynamically at node registration)",
+             _defaultNodeId);
 }
 
 uint8 ProxyMgr::GetNodeForMap(uint32 mapId) const
@@ -1026,4 +1013,16 @@ void ProxyMgr::BroadcastUnitUpdate(uint8 sourceNodeId, uint16 payloadLen, std::v
     msg.push_back(static_cast<uint8>(payloadLen >> 8));
     msg.insert(msg.end(), payload.begin(), payload.end());
     BroadcastToOtherNodes(msg, sourceNodeId);
+}
+
+// ── Dynamic map routing (populated at node registration) ─────────────────────
+
+void ProxyMgr::RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps)
+{
+    std::lock_guard<std::mutex> lock(_mapRoutingMutex);
+    for (uint32 mapId : maps)
+    {
+        _mapRouting[mapId] = nodeId;
+        LOG_INFO(proxy, ProxyMgr: Dynamic routing map {} → node {}, mapId, nodeId);
+    }
 }

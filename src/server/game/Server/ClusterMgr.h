@@ -95,6 +95,7 @@ public:
     /// Returns true if mapId is handled locally by this node.
     /// Always true when ClusterServer.Maps is empty.
     bool IsMapLocal(uint32 mapId) const;
+    std::unordered_set<uint32> GetLocalMaps() const;
 
     // ── Cross-node group invite state ─────────────────────────────────────────
 

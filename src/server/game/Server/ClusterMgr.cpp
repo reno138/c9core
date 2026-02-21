@@ -229,3 +229,9 @@ bool ClusterMgr::GetUnitState(uint64 guid, ClusterUnitState& out) const
     out = it->second;
     return true;
 }
+
+std::unordered_set<uint32> ClusterMgr::GetLocalMaps() const
+{
+    std::lock_guard<std::mutex> lock(_localMapsMutex);
+    return _localMaps;  // empty means "all maps local" — caller handles this
+}
