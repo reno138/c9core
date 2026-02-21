@@ -234,6 +234,8 @@ void ProxyClient::ParseIncoming()
                     case MSG_CLUSTER_LFG_RELAY:      _inParseState = InParseState::ReadLFGRelayHeader;   break;
                     case MSG_CLUSTER_LFG_RELAY_RESP: _inParseState = InParseState::ReadLFGRelayRespHeader;break;
                     case MSG_CLUSTER_UNIT_UPDATE:    _inParseState = InParseState::ReadUnitUpdateLen;     break;
+                    case MSG_PING:                   _inParseState = InParseState::ReadPingTimestamp;    break;
+                    case MSG_PONG:                   /* proxy echoes ignored */ break;
                     default:
                         LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming message type 0x{:02X}", msgType);
                         _accumBuf.clear(); // desync — drop buffer, reconnect
