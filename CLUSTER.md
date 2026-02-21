@@ -46,6 +46,7 @@ WoW Client D ──┘          ├──► worldserver node 2 :8087
 | Cross-node group updates/disband | ✅ | Broadcast to all member nodes |
 | LFG dungeon finder across nodes | ✅ | Master-node model; see below |
 | Player reroute to instance server | ✅ | Proxy rewrites TCP session |
+| Cross-node party HP/mana/auras | ✅ | 2s heartbeat + event-driven (Phase 7) |
 | Seeing other players (world presence) | ❌ by design | Nodes are separate map layers |
 | Cross-node raid browser (LFR) | ❌ | Not implemented |
 
@@ -253,6 +254,8 @@ All control-channel messages are binary over TCP. No framing beyond the message 
 | `0x08` MSG_CLUSTER_GROUP_DISBAND | node → proxy → all | `type(1) + group_guid(8)` |
 | `0x09` MSG_CLUSTER_LFG_RELAY | non-master → proxy → master | `type(1) + len(2) + inner_type(1) + payload` |
 | `0x0A` MSG_CLUSTER_LFG_RELAY_RESP | master → proxy → node | `type(1) + target_node(1) + len(2) + inner_type(1) + payload` |
+| `0x0B` MSG_REROUTE_TO_MAP | node → proxy | `type(1) + guid(8) + map_id(4)` |
+| `0x0C` MSG_CLUSTER_UNIT_UPDATE | node → proxy → all others | `type(1) + payload_len(2) + guid(8) + status(2) + hp(4) + maxHp(4) + pwrType(1) + pwr(2) + maxPwr(2) + level(2) + zone(2) + auraMask(8) + [spellId(4)+flags(1)]xN` |
 
 `0x06` inner types: `0x01` GROUP_INVITE, `0x02` GROUP_INVITE_RESULT
 `0x09`/`0x0A` inner types: `0x01` LFG_JOIN, `0x02` LFG_LEAVE, `0x03` LFG_PROPOSAL_RESULT, `0x11` LFG_MATCH_NOTIFY
