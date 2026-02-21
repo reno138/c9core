@@ -141,7 +141,7 @@ private:
     static constexpr std::size_t REGISTER_PAYLOAD_SIZE    = 5; ///< uint8 + uint16 + uint16 map_count
     static constexpr std::size_t REROUTE_PART1_SIZE       = 9; ///< uint64 + uint8
     static constexpr std::size_t PLAYER_ONLINE_META_SIZE  = 9; ///< uint64 guid + uint8 name_len
-    static constexpr std::size_t PLAYER_ONLINE_TAIL_SIZE  = 9; ///< uint32 zone + uint8×4 + uint8 node_id
+    static constexpr std::size_t PLAYER_ONLINE_TAIL_SIZE  = 8; ///< uint32 zone + uint8×4 (level/class/race/team); nodeId inferred from _nodeId
     static constexpr std::size_t PLAYER_OFFLINE_SIZE      = 8; ///< uint64 guid
     static constexpr std::size_t DELIVER_P1_SIZE         = 10; ///< uint64 guid + uint16 len
     static constexpr std::size_t RELAY_HEADER_SIZE        = 4; ///< uint8 node + uint8 type + uint16 len
