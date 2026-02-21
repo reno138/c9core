@@ -109,18 +109,51 @@ void ControlSocket::ProcessBuffer()
                 break;
             }
 
-            // ── MSG_REGISTER ──────────────────────────────────────────────────
+            // ── MSG_REGISTER (base: type + port + map_count) ─────────────────
             case ParseState::ReadRegister:
             {
                 if (_accumBuffer.GetActiveSize() < REGISTER_PAYLOAD_SIZE)
                     return;
 
                 uint8* p = _accumBuffer.GetReadPointer();
-                uint8  serverType =  p[0];
-                uint16 gamePort   = static_cast<uint16>(p[1]) | (static_cast<uint16>(p[2]) << 8);
+                _serverType = p[0];
+                _gamePort   = static_cast<uint16>(p[1]) | (static_cast<uint16>(p[2]) << 8);
+                _registerMapCount = static_cast<uint16>(p[3]) | (static_cast<uint16>(p[4]) << 8);
                 _accumBuffer.ReadCompleted(REGISTER_PAYLOAD_SIZE);
 
-                HandleRegister(serverType, gamePort);
+                if (_registerMapCount > 0)
+                    _parseState = ParseState::ReadRegisterMaps;
+                else
+                {
+                    HandleRegister(_serverType, _gamePort, {});
+                    _parseState = ParseState::WaitType;
+                }
+                break;
+            }
+
+            // ── MSG_REGISTER (map list) ───────────────────────────────────────
+            case ParseState::ReadRegisterMaps:
+            {
+                std::size_t need = static_cast<std::size_t>(_registerMapCount) * 4;
+                if (_accumBuffer.GetActiveSize() < need)
+                    return;
+
+                std::vector<uint32> maps;
+                maps.reserve(_registerMapCount);
+                uint8* p = _accumBuffer.GetReadPointer();
+                for (uint16 i = 0; i < _registerMapCount; ++i)
+                {
+                    uint32 mapId = static_cast<uint32>(p[0])
+                                 | (static_cast<uint32>(p[1]) << 8)
+                                 | (static_cast<uint32>(p[2]) << 16)
+                                 | (static_cast<uint32>(p[3]) << 24);
+                    maps.push_back(mapId);
+                    p += 4;
+                }
+                _accumBuffer.ReadCompleted(need);
+
+                HandleRegister(_serverType, _gamePort, std::move(maps));
+                _registerMapCount = 0;
                 _parseState = ParseState::WaitType;
                 break;
             }
@@ -463,7 +496,7 @@ void ControlSocket::SendPing()
     SendRaw(ping);
 }
 
-void ControlSocket::HandleRegister(uint8 serverType, uint16 gamePort)
+void ControlSocket::HandleRegister(uint8 serverType, uint16 gamePort, std::vector<uint32> maps)
 {
     _serverType = serverType;
     _gamePort   = gamePort;
@@ -472,6 +505,10 @@ void ControlSocket::HandleRegister(uint8 serverType, uint16 gamePort)
 
     // Ask ProxyMgr to assign a node ID and track this socket.
     _nodeId = sProxyMgr.RegisterNode(shared_from_this(), serverType, gamePort);
+
+    // Register map routing dynamically (replaces static proxyserver.conf entries for these maps).
+    if (!maps.empty())
+        sProxyMgr.RegisterNodeMaps(_nodeId, maps);
 
     LOG_INFO("proxy.control", "ControlSocket: Backend registered as {} on port {} (node_id={})",
              typeStr, gamePort, _nodeId);

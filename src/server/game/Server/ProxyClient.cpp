@@ -167,12 +167,28 @@ void ProxyClient::AsyncWrite()
 
 void ProxyClient::SendRegister()
 {
-    // MSG_REGISTER: 0x01 | uint8 server_type | uint16 game_port (LE)
-    std::vector<uint8> msg(4);
-    msg[0] = MSG_REGISTER;
-    msg[1] = _serverType;
-    msg[2] = static_cast<uint8>(_gamePort & 0xFF);
-    msg[3] = static_cast<uint8>(_gamePort >> 8);
+    // MSG_REGISTER: 0x01 | uint8 server_type | uint16 game_port (LE) | uint16 map_count | uint32 map_id * n
+    // Map list lets the proxy build dynamic routing without static config.
+    // If ClusterServer.Maps is empty (_localMaps empty), map_count = 0 (no routing update).
+    auto localMaps = sClusterMgr.GetLocalMaps();
+
+    std::vector<uint8> msg;
+    msg.reserve(4 + 2 + localMaps.size() * 4);
+    msg.push_back(MSG_REGISTER);
+    msg.push_back(_serverType);
+    msg.push_back(static_cast<uint8>(_gamePort & 0xFF));
+    msg.push_back(static_cast<uint8>(_gamePort >> 8));
+
+    uint16 mapCount = static_cast<uint16>(localMaps.size());
+    msg.push_back(static_cast<uint8>(mapCount & 0xFF));
+    msg.push_back(static_cast<uint8>(mapCount >> 8));
+    for (uint32 mapId : localMaps)
+    {
+        msg.push_back(static_cast<uint8>(mapId & 0xFF));
+        msg.push_back(static_cast<uint8>((mapId >> 8) & 0xFF));
+        msg.push_back(static_cast<uint8>((mapId >> 16) & 0xFF));
+        msg.push_back(static_cast<uint8>((mapId >> 24) & 0xFF));
+    }
 
     EnqueueRaw(std::move(msg));
 }
@@ -234,6 +250,8 @@ void ProxyClient::ParseIncoming()
                     case MSG_CLUSTER_LFG_RELAY:      _inParseState = InParseState::ReadLFGRelayHeader;   break;
                     case MSG_CLUSTER_LFG_RELAY_RESP: _inParseState = InParseState::ReadLFGRelayRespHeader;break;
                     case MSG_CLUSTER_UNIT_UPDATE:    _inParseState = InParseState::ReadUnitUpdateLen;     break;
+                    case MSG_PING:                   _inParseState = InParseState::ReadPingTimestamp;    break;
+                    case MSG_PONG:                   /* ignore: only proxy sends pong */ break;
                     default:
                         LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming message type 0x{:02X}", msgType);
                         _accumBuf.clear(); // desync — drop buffer, reconnect

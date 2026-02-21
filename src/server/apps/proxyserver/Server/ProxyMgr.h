@@ -115,6 +115,9 @@ public:
     /// Unregister a worldserver when its control socket closes.
     void UnregisterNode(uint8 nodeId);
 
+    /// Register the map IDs a node handles; populates dynamic routing table.
+    void RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const\& maps);
+
     // ── nodemgr daemon registry ────────────────────────────────────────────────
 
     /// Register a nodemgr connection; return the node ID it will manage.

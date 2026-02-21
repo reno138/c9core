@@ -107,7 +107,7 @@ private:
     void ProcessBuffer();
 
     // ── Message handlers ──────────────────────────────────────────────────────
-    void HandleRegister(uint8 serverType, uint16 gamePort);
+    void HandleRegister(uint8 serverType, uint16 gamePort, std::vector<uint32> maps);
     void HandleReroute(uint64 guid, std::string const& address, uint16 port);
     void HandlePlayerOnline();
     void HandlePlayerOffline(uint64 guid);
@@ -138,7 +138,7 @@ private:
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
 
     // ── Fixed payload sizes ───────────────────────────────────────────────────
-    static constexpr std::size_t REGISTER_PAYLOAD_SIZE    = 3; ///< uint8 + uint16
+    static constexpr std::size_t REGISTER_PAYLOAD_SIZE    = 5; ///< uint8 + uint16 + uint16 map_count
     static constexpr std::size_t REROUTE_PART1_SIZE       = 9; ///< uint64 + uint8
     static constexpr std::size_t PLAYER_ONLINE_META_SIZE  = 9; ///< uint64 guid + uint8 name_len
     static constexpr std::size_t PLAYER_ONLINE_TAIL_SIZE  = 9; ///< uint32 zone + uint8×4 + uint8 node_id
@@ -158,6 +158,7 @@ private:
     {
         WaitType,
         ReadRegister,
+        ReadRegisterMaps,       ///< map_count * 4 bytes: uint32 map_id[]
         ReadRerouteP1,
         ReadRerouteP2,
         ReadPlayerOnlineMeta,   ///< 9 bytes: guid + name_len
@@ -210,6 +211,7 @@ private:
     /// Server info learned from MSG_REGISTER.
     uint8  _serverType{ 0xFF };
     uint16 _gamePort{ 0 };
+    uint16 _registerMapCount{ 0 };  ///< number of map IDs still to read from MSG_REGISTER
     uint8  _nodeId{ 0 };         ///< Assigned by ProxyMgr on MSG_REGISTER; 0 = unregistered.
 };
 
