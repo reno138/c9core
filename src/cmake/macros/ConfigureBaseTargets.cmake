@@ -23,6 +23,8 @@ message(STATUS "Enabled С++20 standard")
 # Set build-directive (used in core to tell which buildtype we used)
 target_compile_definitions(acore-compile-option-interface
   INTERFACE
+    C9_BUILD_TYPE="$<CONFIG>"
+    C9_BUILD_HAS_DEBUG_INFO=$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>
     AC_BUILD_TYPE="$<CONFIG>"
     AC_BUILD_HAS_DEBUG_INFO=$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>)
 

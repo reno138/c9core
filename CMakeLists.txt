@@ -38,7 +38,8 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH 1)
 # Export compile commands for IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(AC_PATH_ROOT "${CMAKE_SOURCE_DIR}")
+set(C9_PATH_ROOT "${CMAKE_SOURCE_DIR}")
+set(AC_PATH_ROOT "${CMAKE_SOURCE_DIR}") # backward compat alias
 
 # set macro-directory
 list(APPEND CMAKE_MODULE_PATH

@@ -28,37 +28,37 @@
 @ACORE_SCRIPTS_FORWARD_DECL@
 #ifdef ACORE_IS_DYNAMIC_SCRIPTLOADER
 #  include "revision.h"
-#  define AC_SCRIPT_API AC_API_EXPORT
+#  define C9_SCRIPT_API AC_API_EXPORT
 extern "C" {
 
 /// Exposed in script modules to return the script module revision hash.
-AC_SCRIPT_API char const* GetScriptModuleRevisionHash()
+C9_SCRIPT_API char const* GetScriptModuleRevisionHash()
 {
     return _HASH;
 }
 
 /// Exposed in script module to return the name of the script module
 /// contained in this shared library.
-AC_SCRIPT_API char const* GetScriptModule()
+C9_SCRIPT_API char const* GetScriptModule()
 {
     return "@ACORE_CURRENT_SCRIPT_PROJECT@";
 }
 
 #else
 #  include "ScriptLoader.h"
-#  define AC_SCRIPT_API
+#  define C9_SCRIPT_API
 #endif
 
 /// Exposed in script modules to register all scripts to the ScriptMgr.
-AC_SCRIPT_API void AddScripts()
+C9_SCRIPT_API void AddScripts()
 {
     // Default scripts
 @ACORE_SCRIPTS_INVOKE@}
 
 /// Exposed in script modules to get the build directive of the module.
-AC_SCRIPT_API char const* GetBuildDirective()
+C9_SCRIPT_API char const* GetBuildDirective()
 {
-    return AC_BUILD_TYPE;
+    return C9_BUILD_TYPE;
 }
 
 #ifdef ACORE_IS_DYNAMIC_SCRIPTLOADER

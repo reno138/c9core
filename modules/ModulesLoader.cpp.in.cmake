@@ -25,38 +25,38 @@
 #include <string>
 
 // Add deprecated api loaders include
-@AC_SCRIPTS_INCLUDES@
+@C9_SCRIPTS_INCLUDES@
 // Includes list
 @ACORE_SCRIPTS_FORWARD_DECL@
 #ifdef ACORE_IS_DYNAMIC_SCRIPTLOADER
 #  include "revision.h"
-#  define AC_MODULES_API AC_API_EXPORT
+#  define C9_MODULES_API AC_API_EXPORT
 extern "C" {
 
 /// Exposed in script module to return the name of the script module
 /// contained in this shared library.
-AC_MODULES_API char const* GetScriptModule()
+C9_MODULES_API char const* GetScriptModule()
 {
     return "@ACORE_CURRENT_SCRIPT_PROJECT@";
 }
 
 #else
 #  include "ModulesScriptLoader.h"
-#  define AC_MODULES_API
+#  define C9_MODULES_API
 #endif
 
 /// Exposed in script modules to register all scripts to the ScriptMgr.
-AC_MODULES_API void AddModulesScripts()
+C9_MODULES_API void AddModulesScripts()
 {
     // Modules
 @ACORE_SCRIPTS_INVOKE@
     // Deprecated api modules
-@AC_SCRIPTS_LIST@}
+@C9_SCRIPTS_LIST@}
 
 /// Exposed in script modules to get the build directive of the module.
-AC_MODULES_API char const* GetModulesBuildDirective()
+C9_MODULES_API char const* GetModulesBuildDirective()
 {
-    return AC_BUILD_TYPE;
+    return C9_BUILD_TYPE;
 }
 
 #ifdef ACORE_IS_DYNAMIC_SCRIPTLOADER

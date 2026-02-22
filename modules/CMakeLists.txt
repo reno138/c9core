@@ -29,25 +29,25 @@ else()
 endif()
 
 # Add support old api modules
-CU_GET_GLOBAL("AC_ADD_SCRIPTS_LIST")
-CU_GET_GLOBAL("AC_ADD_SCRIPTS_INCLUDE")
+CU_GET_GLOBAL("C9_ADD_SCRIPTS_LIST")
+CU_GET_GLOBAL("C9_ADD_SCRIPTS_INCLUDE")
 
-set("AC_SCRIPTS_INCLUDES" "")
-set("AC_MODULE_LIST" "")
-set("AC_SCRIPTS_LIST" "")
+set("C9_SCRIPTS_INCLUDES" "")
+set("C9_MODULE_LIST" "")
+set("C9_SCRIPTS_LIST" "")
 set(MOD_ALE_FOUND 0)
 set(MOD_ALE_PATH "")
 
-foreach(include ${AC_ADD_SCRIPTS_INCLUDE})
-  set("AC_SCRIPTS_INCLUDES" "#include \"${include}\"\n${AC_SCRIPTS_INCLUDES}")
+foreach(include ${C9_ADD_SCRIPTS_INCLUDE})
+  set("C9_SCRIPTS_INCLUDES" "#include \"${include}\"\n${C9_SCRIPTS_INCLUDES}")
 endforeach()
 
-foreach(void ${AC_ADD_SCRIPTS_LIST})
-  set("AC_MODULE_LIST" "void ${void};\n${AC_MODULE_LIST}")
+foreach(void ${C9_ADD_SCRIPTS_LIST})
+  set("C9_MODULE_LIST" "void ${void};\n${C9_MODULE_LIST}")
 endforeach()
 
-foreach(scriptName ${AC_ADD_SCRIPTS_LIST})
-  set("AC_SCRIPTS_LIST" "    ${scriptName};\n${AC_SCRIPTS_LIST}")
+foreach(scriptName ${C9_ADD_SCRIPTS_LIST})
+  set("C9_SCRIPTS_LIST" "    ${scriptName};\n${C9_SCRIPTS_LIST}")
 endforeach()
 
 function(ConfigureALEModule moduleName)
@@ -72,7 +72,7 @@ foreach(SOURCE_MODULE ${MODULES_MODULE_LIST})
   endif()
 
   # Use only static for deprecated api loaders
-  if (AC_SCRIPTS_INCLUDES MATCHES "${SOURCE_MODULE}")
+  if (C9_SCRIPTS_INCLUDES MATCHES "${SOURCE_MODULE}")
     set(${MODULE_MODULE_VARIABLE} "static")
   endif()
 
@@ -195,7 +195,7 @@ foreach(SOURCE_MODULE ${MODULES_MODULE_LIST})
       CollectIncludeDirectories(${MODULE_SOURCE_PATH} PUBLIC_INCLUDES)
 
       # Skip deprecated api loaders
-      if (AC_SCRIPTS_INCLUDES MATCHES "${SOURCE_MODULE}")
+      if (C9_SCRIPTS_INCLUDES MATCHES "${SOURCE_MODULE}")
         message("> Module (${SOURCE_MODULE}) using deprecated loader api")
         continue()
       endif()

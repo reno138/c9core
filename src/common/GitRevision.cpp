@@ -65,41 +65,41 @@ char const* GitRevision::GetMySQLExecutable()
 
 #if AC_PLATFORM == AC_PLATFORM_WINDOWS
 #  ifdef _WIN64
-#    define AZEROTH_PLATFORM_STR "Win64"
+#    define C9_PLATFORM_STR "Win64"
 #  else
-#    define AZEROTH_PLATFORM_STR "Win32"
+#    define C9_PLATFORM_STR "Win32"
 #  endif
 #else // AC_PLATFORM
-#  define AZEROTH_PLATFORM_STR "Unix"
+#  define C9_PLATFORM_STR "Unix"
 #endif
 
 #ifndef ACORE_API_USE_DYNAMIC_LINKING
-#  define ACORE_LINKAGE_TYPE_STR "Static"
+#  define C9_LINKAGE_TYPE_STR "Static"
 #else
-#  define ACORE_LINKAGE_TYPE_STR "Dynamic"
+#  define C9_LINKAGE_TYPE_STR "Dynamic"
 #endif
 
 char const* GitRevision::GetFullVersion()
 {
-    return AC_COMPANYNAME_STR " rev. " AC_PRODUCTVERSION_STR " (" AZEROTH_PLATFORM_STR ", " AC_BUILD_TYPE ", " ACORE_LINKAGE_TYPE_STR ")"; // cppcheck-suppress unknownMacro
+    return C9_COMPANYNAME_STR " rev. " C9_PRODUCTVERSION_STR " (" C9_PLATFORM_STR ", " C9_BUILD_TYPE ", " C9_LINKAGE_TYPE_STR ")"; // cppcheck-suppress unknownMacro
 }
 
 char const* GitRevision::GetCompanyNameStr()
 {
-    return AC_COMPANYNAME_STR;
+    return C9_COMPANYNAME_STR;
 }
 
 char const* GitRevision::GetLegalCopyrightStr()
 {
-    return AC_LEGALCOPYRIGHT_STR;
+    return C9_LEGALCOPYRIGHT_STR;
 }
 
 char const* GitRevision::GetFileVersionStr()
 {
-    return AC_FILEVERSION_STR;
+    return C9_FILEVERSION_STR;
 }
 
 char const* GitRevision::GetProductVersionStr()
 {
-    return AC_PRODUCTVERSION_STR;
+    return C9_PRODUCTVERSION_STR;
 }
