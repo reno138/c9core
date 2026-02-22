@@ -131,6 +131,21 @@
  *    uint32 instanceId, uint32 bgTypeId, uint32 mapId, uint32 clientInstanceId
  *    uint8 count
  *    [per player: uint64 guid + uint8 teamId]
+ *
+ *  --- Worldserver → Proxy (periodic status updates on cluster.proxy) ---
+ *
+ *  MSG_NODE_STATUS (0x19):  node → proxy every 10s
+ *    uint32 playerCount        — active WorldSession count on this node
+ *    uint32 natsBytesTx        — NATS control bytes published since last heartbeat
+ *    uint32 natsBytesRx        — NATS control bytes received since last heartbeat
+ *
+ *  MSG_NODE_REFRESH (0x1A):  node → proxy every 5 minutes (full state sync)
+ *    uint8  server_type
+ *    uint16 game_port
+ *    uint16 map_count
+ *    uint32 map_id[map_count]
+ *    uint8  addr_len
+ *    char   addr[addr_len]
  */
 
 namespace ClusterMsg
@@ -159,6 +174,8 @@ namespace ClusterMsg
     static constexpr uint8 CLUSTER_ARENA_RESULT    = 0x16;
     static constexpr uint8 CLUSTER_BG_INST_CREATED = 0x17; ///< instance node → proxy
     static constexpr uint8 CLUSTER_BG_READY        = 0x18; ///< proxy → player nodes
+    static constexpr uint8 NODE_STATUS             = 0x19; ///< node → proxy: player count + NATS bandwidth (every 10s)
+    static constexpr uint8 NODE_REFRESH            = 0x1A; ///< node → proxy: full port/map re-registration (every 5min)
 }
 
 #endif // ClusterMessages_h__

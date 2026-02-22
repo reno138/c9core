@@ -292,17 +292,26 @@ uint8 ProxyMgr::RegisterNode(uint8 serverType, uint16 gamePort,
         // Match by peer IP first — handles multiple nodes sharing the same game port.
         // IP match always wins even if the slot was previously occupied (worldserver
         // may have restarted after a crash without the proxy detecting the disconnect).
-        for (auto const& [nodeId, addrPort] : _nodeAddresses)
+        for (auto& [nodeId, addrPort] : _nodeAddresses)
         {
             if (!peerIp.empty() && addrPort.first == peerIp)
             {
                 bool wasOnline = _registeredNodeIds.count(nodeId) > 0;
                 _registeredNodeIds.insert(nodeId);
                 _nodeServerTypes[nodeId] = serverType;
+                // Update port from what the worldserver actually registered with —
+                // the static config may have a placeholder port that differs from
+                // the worldserver's real WorldServer.Port (which is always 8086 on
+                // all our nodes).
+                addrPort.second = gamePort;
                 if (_nodeStatus.count(nodeId))
+                {
                     _nodeStatus[nodeId].state = NodeState::Running;
-                LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={}){}",
-                         serverType == 0 ? "Worldserver" : "Instance-server", nodeId, gamePort,
+                    _nodeStatus[nodeId].port  = gamePort;
+                }
+                LOG_INFO("proxy", "ProxyMgr: {} node {} online ({}:{}){}",
+                         serverType == 0 ? "Worldserver" : "Instance-server", nodeId,
+                         peerIp, gamePort,
                          wasOnline ? " [re-registered after restart]" : "");
                 assignedNodeId = nodeId;
                 break;
@@ -323,10 +332,14 @@ uint8 ProxyMgr::RegisterNode(uint8 serverType, uint16 gamePort,
             assignedNodeId = _nextNodeId++;
             _registeredNodeIds.insert(assignedNodeId);
             _nodeServerTypes[assignedNodeId] = serverType;
+            _nodeAddresses[assignedNodeId] = { peerIp, gamePort };
             if (_nodeStatus.count(assignedNodeId))
+            {
                 _nodeStatus[assignedNodeId].state = NodeState::Running;
-            LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={}, peerIp={}, assigned)",
-                     serverType == 0 ? "Worldserver" : "Instance-server", assignedNodeId, gamePort, peerIp);
+                _nodeStatus[assignedNodeId].port  = gamePort;
+            }
+            LOG_INFO("proxy", "ProxyMgr: {} node {} online ({}:{}, dynamically assigned)",
+                     serverType == 0 ? "Worldserver" : "Instance-server", assignedNodeId, peerIp, gamePort);
         }
     } // _nodeMutex released before RegisterNodeMaps + PushStatusToSubscribers
 
@@ -335,6 +348,77 @@ uint8 ProxyMgr::RegisterNode(uint8 serverType, uint16 gamePort,
 
     PushStatusToSubscribers();
     return assignedNodeId;
+}
+
+void ProxyMgr::HandleNodeStatus(uint8 nodeId, uint32 playerCount, uint32 natsBytesTx, uint32 natsBytesRx)
+{
+    {
+        std::lock_guard<std::mutex> lock(_nodeMutex);
+        _nodePlayerCounts[nodeId] = playerCount;
+        if (_nodeStatus.count(nodeId))
+        {
+            _nodeStatus[nodeId].playerCount       = playerCount;
+            _nodeStatus[nodeId].natsBytesTxPer10s = natsBytesTx;
+            _nodeStatus[nodeId].natsBytesRxPer10s = natsBytesRx;
+        }
+    }
+    LOG_DEBUG("proxy", "ProxyMgr: Node {} status: players={} nats_tx={}B nats_rx={}B",
+              nodeId, playerCount, natsBytesTx, natsBytesRx);
+    PushStatusToSubscribers();
+}
+
+void ProxyMgr::HandleNodeRefresh(uint8 nodeId, uint8 const* payload, std::size_t len)
+{
+    // Payload mirrors MSG_REGISTER: [serverType:1][gamePort:2][mapCount:2][mapIds:4*n][addrLen:1][addr:n]
+    if (len < 5)
+        return;
+
+    // uint8 serverType = payload[0]; // currently unused in refresh
+    uint16 gamePort;
+    std::memcpy(&gamePort, payload + 1, 2);
+    uint16 mapCount;
+    std::memcpy(&mapCount, payload + 3, 2);
+
+    if (mapCount > 128)
+        mapCount = 128;
+
+    std::vector<uint32> maps;
+    maps.reserve(mapCount);
+    std::size_t off = 5;
+    for (uint16 i = 0; i < mapCount; ++i)
+    {
+        if (off + 4 > len)
+            break;
+        uint32 mapId;
+        std::memcpy(&mapId, payload + off, 4);
+        if (mapId <= 720)
+            maps.push_back(mapId);
+        off += 4;
+    }
+
+    if (off >= len)
+        return;
+    uint8 addrLen = payload[off++];
+    if (off + addrLen > len)
+        return;
+    std::string addr(reinterpret_cast<char const*>(payload + off), addrLen);
+
+    {
+        std::lock_guard<std::mutex> lock(_nodeMutex);
+        auto it = _nodeAddresses.find(nodeId);
+        if (it != _nodeAddresses.end())
+        {
+            it->second.second = gamePort;
+            if (_nodeStatus.count(nodeId))
+                _nodeStatus[nodeId].port = gamePort;
+        }
+    }
+
+    if (!maps.empty())
+        RegisterNodeMaps(nodeId, maps);
+
+    LOG_DEBUG("proxy", "ProxyMgr: Node {} refresh: port={} maps={}",
+              nodeId, gamePort, maps.size());
 }
 
 void ProxyMgr::UnregisterNode(uint8 nodeId)

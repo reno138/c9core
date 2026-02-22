@@ -19,6 +19,7 @@
 #define ProxyClient_h__
 
 #include "Define.h"
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -152,6 +153,10 @@ public:
     /// @return true if an instance server is available; false if none or disconnected.
     bool QueryBestInstanceAddress(std::string& outAddr, uint16& outPort);
 
+    /// Periodic housekeeping — call from World::Update() every world tick.
+    /// Sends MSG_NODE_STATUS every 10s and MSG_NODE_REFRESH every 5min.
+    void Update();
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid
@@ -178,6 +183,12 @@ private:
     // ── NATS publish helper ───────────────────────────────────────────────────
     /// Prepend [nodeId][msgType] header and publish to "cluster.proxy".
     void PublishToProxy(uint8 msgType, uint8 const* payload, int payloadLen);
+
+    /// Send MSG_NODE_STATUS (player count + NATS bandwidth) to the proxy.
+    void SendNodeStatus();
+
+    /// Send MSG_NODE_REFRESH (full port/map re-registration) to the proxy.
+    void SendNodeRefresh();
 
     // ── Incoming message handlers (called from NATS dispatch thread via QueueCallback) ──
     void HandleRemotePlayerOnline(std::vector<uint8> const& payload);
@@ -225,6 +236,8 @@ private:
     static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16;
     static constexpr uint8 MSG_CLUSTER_BG_INST_CREATED = 0x17;
     static constexpr uint8 MSG_CLUSTER_BG_READY        = 0x18;
+    static constexpr uint8 MSG_NODE_STATUS             = 0x19;
+    static constexpr uint8 MSG_NODE_REFRESH            = 0x1A;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
@@ -239,6 +252,14 @@ private:
     std::string _natsUrl;
 
     bool _connected{ false };
+
+    // ── Periodic update timers ────────────────────────────────────────────────
+    uint32 _lastHeartbeatMs{ 0 }; ///< getMSTime() at last MSG_NODE_STATUS send
+    uint32 _lastRefreshMs{ 0 };   ///< getMSTime() at last MSG_NODE_REFRESH send
+
+    // ── NATS bandwidth counters (reset after each MSG_NODE_STATUS) ────────────
+    std::atomic<uint32> _natsBytesTx{ 0 }; ///< bytes published via NATS since last heartbeat
+    std::atomic<uint32> _natsBytesRx{ 0 }; ///< bytes received via NATS since last heartbeat
 };
 
 #define sProxyClient ProxyClient::Instance()

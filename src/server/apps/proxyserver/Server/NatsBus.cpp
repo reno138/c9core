@@ -458,6 +458,24 @@ void NatsBus::OnClusterProxyMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
             sProxyMgr.BroadcastArenaResult(nodeId, pl, payload);
             break;
         }
+        // ── MSG_NODE_STATUS (0x19) — 10s player count + NATS bandwidth ──────────
+        case ClusterMsg::NODE_STATUS:
+        {
+            if (rem < 12) break;
+            uint32 playerCount, natsBytesTx, natsBytesRx;
+            std::memcpy(&playerCount, p,     4);
+            std::memcpy(&natsBytesTx, p + 4, 4);
+            std::memcpy(&natsBytesRx, p + 8, 4);
+            sProxyMgr.HandleNodeStatus(nodeId, playerCount, natsBytesTx, natsBytesRx);
+            break;
+        }
+        // ── MSG_NODE_REFRESH (0x1A) — 5min full port/map re-registration ────────
+        case ClusterMsg::NODE_REFRESH:
+        {
+            if (rem < 5) break;
+            sProxyMgr.HandleNodeRefresh(nodeId, p, rem);
+            break;
+        }
         default:
             LOG_WARN("proxy.nats", "NatsBus: Unknown msgType 0x{:02X} from node {}", msgType, nodeId);
             break;

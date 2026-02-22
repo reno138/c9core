@@ -36,6 +36,7 @@
 #include "Opcodes.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "WorldSessionMgr.h"
 #include <chrono>
 #include <cstring>
 #include <shared_mutex>
@@ -162,6 +163,8 @@ void ProxyClient::PublishToProxy(uint8 msgType, uint8 const* payload, int payloa
     natsStatus s = natsConnection_Publish(_nc, "cluster.proxy", buf.data(), static_cast<int>(buf.size()));
     if (s != NATS_OK)
         LOG_WARN("server.worldserver", "ProxyClient: Publish to cluster.proxy failed — {}", natsStatus_GetText(s));
+    else
+        _natsBytesTx.fetch_add(static_cast<uint32>(buf.size()), std::memory_order_relaxed);
 }
 
 // ── Incoming NATS message dispatcher ─────────────────────────────────────────
@@ -183,6 +186,7 @@ void ProxyClient::OnNatsMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
 
     uint8 msgType = d[0];
     std::vector<uint8> payload(d + 1, d + n);
+    self->_natsBytesRx.fetch_add(static_cast<uint32>(n), std::memory_order_relaxed);
     natsMsg_Destroy(msg);
 
     // Marshal to world thread.
@@ -437,6 +441,77 @@ bool ProxyClient::QueryBestInstanceAddress(std::string& outAddr, uint16& outPort
 
     natsMsg_Destroy(reply);
     return ok;
+}
+
+// ── Periodic updates (MSG_NODE_STATUS / MSG_NODE_REFRESH) ────────────────────
+
+void ProxyClient::Update()
+{
+    if (!_connected)
+        return;
+
+    constexpr uint32 HEARTBEAT_INTERVAL_MS = 10 * 1000;        //  10 seconds
+    constexpr uint32 REFRESH_INTERVAL_MS   = 5 * 60 * 1000;    //   5 minutes
+
+    uint32 now = getMSTime();
+
+    if (now - _lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS)
+    {
+        SendNodeStatus();
+        _lastHeartbeatMs = now;
+    }
+
+    if (_lastRefreshMs == 0 || now - _lastRefreshMs >= REFRESH_INTERVAL_MS)
+    {
+        SendNodeRefresh();
+        _lastRefreshMs = now;
+    }
+}
+
+void ProxyClient::SendNodeStatus()
+{
+    uint32 playerCount = static_cast<uint32>(sWorldSessionMgr->GetActiveSessionCount());
+    uint32 natsBytesTx = _natsBytesTx.exchange(0, std::memory_order_relaxed);
+    uint32 natsBytesRx = _natsBytesRx.exchange(0, std::memory_order_relaxed);
+
+    uint8 payload[12];
+    std::memcpy(payload,     &playerCount, 4);
+    std::memcpy(payload + 4, &natsBytesTx, 4);
+    std::memcpy(payload + 8, &natsBytesRx, 4);
+
+    PublishToProxy(MSG_NODE_STATUS, payload, 12);
+    LOG_DEBUG("server.worldserver",
+              "ProxyClient: Sent NODE_STATUS players={} nats_tx={}B nats_rx={}B",
+              playerCount, natsBytesTx, natsBytesRx);
+}
+
+void ProxyClient::SendNodeRefresh()
+{
+    // Mirrors the MSG_REGISTER payload so the proxy can update port + maps.
+    auto localMaps = sClusterMgr.GetLocalMaps();
+    uint16 mapCount = static_cast<uint16>(localMaps.size());
+    uint8  addrLen  = static_cast<uint8>(_gameAddress.size());
+
+    std::vector<uint8> payload;
+    payload.reserve(5 + mapCount * 4 + 1 + addrLen);
+    payload.push_back(_serverType);
+    payload.push_back(static_cast<uint8>(_gamePort & 0xFF));
+    payload.push_back(static_cast<uint8>(_gamePort >> 8));
+    payload.push_back(static_cast<uint8>(mapCount & 0xFF));
+    payload.push_back(static_cast<uint8>(mapCount >> 8));
+    for (uint32 mapId : localMaps)
+    {
+        payload.push_back(static_cast<uint8>(mapId & 0xFF));
+        payload.push_back(static_cast<uint8>((mapId >> 8) & 0xFF));
+        payload.push_back(static_cast<uint8>((mapId >> 16) & 0xFF));
+        payload.push_back(static_cast<uint8>((mapId >> 24) & 0xFF));
+    }
+    payload.push_back(addrLen);
+    payload.insert(payload.end(), _gameAddress.begin(), _gameAddress.end());
+
+    PublishToProxy(MSG_NODE_REFRESH, payload.data(), static_cast<int>(payload.size()));
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Sent NODE_REFRESH (port={} maps={})", _gamePort, mapCount);
 }
 
 // ── Outgoing cluster messages ─────────────────────────────────────────────────

@@ -57,9 +57,12 @@ public:
     BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<ProxySocket> owner);
 
     /// Reroute constructor: proxy handles the auth handshake autonomously, then relays.
+    /// @param clientIp  Real client IP address; appended as null-terminated string after addon
+    ///                  data in CMSG_AUTH_SESSION so the backend (ProxyServer.Enable=1) sees the
+    ///                  correct peer address instead of the proxy's IP.
     BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<ProxySocket> owner,
                    std::string accountName, SessionKey const& sessionKey,
-                   uint32 realmId, uint64 playerGuid);
+                   uint32 realmId, uint64 playerGuid, std::string clientIp);
 
     ~BackendSession();
 
@@ -115,6 +118,7 @@ private:
     SessionKey  _sessionKey;
     uint32      _realmId{ 0 };
     uint64      _playerGuid{ 0 };
+    std::string _clientIp;   ///< Real client IP — appended to CMSG_AUTH_SESSION for ProxyServer.Enable backends.
 
     /// Opcode constants used for reroute handshake interception.
     static constexpr uint16 SMSG_AUTH_CHALLENGE_OPCODE = 0x1EC;

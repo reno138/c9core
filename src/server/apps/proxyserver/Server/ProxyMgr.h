@@ -95,6 +95,8 @@ struct NodeStatus
     std::string address;
     uint16    port{ 0 };
     uint32    latencyMs{ 0 };   ///< Control-channel RTT in ms (0 = not measured yet)
+    uint32    natsBytesTxPer10s{ 0 }; ///< NATS control bytes TX per 10s (reported by node)
+    uint32    natsBytesRxPer10s{ 0 }; ///< NATS control bytes RX per 10s (reported by node)
 };
 
 /**
@@ -162,6 +164,14 @@ public:
 
     /// Send MSG_NODE_STOP to the nodemgr for a given node.
     void StopNode(uint8 nodeId);
+
+    /// Handle a periodic 10s status report from a worldserver node.
+    /// Updates player count and NATS bandwidth stats in the NodeStatus table.
+    void HandleNodeStatus(uint8 nodeId, uint32 playerCount, uint32 natsBytesTx, uint32 natsBytesRx);
+
+    /// Handle a periodic 5-minute full refresh from a worldserver node.
+    /// Re-parses registration payload (port + maps) and updates routing without reassigning nodeId.
+    void HandleNodeRefresh(uint8 nodeId, uint8 const* payload, std::size_t len);
 
     // ── Management subscribers (clustermgr) ────────────────────────────────────
 

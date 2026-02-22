@@ -36,7 +36,7 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
 
 BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<ProxySocket> owner,
                                std::string accountName, SessionKey const& sessionKey,
-                               uint32 realmId, uint64 playerGuid)
+                               uint32 realmId, uint64 playerGuid, std::string clientIp)
     : _owner(std::move(owner))
     , _socket(static_cast<boost::asio::io_context&>(ioContext))
     , _resolver(static_cast<boost::asio::io_context&>(ioContext))
@@ -49,6 +49,7 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
     , _sessionKey(sessionKey)
     , _realmId(realmId)
     , _playerGuid(playerGuid)
+    , _clientIp(std::move(clientIp))
 {
 }
 
@@ -322,9 +323,11 @@ void BackendSession::HandleAuthChallenge()
     // 6-byte header (size BE + opcode LE) + payload
     // Payload: uint32 build | uint32 serverId | string account\0 | uint32 serverType |
     //          uint8[4] clientSeed | uint32 region | uint32 battlegroup | uint32 realmId |
-    //          uint64 dosResponse | uint8[20] digest | uint32 addonLen(0)
+    //          uint64 dosResponse | uint8[20] digest | uint32 addonLen(0) |
+    //          string realClientIp\0  ← extra suffix read by backends with ProxyServer.Enable=1
+    uint32 ipSuffixLen = static_cast<uint32>(_clientIp.size()) + 1; // +1 for null terminator
     uint32 payloadSize = 4 + 4 + static_cast<uint32>(_accountName.size()) + 1
-                       + 4 + 4 + 4 + 4 + 4 + 8 + 20 + 4;
+                       + 4 + 4 + 4 + 4 + 4 + 8 + 20 + 4 + ipSuffixLen;
     uint16 sizeField = static_cast<uint16>(payloadSize + 4); // +4 for the 4-byte opcode field
 
     std::vector<uint8> msg;
@@ -359,9 +362,12 @@ void BackendSession::HandleAuthChallenge()
     for (int i = 0; i < 8; ++i) msg.push_back(0); // DosResponse (uint64 = 0)
     msg.insert(msg.end(), digest, digest + 20);
     pushU32(0);                  // AddonInfo size (no addons)
+    // Real client IP suffix — read by backends with ProxyServer.Enable=1 to override peer address.
+    msg.insert(msg.end(), _clientIp.begin(), _clientIp.end());
+    msg.push_back(0);            // null terminator
 
-    LOG_DEBUG("proxy", "BackendSession: Sending CMSG_AUTH_SESSION to instance server for '{}'",
-              _accountName);
+    LOG_DEBUG("proxy", "BackendSession: Sending CMSG_AUTH_SESSION to backend for '{}' (realIp={})",
+              _accountName, _clientIp);
 
     SendRaw(msg);
     _handshakeState = HandshakeState::WaitResponse;

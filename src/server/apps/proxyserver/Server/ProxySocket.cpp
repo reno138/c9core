@@ -335,7 +335,8 @@ void ProxySocket::RerouteToBackend(std::string const& address, uint16 port)
     _pendingBackend = std::make_shared<BackendSession>(
         sProxySocketMgr.GetIoContext(),
         shared_from_this(),
-        _accountName, _sessionKey, _realmId, _playerGuid);
+        _accountName, _sessionKey, _realmId, _playerGuid,
+        GetRemoteIpAddress().to_string());
 
     _pendingBackend->Connect(address, port);
 }
