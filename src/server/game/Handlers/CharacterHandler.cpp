@@ -815,6 +815,8 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         && !sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
     {
         uint32 const mapId = pCurrChar->GetMapId();
+        // LoadFromDB applied auras; remove them before deleting to satisfy Unit::~Unit assertion.
+        pCurrChar->RemoveAllAuras();
         SetPlayer(nullptr);         // LoadFromDB set _player; clear it before delete
         delete pCurrChar;
         m_playerLoading = false;
