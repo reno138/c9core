@@ -1598,8 +1598,20 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // Player position is already set to teleportStore_dest (set above).
-                // Save to DB so the target node can load the character at this position.
+                // If the player is riding a transport, detach them cleanly before
+                // saving. Without this the destination node would re-board the player
+                // on a transport that only exists on the origin node, causing the
+                // transport to fire DelayedTeleportTransport → crash on the dest node.
+                if (m_transport)
+                    m_transport->RemovePassenger(this);
+
+                // Set the far-teleport semaphore BEFORE SaveToDB so _SaveCharacter
+                // uses teleportStore_dest (the correct destination map/position)
+                // instead of the stale pre-teleport GetMapId()/GetPosition values.
+                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
+
+                // Save to DB so the target node can load the character at the
+                // destination map and position (teleportStore_dest set above).
                 SaveToDB(false, false);
 
                 // Ask the proxy to reroute this player to whichever node handles mapid.
@@ -1624,7 +1636,6 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     }
                 }
 
-                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
                 return true;
             }
 
