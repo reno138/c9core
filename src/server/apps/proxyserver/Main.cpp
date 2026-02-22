@@ -38,8 +38,8 @@
 #include "OpenSSLCrypto.h"
 #include "ProcessPriority.h"
 #include "SharedDefines.h"
-#include "ControlSocketMgr.h"
 #include "ManagementSocketMgr.h"
+#include "NatsBus.h"
 #include "NodeMgrSocketMgr.h"
 #include "ProxyMgr.h"
 #include "ProxySocketMgr.h"
@@ -144,20 +144,15 @@ int main(int argc, char** argv)
 
     std::shared_ptr<void> proxyNetHandle(nullptr, [](void*) { sProxySocketMgr.StopNetwork(); });
 
-    int32 controlPort = sConfigMgr->GetOption<int32>("ControlPort", 8090);
-    if (controlPort < 0 || controlPort > 0xFFFF)
+    // ── NATS control channel ──────────────────────────────────────────────────
+    std::string natsUrl = sConfigMgr->GetOption<std::string>("NatsServer.URL", "nats://127.0.0.1:4222");
+    sNatsBus.Initialize(natsUrl);
+    if (!sNatsBus.IsConnected())
     {
-        LOG_ERROR("server.proxyserver", "Specified ControlPort out of allowed range (1-65535)");
+        LOG_ERROR("server.proxyserver", "Failed to connect to NATS server at {} — check that nats-server is running", natsUrl);
         return 1;
     }
-
-    if (!sControlSocketMgr.StartNetwork(*ioContext, bindIp, static_cast<uint16>(controlPort)))
-    {
-        LOG_ERROR("server.proxyserver", "Failed to initialize control channel");
-        return 1;
-    }
-
-    std::shared_ptr<void> controlNetHandle(nullptr, [](void*) { sControlSocketMgr.StopNetwork(); });
+    std::shared_ptr<void> natsHandle(nullptr, [](void*) { sNatsBus.Shutdown(); });
 
     boost::asio::signal_set signals(*ioContext, SIGINT, SIGTERM);
 #if AC_PLATFORM == AC_PLATFORM_WINDOWS
@@ -251,8 +246,8 @@ int main(int argc, char** argv)
     autoScaleTimer->async_wait(autoScaleHandler);
 
     LOG_INFO("server.proxyserver",
-             "Proxy server listening on {}:{} (client) / {}:{} (control) / {}:{} (nodemgr) / {}:{} (mgmt)",
-             bindIp, port, bindIp, controlPort, bindIp, nodeMgrPort, bindIp, mgmtPort);
+             "Proxy server listening on {}:{} (client) / {} (NATS control) / {}:{} (nodemgr) / {}:{} (mgmt)",
+             bindIp, port, natsUrl, bindIp, nodeMgrPort, bindIp, mgmtPort);
 
     ioContext->run();
 

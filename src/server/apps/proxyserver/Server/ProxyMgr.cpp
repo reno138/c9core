@@ -17,9 +17,9 @@
 
 #include "ProxyMgr.h"
 #include "Config.h"
-#include "ControlSocket.h"
 #include "Log.h"
 #include "ManagementSocket.h"
+#include "NatsBus.h"
 #include "NodeMgrSocket.h"
 #include "ProxySocket.h"
 #include <algorithm>
@@ -155,13 +155,12 @@ std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
     if (_nodeAddresses.empty())
         return { 0, "127.0.0.1", 8086 };
 
-    // Collect running worldserver nodes (active ControlSocket, serverType == 0).
+    // Collect running worldserver nodes (registered, serverType == 0).
     // Instance-server nodes (serverType != 0) are excluded from direct player routing.
     std::vector<uint8> running;
     for (auto const& [nodeId, _] : _nodeAddresses)
     {
-        auto it = _nodes.find(nodeId);
-        if (it == _nodes.end() || it->second.expired())
+        if (!_registeredNodeIds.count(nodeId))
             continue;
         auto typeIt = _nodeServerTypes.find(nodeId);
         if (typeIt != _nodeServerTypes.end() && typeIt->second != 0)
@@ -214,9 +213,8 @@ std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseLeastLoadedNode()
 
     for (auto const& [nodeId, addr] : _nodeAddresses)
     {
-        // Only consider active worldserver nodes (not instance servers).
-        auto it = _nodes.find(nodeId);
-        if (it == _nodes.end() || it->second.expired())
+        // Only consider active worldserver nodes (registered, not instance servers).
+        if (!_registeredNodeIds.count(nodeId))
             continue;
         auto typeIt = _nodeServerTypes.find(nodeId);
         if (typeIt != _nodeServerTypes.end() && typeIt->second != 0)
@@ -284,23 +282,21 @@ void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 por
 
 // ── Worldserver node registry ─────────────────────────────────────────────────
 
-uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort,
-                             std::string const& peerIp)
+uint8 ProxyMgr::RegisterNode(uint8 serverType, uint16 gamePort,
+                             std::string const& peerIp, std::vector<uint32> const& maps)
 {
     uint8 assignedNodeId = 0;
     {
         std::lock_guard<std::mutex> lock(_nodeMutex);
 
-        // Match by peer IP first — handles multiple nodes sharing the same WorldServerPort.
-        // Fall back to port-only match for single-machine / localhost setups.
+        // Match by peer IP first — handles multiple nodes sharing the same game port.
         for (auto const& [nodeId, addrPort] : _nodeAddresses)
         {
-            bool ipMatch   = !peerIp.empty() && addrPort.first == peerIp;
-            bool portMatch = addrPort.second == gamePort;
-            bool slotFree  = !_nodes.count(nodeId) || _nodes.at(nodeId).expired();
+            bool ipMatch  = !peerIp.empty() && addrPort.first == peerIp;
+            bool slotFree = !_registeredNodeIds.count(nodeId);
             if (ipMatch && slotFree)
             {
-                _nodes[nodeId]           = socket;
+                _registeredNodeIds.insert(nodeId);
                 _nodeServerTypes[nodeId] = serverType;
                 if (_nodeStatus.count(nodeId))
                     _nodeStatus[nodeId].state = NodeState::Running;
@@ -313,7 +309,7 @@ uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 server
 
         if (assignedNodeId == 0)
         {
-            while (_nextNodeId <= 10 && _nodes.count(_nextNodeId))
+            while (_nextNodeId <= 10 && _registeredNodeIds.count(_nextNodeId))
                 _nextNodeId++;
 
             if (_nextNodeId > 10)
@@ -323,14 +319,18 @@ uint8 ProxyMgr::RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 server
             }
 
             assignedNodeId = _nextNodeId++;
-            _nodes[assignedNodeId]           = socket;
+            _registeredNodeIds.insert(assignedNodeId);
             _nodeServerTypes[assignedNodeId] = serverType;
             if (_nodeStatus.count(assignedNodeId))
                 _nodeStatus[assignedNodeId].state = NodeState::Running;
-            LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={}, assigned)",
-                     serverType == 0 ? "Worldserver" : "Instance-server", assignedNodeId, gamePort);
+            LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={}, peerIp={}, assigned)",
+                     serverType == 0 ? "Worldserver" : "Instance-server", assignedNodeId, gamePort, peerIp);
         }
-    } // _nodeMutex released before PushStatusToSubscribers
+    } // _nodeMutex released before RegisterNodeMaps + PushStatusToSubscribers
+
+    if (!maps.empty())
+        RegisterNodeMaps(assignedNodeId, maps);
+
     PushStatusToSubscribers();
     return assignedNodeId;
 }
@@ -339,7 +339,7 @@ void ProxyMgr::UnregisterNode(uint8 nodeId)
 {
     {
         std::lock_guard<std::mutex> lock(_nodeMutex);
-        _nodes.erase(nodeId);
+        _registeredNodeIds.erase(nodeId);
         _nodeServerTypes.erase(nodeId);
         if (_nodeStatus.count(nodeId))
             _nodeStatus[nodeId].state = NodeState::Stopped;
@@ -371,8 +371,7 @@ void ProxyMgr::UnregisterNode(uint8 nodeId)
         // check that at least one active node exists.
         {
             std::lock_guard<std::mutex> lock(_nodeMutex);
-            hasAlternative = std::any_of(_nodes.begin(), _nodes.end(),
-                [](auto const& kv) { return !kv.second.expired(); });
+            hasAlternative = !_registeredNodeIds.empty();
         }
 
         if (hasAlternative)
@@ -534,8 +533,7 @@ void ProxyMgr::CheckAutoScale()
     uint32 totalPlayers = 0;
     for (auto const& [nodeId, _] : _nodeAddresses)
     {
-        auto it = _nodes.find(nodeId);
-        if (it != _nodes.end() && !it->second.expired())
+        if (_registeredNodeIds.count(nodeId))
         {
             ++runningNodes;
             totalPlayers += _nodePlayerCounts.count(nodeId) ? _nodePlayerCounts.at(nodeId) : 0;
@@ -553,7 +551,7 @@ void ProxyMgr::CheckAutoScale()
         // Find the first configured node that has a nodemgr but no running worldserver.
         for (auto const& [nodeId, _] : _nodeAddresses)
         {
-            bool hasWorldserver = _nodes.count(nodeId) && !_nodes.at(nodeId).expired();
+            bool hasWorldserver = _registeredNodeIds.count(nodeId) > 0;
             bool hasMgr        = _nodeMgrs.count(nodeId) && !_nodeMgrs.at(nodeId).expired();
 
             if (!hasWorldserver && hasMgr)
@@ -576,7 +574,7 @@ void ProxyMgr::CheckAutoScale()
         uint32 fewest = UINT32_MAX;
         for (auto const& [nodeId, _] : _nodeAddresses)
         {
-            bool hasWorldserver = _nodes.count(nodeId) && !_nodes.at(nodeId).expired();
+            bool hasWorldserver = _registeredNodeIds.count(nodeId) > 0;
             bool hasMgr        = _nodeMgrs.count(nodeId) && !_nodeMgrs.at(nodeId).expired();
 
             if (hasWorldserver && hasMgr)
@@ -734,14 +732,19 @@ void ProxyMgr::OnNodePong(uint8 nodeId, uint32 latencyMs)
 
 void ProxyMgr::SendPingsToAllNodes()
 {
-    // Called periodically (e.g. every 5s) to measure control-channel latency.
-    // Each ControlSocket handles its own _pingSentAt timestamp.
+    // Called periodically (every 5s) to measure NATS control-channel latency.
+    // Build MSG_PING with a steady_clock timestamp; nodes echo it back as MSG_PONG.
+    using namespace std::chrono;
+    uint64 nowMs = static_cast<uint64>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+
+    uint8 pingBuf[9];
+    pingBuf[0] = 0x0D; // MSG_PING
+    std::memcpy(pingBuf + 1, &nowMs, 8);
+
     std::lock_guard<std::mutex> lock(_nodeMutex);
-    for (auto& [nodeId, ws] : _nodes)
-    {
-        if (auto sock = ws.lock())
-            sock->SendPing();
-    }
+    for (uint8 nodeId : _registeredNodeIds)
+        sNatsBus.PublishToNode(nodeId, pingBuf, sizeof(pingBuf));
 }
 
 void ProxyMgr::AddNodeTraffic(uint8 nodeId, uint64 txBytes, uint64 rxBytes)
@@ -912,15 +915,11 @@ void ProxyMgr::OnGroupUpdate(uint64 groupGuid, uint8 sourceNodeId, uint8 memberC
     for (auto const& m : members)
         targetNodes[m.nodeId] = true;
 
-    std::lock_guard<std::mutex> lock(_nodeMutex);
     for (auto const& [nodeId, _] : targetNodes)
     {
         if (nodeId == sourceNodeId)
             continue;
-        auto it = _nodes.find(nodeId);
-        if (it != _nodes.end())
-            if (auto socket = it->second.lock())
-                socket->SendRaw(msg);
+        RelayToNode(nodeId, msg);
     }
 }
 
@@ -942,16 +941,12 @@ void ProxyMgr::OnGroupDisband(uint64 groupGuid, uint8 /*sourceNodeId*/)
     for (int i = 0; i < 8; ++i)
         msg[1 + i] = static_cast<uint8>((groupGuid >> (i * 8)) & 0xFF);
 
-    std::lock_guard<std::mutex> lock(_nodeMutex);
     std::unordered_map<uint8, bool> seen;
     for (auto const& m : members)
     {
         if (seen[m.nodeId]) continue;
         seen[m.nodeId] = true;
-        auto it = _nodes.find(m.nodeId);
-        if (it != _nodes.end())
-            if (auto socket = it->second.lock())
-                socket->SendRaw(msg);
+        RelayToNode(m.nodeId, msg);
     }
 }
 
@@ -962,50 +957,26 @@ void ProxyMgr::RelayToLFGMaster(uint8 sourceNodeId, std::vector<uint8> payload)
     std::vector<uint8> msg;
     msg.reserve(1 + 2 + 1 + payload.size());
     uint16 innerLen = static_cast<uint16>(1 + payload.size());
-    msg.push_back(0x09);
+    msg.push_back(0x09); // MSG_CLUSTER_LFG_RELAY
     msg.push_back(static_cast<uint8>(innerLen & 0xFF));
     msg.push_back(static_cast<uint8>(innerLen >> 8));
     msg.push_back(sourceNodeId);
     msg.insert(msg.end(), payload.begin(), payload.end());
-
-    std::lock_guard<std::mutex> lock(_nodeMutex);
-    auto it = _nodes.find(_lfgMasterNodeId);
-    if (it == _nodes.end())
-    {
-        LOG_WARN("proxy", "ProxyMgr: RelayToLFGMaster — master node {} not registered", _lfgMasterNodeId);
-        return;
-    }
-    if (auto socket = it->second.lock())
-        socket->SendRaw(msg);
+    RelayToNode(_lfgMasterNodeId, msg);
 }
 
 // ── Node relay & broadcast helpers ────────────────────────────────────────────
 
 void ProxyMgr::RelayToNode(uint8 targetNodeId, std::vector<uint8> const& msg)
 {
-    std::lock_guard<std::mutex> lock(_nodeMutex);
-    auto it = _nodes.find(targetNodeId);
-    if (it == _nodes.end())
-    {
-        LOG_WARN("proxy", "ProxyMgr: RelayToNode — node {} not registered", targetNodeId);
-        return;
-    }
-    if (auto socket = it->second.lock())
-        socket->SendRaw(msg);
-    else
-        LOG_WARN("proxy", "ProxyMgr: RelayToNode — node {} socket expired", targetNodeId);
+    sNatsBus.PublishToNode(targetNodeId, msg.data(), static_cast<int>(msg.size()));
 }
 
-void ProxyMgr::BroadcastToOtherNodes(std::vector<uint8> const& data, uint8 excludeNodeId)
+void ProxyMgr::BroadcastToOtherNodes(std::vector<uint8> const& data, uint8 /*excludeNodeId*/)
 {
-    std::lock_guard<std::mutex> lock(_nodeMutex);
-    for (auto& [nodeId, weakSocket] : _nodes)
-    {
-        if (nodeId == excludeNodeId)
-            continue;
-        if (auto socket = weakSocket.lock())
-            socket->SendRaw(data);
-    }
+    // NATS delivers to all subscribers; the sourceNodeId already encoded in every
+    // broadcast payload lets each receiver's handler filter its own messages.
+    sNatsBus.PublishBroadcast(data.data(), static_cast<int>(data.size()));
 }
 
 // ── Cross-node unit update broadcast ─────────────────────────────────────────
@@ -1101,7 +1072,7 @@ uint8 ProxyMgr::GetInstanceNodeId()
 {
     std::lock_guard<std::mutex> lock(_nodeMutex);
     for (auto const& [nodeId, serverType] : _nodeServerTypes)
-        if (serverType == 1 && _nodes.count(nodeId) && !_nodes.at(nodeId).expired())
+        if (serverType == 1 && _registeredNodeIds.count(nodeId))
             return nodeId;
     return 0;
 }

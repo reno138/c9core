@@ -47,3 +47,17 @@ if (BUILD_TOOLS_MAPS)
   add_subdirectory(libmpq)
   add_subdirectory(fkYAML)
 endif()
+
+# ── NATS C client (cluster control-channel transport) ────────────────────────
+# Used by proxyserver (NatsBus) and worldserver (ProxyClient).
+if (BUILD_APPLICATION_WORLDSERVER OR BUILD_APPLICATION_PROXYSERVER)
+  include(FetchContent)
+  FetchContent_Declare(cnats
+    GIT_REPOSITORY https://github.com/nats-io/nats.c.git
+    GIT_TAG        v3.8.0)
+  set(NATS_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_STREAMING OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_WITH_TLS  OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(cnats)
+endif()

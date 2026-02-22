@@ -23,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -54,7 +55,6 @@ struct PendingBgMatch
     std::vector<BgQueueEntry> horde;
 };
 
-class ControlSocket;
 class ManagementSocket;
 class NodeMgrSocket;
 class ProxySocket;
@@ -134,11 +134,11 @@ public:
     /// Return the nodeId, address, and port for the next node (round-robin or least-loaded).
     std::tuple<uint8, std::string, uint16> ChooseNode();
 
-    /// Register a worldserver control socket; return assigned node ID.
-    /// peerIp is the remote IP of the control-channel TCP connection — used to match the
-    /// configured node address when multiple nodes share the same WorldServerPort value.
-    uint8 RegisterNode(std::shared_ptr<ControlSocket> socket, uint8 serverType, uint16 gamePort,
-                       std::string const& peerIp);
+    /// Register a worldserver node; return assigned node ID.
+    /// peerIp is the game-server's own LAN IP, included in the NATS registration payload —
+    /// used to match the configured node address when multiple nodes share the same port.
+    uint8 RegisterNode(uint8 serverType, uint16 gamePort,
+                       std::string const& peerIp, std::vector<uint32> const& maps);
 
     /// Unregister a worldserver when its control socket closes.
     void UnregisterNode(uint8 nodeId);
@@ -252,9 +252,9 @@ private:
     std::mutex _sessionMutex;
     std::unordered_map<uint64, std::weak_ptr<ProxySocket>> _sessions;
 
-    // ── Worldserver node map ───────────────────────────────────────────────────
+    // ── Worldserver node registry (NATS-based — no TCP sockets) ───────────────
     std::mutex _nodeMutex;
-    std::unordered_map<uint8, std::weak_ptr<ControlSocket>> _nodes;
+    std::set<uint8> _registeredNodeIds;         ///< IDs of currently connected nodes
     uint8 _nextNodeId{ 1 };
     std::map<uint8, std::pair<std::string, uint16>> _nodeAddresses;
     std::map<uint8, uint32> _nodePlayerCounts;

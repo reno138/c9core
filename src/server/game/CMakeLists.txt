@@ -53,6 +53,7 @@ target_include_directories(game
 target_link_libraries(game
   PRIVATE
     acore-core-interface
+    nats_static
   PUBLIC
     game-interface)
 

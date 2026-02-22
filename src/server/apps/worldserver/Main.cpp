@@ -370,21 +370,21 @@ int main(int argc, char** argv)
         ClearOnlineAccounts();
     });
 
-    // Connect to proxy control channel if configured.
+    // Connect to proxy control channel via NATS if configured.
     if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false))
     {
         sClusterMgr.LoadLocalMaps();
 
-        std::string proxyAddress = sConfigMgr->GetOption<std::string>("ProxyServer.Address", "127.0.0.1");
-        uint16 proxyControlPort  = static_cast<uint16>(sConfigMgr->GetOption<int32>("ProxyServer.ControlPort", 8090));
-        uint16 gamePort          = static_cast<uint16>(sWorld->getIntConfig(CONFIG_PORT_WORLD));
+        std::string natsUrl     = sConfigMgr->GetOption<std::string>("ClusterServer.NatsURL", "nats://127.0.0.1:4222");
+        std::string gameAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
+        uint16 gamePort         = static_cast<uint16>(sWorld->getIntConfig(CONFIG_PORT_WORLD));
         // server_type = 1 for instance server, 0 for regular worldserver.
         // Check ClusterServer.InstanceServer (preferred — InstanceServer.Enable can break MapMgr
         // startup because MapMgr's pool system requires continent maps to be loaded).
         // Also accept InstanceServer.Enable = 1 for backwards compatibility.
         uint8 serverType = (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false) ||
                             sConfigMgr->GetOption<bool>("InstanceServer.Enable", false)) ? 1 : 0;
-        sProxyClient.Initialize(*ioContext, proxyAddress, proxyControlPort, serverType, gamePort);
+        sProxyClient.Initialize(natsUrl, serverType, gamePort, gameAddress);
     }
 
     // Set server online (allow connecting now)

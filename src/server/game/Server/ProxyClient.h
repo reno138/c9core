@@ -19,34 +19,26 @@
 #define ProxyClient_h__
 
 #include "Define.h"
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/steady_timer.hpp>
-#include <memory>
-#include <mutex>
-#include <queue>
+#include <nats.h>
 #include <string>
 #include <vector>
 
-namespace Acore::Asio { class IoContext; }
 class Player;
 class WorldPacket;
 
 /**
- * @brief Worldserver-side client for the proxy control channel (bidirectional).
+ * @brief Worldserver-side NATS client for the cluster control channel.
  *
- * On startup (when ProxyServer.Enable = 1), the worldserver connects to the proxy's
- * control port, sends MSG_REGISTER, and waits for MSG_REGISTER_ACK with the assigned
- * node ID. After that, cluster messages flow in both directions.
+ * On startup (when ProxyServer.Enable = 1), the worldserver connects to NATS,
+ * sends a registration request on "cluster.register", and receives back its
+ * assigned node ID.  After that, all control messages flow via NATS subjects:
  *
- * Outgoing (worldserver → proxy):
- *   MSG_REGISTER (0x01), MSG_REROUTE_PLAYER (0x02),
- *   MSG_CLUSTER_PLAYER_ONLINE (0x03), MSG_CLUSTER_PLAYER_OFFLINE (0x04),
- *   MSG_CLUSTER_DELIVER_PACKET (0x05)
+ *   cluster.proxy        — worldserver → proxy  (all outgoing control messages)
+ *   cluster.node.{N}     — proxy → this worldserver (targeted delivery)
+ *   cluster.broadcast    — proxy → ALL worldservers (fanout)
  *
- * Incoming (proxy → worldserver):
- *   MSG_REGISTER_ACK (0x10)
- *   MSG_CLUSTER_PLAYER_ONLINE (0x03)   — another node's player came online
- *   MSG_CLUSTER_PLAYER_OFFLINE (0x04)  — another node's player went offline
+ * The public SendXxx() / HandleXxx() API is identical to the old TCP version —
+ * only the transport internals have changed.
  */
 class ProxyClient
 {
@@ -58,8 +50,14 @@ public:
     }
 
     /// Call once from worldserver Main, before the world loop starts.
-    void Initialize(Acore::Asio::IoContext& ioContext, std::string const& address,
-                    uint16 controlPort, uint8 serverType, uint16 gamePort);
+    /// @param natsUrl      NATS server URL (e.g. "nats://192.0.2.70:4222")
+    /// @param serverType   0 = worldserver, 1 = instance server
+    /// @param gamePort     This node's WoW game port (typically 8085)
+    /// @param gameAddress  This node's LAN IP (from ClusterServer.GameAddress config) —
+    ///                     sent in the registration payload so the proxy can match it
+    ///                     against its configured node address table.
+    void Initialize(std::string const& natsUrl, uint8 serverType,
+                    uint16 gamePort, std::string const& gameAddress);
 
     bool IsConnected() const { return _connected; }
 
@@ -162,22 +160,12 @@ private:
     ProxyClient() = default;
     ~ProxyClient() = default;
 
-    // ── Connection management ─────────────────────────────────────────────────
-    void Connect();
-    void OnConnect(boost::system::error_code const& error);
-    void SendRegister();
-    void ScheduleReconnect();
+    // ── NATS publish helper ───────────────────────────────────────────────────
+    /// Prepend [nodeId][msgType] header and publish to "cluster.proxy".
+    void PublishToProxy(uint8 msgType, uint8 const* payload, int payloadLen);
 
-    // ── Outgoing write loop ───────────────────────────────────────────────────
-    void AsyncWrite();
-    void EnqueueRaw(std::vector<uint8> msg);
-
-    // ── Incoming read loop ────────────────────────────────────────────────────
-    void AsyncRead();
-    void OnRead(boost::system::error_code const& error, std::size_t transferred);
-    void ParseIncoming();
-    void HandleRegisterAck(uint8 nodeId);
-    void HandleRemotePlayerOnline();
+    // ── Incoming message handlers (called from NATS dispatch thread via QueueCallback) ──
+    void HandleRemotePlayerOnline(std::vector<uint8> const& payload);
     void HandleRemotePlayerOffline(uint64 guid);
     void HandleIncomingRelay(uint8 innerType, std::vector<uint8> const& payload);
     void HandleGroupUpdate(uint64 groupGuid, uint8 memberCount, std::vector<uint8> const& memberData);
@@ -188,12 +176,17 @@ private:
     void HandleIncomingChat(std::vector<uint8> const& payload);
     void HandleIncomingMailNotify(uint64 recipientGuid);
     void HandleIncomingArenaResult(std::vector<uint8> const& payload);
-    /// Instance server: create BG instance from proxy request and respond.
     void HandleBgCreateInst(std::vector<uint8> const& payload);
-    /// Player node: proxy signalled a BG is ready — invite local players.
     void HandleBgReady(std::vector<uint8> const& payload);
 
-    // ── Control protocol message types ────────────────────────────────────────
+    /// NATS callback — fires on NATS dispatch thread for cluster.node.{N} and cluster.broadcast.
+    static void OnNatsMsg(natsConnection* nc, natsSubscription* sub,
+                          natsMsg* msg, void* closure);
+
+    /// Dispatch a fully-parsed incoming message on the world thread (via QueueCallback).
+    void Dispatch(uint8 msgType, std::vector<uint8> payload);
+
+    // ── Control protocol message type constants ───────────────────────────────
     static constexpr uint8 MSG_REGISTER                = 0x01;
     static constexpr uint8 MSG_REROUTE_PLAYER          = 0x02;
     static constexpr uint8 MSG_CLUSTER_PLAYER_ONLINE   = 0x03;
@@ -206,111 +199,31 @@ private:
     static constexpr uint8 MSG_CLUSTER_LFG_RELAY_RESP  = 0x0A;
     static constexpr uint8 MSG_REROUTE_TO_MAP          = 0x0B;
     static constexpr uint8 MSG_CLUSTER_UNIT_UPDATE     = 0x0C;
-    static constexpr uint8 MSG_PING                    = 0x0D; ///< proxy→node: ping timestamp(8)
-    static constexpr uint8 MSG_PONG                    = 0x0E; ///< node→proxy: pong echoed timestamp(8)
+    static constexpr uint8 MSG_PING                    = 0x0D;
+    static constexpr uint8 MSG_PONG                    = 0x0E;
     static constexpr uint8 MSG_REGISTER_ACK            = 0x10;
-    static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11; ///< Cross-node SAY/YELL/EMOTE relay
-    static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12; ///< New-mail notification for a player on this node
-    static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16; ///< Broadcast arena team stat update after a rated match
-    static constexpr uint8 MSG_CLUSTER_BG_INST_CREATED = 0x17; ///< node→proxy: BG instance created on this node
-    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_JOIN   = 0x13; ///< node→proxy: player joined BG queue
-    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_LEAVE  = 0x14; ///< node→proxy: player left BG queue
-    static constexpr uint8 MSG_CLUSTER_BG_CREATE_INST  = 0x15; ///< proxy→node: create a BG instance (instance server only)
-    static constexpr uint8 MSG_CLUSTER_BG_READY        = 0x18; ///< proxy→node: BG ready — invite listed players
+    static constexpr uint8 MSG_CLUSTER_CHAT            = 0x11;
+    static constexpr uint8 MSG_CLUSTER_NOTIFY_MAIL     = 0x12;
+    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_JOIN   = 0x13;
+    static constexpr uint8 MSG_CLUSTER_BG_QUEUE_LEAVE  = 0x14;
+    static constexpr uint8 MSG_CLUSTER_BG_CREATE_INST  = 0x15;
+    static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16;
+    static constexpr uint8 MSG_CLUSTER_BG_INST_CREATED = 0x17;
+    static constexpr uint8 MSG_CLUSTER_BG_READY        = 0x18;
 
-    // ── Parse state machine for incoming data ─────────────────────────────────
-    enum class InParseState
-    {
-        WaitType,
-        ReadRegisterAck,        ///< 1 byte
-        ReadPlayerOnlineMeta,   ///< 9 bytes: guid + name_len
-        ReadPlayerOnlineBody,   ///< name_len + 8 bytes
-        ReadPlayerOffline,      ///< 8 bytes: guid
-        ReadRelayHeader,        ///< 4 bytes: target_node + inner_type + payload_len
-        ReadRelayBody,          ///< payload_len bytes
-        ReadGroupUpdateMeta,    ///< 9 bytes: group_guid + member_count
-        ReadGroupUpdateBody,    ///< member_count * 11 bytes
-        ReadGroupDisband,       ///< 8 bytes: group_guid
-        ReadLFGRelayHeader,     ///< 2 bytes: uint16 payload_len
-        ReadLFGRelayBody,       ///< payload_len bytes
-        ReadLFGRelayRespHeader, ///< 3 bytes: uint8 target_node + uint16 payload_len
-        ReadLFGRelayRespBody,   ///< payload_len bytes
-        ReadUnitUpdateLen,      ///< 2 bytes: uint16 payload_len
-        ReadUnitUpdateBody,     ///< payload_len bytes
-        ReadChatRelayLen,       ///< 2 bytes: uint16 payload_len
-        ReadChatRelayBody,      ///< payload_len bytes
-        ReadNotifyMail,         ///< 8 bytes: uint64 recipient_guid
-        ReadArenaResultLen,     ///< 2 bytes: uint16 payload_len
-        ReadArenaResultBody,    ///< payload_len bytes
-        ReadBgCreateInstLen,    ///< 2 bytes: uint16 payload_len
-        ReadBgCreateInstBody,   ///< payload_len bytes
-        ReadBgReadyLen,         ///< 2 bytes: uint16 payload_len
-        ReadBgReadyBody,        ///< payload_len bytes
-        ReadPingTimestamp,      ///< 8 bytes: uint64 timestamp_ms
-    };
-    InParseState _inParseState{ InParseState::WaitType };
+    // ── NATS handles ──────────────────────────────────────────────────────────
+    natsConnection*   _nc{nullptr};
+    natsSubscription* _subNode{nullptr};       ///< cluster.node.{_nodeId}
+    natsSubscription* _subBroadcast{nullptr};  ///< cluster.broadcast
 
-    // Fixed sizes matching the ControlSocket constants.
-    static constexpr std::size_t PLAYER_ONLINE_META_SIZE = 9;
-    static constexpr std::size_t PLAYER_ONLINE_TAIL_SIZE = 9; ///< zone(4)+level+class+race+team+node_id
-    static constexpr std::size_t PLAYER_OFFLINE_SIZE     = 8;
-    static constexpr std::size_t RELAY_HEADER_SIZE       = 4; ///< node + type + uint16 len
-    static constexpr std::size_t GROUP_UPDATE_META_SIZE  = 9; ///< uint64 + uint8 count
-    static constexpr std::size_t GROUP_MEMBER_SIZE       = 11;///< uint64 + uint8×3
-    static constexpr std::size_t GROUP_DISBAND_SIZE      = 8; ///< uint64
-    static constexpr std::size_t LFG_RELAY_HEADER_SIZE   = 2; ///< uint16 payload_len
-    static constexpr std::size_t LFG_RELAY_RESP_HDR_SIZE = 3; ///< uint8 target_node + uint16 len
-    static constexpr std::size_t UNIT_UPDATE_LEN_SIZE    = 2; ///< uint16 payload_len
-    static constexpr std::size_t CHAT_RELAY_LEN_SIZE     = 2; ///< uint16 payload_len
-    static constexpr std::size_t NOTIFY_MAIL_SIZE        = 8; ///< uint64 recipient_guid
-    static constexpr std::size_t ARENA_RESULT_LEN_SIZE   = 2; ///< uint16 payload_len
-    static constexpr std::size_t BG_CREATE_INST_LEN_SIZE = 2; ///< uint16 payload_len
-    static constexpr std::size_t BG_READY_LEN_SIZE       = 2; ///< uint16 payload_len
-
-    // ── Socket and connection state ───────────────────────────────────────────
-    boost::asio::io_context* _ioContext{ nullptr };
-    std::unique_ptr<boost::asio::ip::tcp::socket>   _socket;
-    std::unique_ptr<boost::asio::ip::tcp::resolver> _resolver;
-    std::unique_ptr<boost::asio::steady_timer>      _reconnectTimer;
-
-    std::string _address;
-    uint16 _controlPort{ 0 };
-    uint8  _serverType{ 0 };
-    uint16 _gamePort{ 0 };
-    uint8  _nodeId{ 0 };     ///< Assigned by proxy on MSG_REGISTER_ACK.
+    // ── Node identity ─────────────────────────────────────────────────────────
+    uint8       _nodeId{ 0 };    ///< Assigned by proxy after NATS registration request-reply.
+    uint8       _serverType{ 0 };
+    uint16      _gamePort{ 0 };
+    std::string _gameAddress;    ///< Own LAN IP (sent in registration so proxy can match it)
+    std::string _natsUrl;
 
     bool _connected{ false };
-    bool _writing{ false };
-
-    // ── Send queue ────────────────────────────────────────────────────────────
-    std::mutex _queueMutex;
-    std::queue<std::vector<uint8>> _sendQueue;
-
-    // ── Receive buffer ────────────────────────────────────────────────────────
-    static constexpr std::size_t READ_BUFFER_SIZE = 4096;
-    std::vector<uint8> _readBuf;
-    std::vector<uint8> _accumBuf; ///< bytes accumulated across read calls
-
-    // ── Inter-parse state ─────────────────────────────────────────────────────
-    uint64 _remotePlayerGuid{ 0 };
-    uint8  _remotePlayerNameLen{ 0 };
-
-    uint8  _relayTargetNode{ 0 };
-    uint8  _relayInnerType{ 0 };
-    uint16 _relayPayloadLen{ 0 };
-
-    uint64 _groupUpdateGuid{ 0 };
-    uint8  _groupUpdateMemberCount{ 0 };
-
-    uint16 _lfgRelayPayloadLen{ 0 };
-    uint8  _lfgRelayRespTargetNode{ 0 };
-    uint16 _lfgRelayRespPayloadLen{ 0 };
-
-    uint16 _unitUpdatePayloadLen{ 0 };
-    uint16 _chatRelayPayloadLen{ 0 };
-    uint16 _arenaResultPayloadLen{ 0 };
-    uint16 _bgCreateInstPayloadLen{ 0 };
-    uint16 _bgReadyPayloadLen{ 0 };
 };
 
 #define sProxyClient ProxyClient::Instance()
