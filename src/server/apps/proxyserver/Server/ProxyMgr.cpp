@@ -290,18 +290,20 @@ uint8 ProxyMgr::RegisterNode(uint8 serverType, uint16 gamePort,
         std::lock_guard<std::mutex> lock(_nodeMutex);
 
         // Match by peer IP first — handles multiple nodes sharing the same game port.
+        // IP match always wins even if the slot was previously occupied (worldserver
+        // may have restarted after a crash without the proxy detecting the disconnect).
         for (auto const& [nodeId, addrPort] : _nodeAddresses)
         {
-            bool ipMatch  = !peerIp.empty() && addrPort.first == peerIp;
-            bool slotFree = !_registeredNodeIds.count(nodeId);
-            if (ipMatch && slotFree)
+            if (!peerIp.empty() && addrPort.first == peerIp)
             {
+                bool wasOnline = _registeredNodeIds.count(nodeId) > 0;
                 _registeredNodeIds.insert(nodeId);
                 _nodeServerTypes[nodeId] = serverType;
                 if (_nodeStatus.count(nodeId))
                     _nodeStatus[nodeId].state = NodeState::Running;
-                LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={})",
-                         serverType == 0 ? "Worldserver" : "Instance-server", nodeId, gamePort);
+                LOG_INFO("proxy", "ProxyMgr: {} node {} online (game_port={}){}",
+                         serverType == 0 ? "Worldserver" : "Instance-server", nodeId, gamePort,
+                         wasOnline ? " [re-registered after restart]" : "");
                 assignedNodeId = nodeId;
                 break;
             }
