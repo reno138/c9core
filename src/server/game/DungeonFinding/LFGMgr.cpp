@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the C9Core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 #include "BattlegroundMgr.h"
 #include "Chat.h"
 #include "Config.h"
+#include "ClusterMgr.h"
 #include "ProxyClient.h"
 #include "CharacterCache.h"
 #include "Common.h"
@@ -2713,37 +2714,231 @@ namespace lfg
     void LFGMgr::SendLfgRoleChosen(ObjectGuid guid, ObjectGuid pguid, uint8 roles)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        {
             player->GetSession()->SendLfgRoleChosen(pguid, roles);
+            return;
+        }
+        if (!sProxyClient.IsConnected())
+            return;
+        WorldPacket pkt(SMSG_LFG_ROLE_CHOSEN, 8 + 1 + 4);
+        pkt << pguid;
+        pkt << uint8(roles > 0);
+        pkt << uint32(roles);
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgRoleCheckUpdate(ObjectGuid guid, LfgRoleCheck const& roleCheck)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        {
             player->GetSession()->SendLfgRoleCheckUpdate(roleCheck);
+            return;
+        }
+        if (!sProxyClient.IsConnected())
+            return;
+
+        LfgDungeonSet dungeons;
+        if (roleCheck.rDungeonId)
+            dungeons.insert(roleCheck.rDungeonId);
+        else
+            dungeons = roleCheck.dungeons;
+
+        WorldPacket pkt(SMSG_LFG_ROLE_CHECK_UPDATE,
+            4 + 1 + 1 + dungeons.size() * 4 + 1 + roleCheck.roles.size() * (8 + 1 + 4 + 1));
+        pkt << uint32(roleCheck.state);
+        pkt << uint8(roleCheck.state == LFG_ROLECHECK_INITIALITING);
+        pkt << uint8(dungeons.size());
+        for (uint32 d : dungeons)
+            pkt << uint32(GetLFGDungeonEntry(d));
+        pkt << uint8(roleCheck.roles.size());
+        if (!roleCheck.roles.empty())
+        {
+            // Leader info must come first.
+            ObjectGuid leader = roleCheck.leader;
+            uint8 lroles = roleCheck.roles.find(leader)->second;
+            pkt << leader;
+            pkt << uint8(lroles > 0);
+            pkt << uint32(lroles);
+            uint8 lLevel = 0;
+            if (Player* p = ObjectAccessor::FindConnectedPlayer(leader))
+                lLevel = p->GetLevel();
+            else if (ClusterPlayerInfo const* ci = sClusterMgr.FindRemotePlayerByGuid(leader.GetRawValue()))
+                lLevel = ci->level;
+            pkt << uint8(lLevel);
+
+            for (auto const& kv : roleCheck.roles)
+            {
+                if (kv.first == leader)
+                    continue;
+                pkt << kv.first;
+                pkt << uint8(kv.second > 0);
+                pkt << uint32(kv.second);
+                uint8 plevel = 0;
+                if (Player* p = ObjectAccessor::FindConnectedPlayer(kv.first))
+                    plevel = p->GetLevel();
+                else if (ClusterPlayerInfo const* ci = sClusterMgr.FindRemotePlayerByGuid(kv.first.GetRawValue()))
+                    plevel = ci->level;
+                pkt << uint8(plevel);
+            }
+        }
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgUpdatePlayer(ObjectGuid guid, LfgUpdateData const& data)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        {
             player->GetSession()->SendLfgUpdatePlayer(data);
+            return;
+        }
+        if (!sProxyClient.IsConnected())
+            return;
+
+        bool queued = false;
+        uint8 size = uint8(data.dungeons.size());
+        switch (data.updateType)
+        {
+            case LFG_UPDATETYPE_JOIN_QUEUE:
+            case LFG_UPDATETYPE_ADDED_TO_QUEUE:
+                queued = true;
+                break;
+            case LFG_UPDATETYPE_UPDATE_STATUS:
+                queued = data.state == LFG_STATE_QUEUED;
+                break;
+            default:
+                break;
+        }
+        WorldPacket pkt(SMSG_LFG_UPDATE_PLAYER,
+            1 + 1 + (size > 0 ? 1 : 0) * (1 + 1 + 1 + 1 + size * 4 + data.comment.length()));
+        pkt << uint8(data.updateType);
+        pkt << uint8(size > 0);
+        if (size)
+        {
+            pkt << uint8(queued);
+            pkt << uint8(0);
+            pkt << uint8(0);
+            pkt << uint8(size);
+            for (uint32 d : data.dungeons)
+                pkt << uint32(d);
+            pkt << data.comment;
+        }
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgUpdateParty(ObjectGuid guid, LfgUpdateData const& data)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        {
             player->GetSession()->SendLfgUpdateParty(data);
+            return;
+        }
+        if (!sProxyClient.IsConnected())
+            return;
+
+        bool join = false, queued = false;
+        uint8 size = uint8(data.dungeons.size());
+        switch (data.updateType)
+        {
+            case LFG_UPDATETYPE_ADDED_TO_QUEUE:
+                queued = true;
+                [[fallthrough]];
+            case LFG_UPDATETYPE_PROPOSAL_BEGIN:
+                join = true;
+                break;
+            case LFG_UPDATETYPE_UPDATE_STATUS:
+                join = data.state != LFG_STATE_ROLECHECK && data.state != LFG_STATE_NONE;
+                queued = data.state == LFG_STATE_QUEUED;
+                break;
+            default:
+                break;
+        }
+        WorldPacket pkt(SMSG_LFG_UPDATE_PARTY,
+            1 + 1 + (size > 0 ? 1 : 0) * (1 + 1 + 1 + 1 + 1 + size * 4 + data.comment.length()));
+        pkt << uint8(data.updateType);
+        pkt << uint8(size > 0);
+        if (size)
+        {
+            pkt << uint8(join);
+            pkt << uint8(queued);
+            pkt << uint8(0);
+            pkt << uint8(0);
+            for (uint8 i = 0; i < 3; ++i)
+                pkt << uint8(0);
+            pkt << uint8(size);
+            for (uint32 d : data.dungeons)
+                pkt << uint32(d);
+            pkt << data.comment;
+        }
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
-    void LFGMgr::SendLfgJoinResult(ObjectGuid guid, LfgJoinResultData const& data)
+    void LFGMgr::SendLfgJoinResult(ObjectGuid guid, LfgJoinResultData const& joinData)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-            player->GetSession()->SendLfgJoinResult(data);
+        {
+            player->GetSession()->SendLfgJoinResult(joinData);
+            return;
+        }
+        if (!sProxyClient.IsConnected())
+            return;
+
+        uint32 size = 0;
+        for (auto const& kv : joinData.lockmap)
+            size += 8 + 4 + uint32(kv.second.size()) * (4 + 4);
+        WorldPacket pkt(SMSG_LFG_JOIN_RESULT, 4 + 4 + size);
+        pkt << uint32(joinData.result);
+        pkt << uint32(joinData.state);
+        if (!joinData.lockmap.empty())
+        {
+            pkt << uint8(joinData.lockmap.size());
+            for (auto const& kv : joinData.lockmap)
+            {
+                pkt << kv.first;  // player ObjectGuid
+                pkt << uint32(kv.second.size());
+                for (auto const& lockEntry : kv.second)
+                {
+                    pkt << uint32(lockEntry.first);   // dungeon entry
+                    pkt << uint32(lockEntry.second);  // lock reason
+                }
+            }
+        }
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgBootProposalUpdate(ObjectGuid guid, LfgPlayerBoot const& boot)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        {
             player->GetSession()->SendLfgBootProposalUpdate(boot);
+            return;
+        }
+        if (!sProxyClient.IsConnected())
+            return;
+
+        auto voteIt = boot.votes.find(guid);
+        LfgAnswer playerVote = (voteIt != boot.votes.end()) ? voteIt->second : LFG_ANSWER_PENDING;
+        uint8 votesNum = 0, agreeNum = 0;
+        uint32 secsleft = uint32(boot.cancelTime - GameTime::GetGameTime().count());
+        for (auto const& kv : boot.votes)
+        {
+            if (kv.second != LFG_ANSWER_PENDING)
+            {
+                ++votesNum;
+                if (kv.second == LFG_ANSWER_AGREE)
+                    ++agreeNum;
+            }
+        }
+        WorldPacket pkt(SMSG_LFG_BOOT_PROPOSAL_UPDATE, 1 + 1 + 1 + 8 + 4 + 4 + 4 + 4 + boot.reason.length());
+        pkt << uint8(boot.inProgress);
+        pkt << uint8(playerVote != LFG_ANSWER_PENDING);
+        pkt << uint8(playerVote == LFG_ANSWER_AGREE);
+        pkt << boot.victim;
+        pkt << uint32(votesNum);
+        pkt << uint32(agreeNum);
+        pkt << uint32(secsleft);
+        pkt << uint32(LFG_GROUP_KICK_VOTES_NEEDED);
+        pkt << boot.reason.c_str();
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgUpdateProposal(ObjectGuid guid, LfgProposal const& proposal)
@@ -2804,10 +2999,28 @@ namespace lfg
         sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
     }
 
-    void LFGMgr::SendLfgQueueStatus(ObjectGuid guid, LfgQueueStatusData const& data)
+    void LFGMgr::SendLfgQueueStatus(ObjectGuid guid, LfgQueueStatusData const& queueData)
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-            player->GetSession()->SendLfgQueueStatus(data);
+        {
+            player->GetSession()->SendLfgQueueStatus(queueData);
+            return;
+        }
+        if (!sProxyClient.IsConnected())
+            return;
+
+        WorldPacket pkt(SMSG_LFG_QUEUE_STATUS, 4 + 4 + 4 + 4 + 4 + 4 + 1 + 1 + 1 + 4);
+        pkt << uint32(queueData.dungeonId);
+        pkt << int32(queueData.waitTimeAvg);
+        pkt << int32(queueData.waitTime);
+        pkt << int32(queueData.waitTimeTank);
+        pkt << int32(queueData.waitTimeHealer);
+        pkt << int32(queueData.waitTimeDps);
+        pkt << uint8(queueData.tanks);
+        pkt << uint8(queueData.healers);
+        pkt << uint8(queueData.dps);
+        pkt << uint32(queueData.queuedTime);
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     bool LFGMgr::IsLfgGroup(ObjectGuid guid)
