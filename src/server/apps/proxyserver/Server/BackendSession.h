@@ -96,7 +96,9 @@ private:
 
     /// Reroute handshake helpers (only called when _isReroute == true).
     void HandleAuthChallenge(); ///< Intercept SMSG_AUTH_CHALLENGE, reply with CMSG_AUTH_SESSION.
-    void HandleAuthResponse();  ///< Intercept SMSG_AUTH_RESPONSE, init crypto, notify ProxySocket.
+    void HandleAuthResponse();  ///< Intercept SMSG_AUTH_RESPONSE, init crypto, send CMSG_CHAR_ENUM.
+    void HandleCharEnum();      ///< Intercept SMSG_CHAR_ENUM, send CMSG_PLAYER_LOGIN, complete reroute.
+    void SendCharEnum();        ///< Synthesize and send CMSG_CHAR_ENUM to populate _legitCharacters.
     void SendPlayerLogin();     ///< Synthesize and send CMSG_PLAYER_LOGIN to instance server.
 
     std::weak_ptr<ProxySocket> _owner;
@@ -110,7 +112,7 @@ private:
 
     /// Reroute mode: proxy handles auth handshake autonomously.
     bool _isReroute{ false };
-    enum class HandshakeState { WaitChallenge, WaitResponse, Done };
+    enum class HandshakeState { WaitChallenge, WaitResponse, WaitCharEnum, Done };
     HandshakeState _handshakeState{ HandshakeState::Done };
 
     /// Reroute data (valid when _isReroute == true).
@@ -123,6 +125,7 @@ private:
     /// Opcode constants used for reroute handshake interception.
     static constexpr uint16 SMSG_AUTH_CHALLENGE_OPCODE = 0x1EC;
     static constexpr uint16 SMSG_AUTH_RESPONSE_OPCODE  = 0x1EE;
+    static constexpr uint16 SMSG_CHAR_ENUM_OPCODE      = 0x03B;
     static constexpr uint32 WOTLK_CLIENT_BUILD         = 12340;
     static constexpr uint8  AUTH_OK_CODE               = 0x0C;
 

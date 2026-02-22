@@ -261,18 +261,27 @@ bool BackendSession::TryConsumePayload()
 
 void BackendSession::DispatchToClient()
 {
-    // During reroute handshake, intercept auth opcodes — do NOT forward to client.
+    // During the reroute handshake, intercept specific opcodes and discard all others.
+    // Nothing gets forwarded to the client until the handshake is fully complete.
     if (_isReroute && _handshakeState != HandshakeState::Done)
     {
-        if (_opcode == SMSG_AUTH_CHALLENGE_OPCODE)
+        switch (_handshakeState)
         {
-            HandleAuthChallenge();
-            return;
-        }
-        if (_opcode == SMSG_AUTH_RESPONSE_OPCODE)
-        {
-            HandleAuthResponse();
-            return;
+            case HandshakeState::WaitChallenge:
+                if (_opcode == SMSG_AUTH_CHALLENGE_OPCODE) { HandleAuthChallenge(); return; }
+                // IP-ban SMSG_AUTH_RESPONSE can arrive before SMSG_AUTH_CHALLENGE.
+                if (_opcode == SMSG_AUTH_RESPONSE_OPCODE) { HandleAuthResponse(); return; }
+                return; // discard unexpected packets
+            case HandshakeState::WaitResponse:
+                if (_opcode == SMSG_AUTH_RESPONSE_OPCODE) { HandleAuthResponse(); return; }
+                return; // discard unexpected packets
+            case HandshakeState::WaitCharEnum:
+                // Discard SMSG_ADDON_INFO, SMSG_CLIENTCACHE_VERSION, SMSG_TUTORIAL_FLAGS, etc.
+                // Wait only for SMSG_CHAR_ENUM which signals _legitCharacters is populated.
+                if (_opcode == SMSG_CHAR_ENUM_OPCODE) { HandleCharEnum(); return; }
+                return; // discard
+            default:
+                return;
         }
     }
 
@@ -372,6 +381,14 @@ void BackendSession::HandleAuthChallenge()
               _accountName, _clientIp);
 
     SendRaw(msg);
+
+    // The worldserver calls _authCrypt.Init(sessionKey) immediately upon processing
+    // CMSG_AUTH_SESSION and sends ALL subsequent packets (including SMSG_AUTH_RESPONSE)
+    // with encrypted headers.  We must mirror that here so we can decrypt the incoming
+    // SMSG_AUTH_RESPONSE header — exactly what the real WoW client does by pre-initializing
+    // its decryption with the session key it received from the auth server.
+    InitCrypt(_sessionKey);
+
     _handshakeState = HandshakeState::WaitResponse;
 }
 
@@ -389,16 +406,53 @@ void BackendSession::HandleAuthResponse()
         return;
     }
 
-    LOG_INFO("proxy", "BackendSession: Instance server auth OK — initializing crypto and loading player");
+    LOG_INFO("proxy", "BackendSession: Instance server auth OK — sending CMSG_CHAR_ENUM");
 
-    // Initialize backend RC4 crypto with the player's session key.
-    InitCrypt(_sessionKey);
+    // Crypto was already initialized in HandleAuthChallenge() so SMSG_AUTH_RESPONSE
+    // could be decrypted.  Do NOT re-init here — that would reset the ARC4 stream
+    // and desync subsequent packet encryption with the worldserver.
+
+    // We must send CMSG_CHAR_ENUM before CMSG_PLAYER_LOGIN so the worldserver
+    // populates _legitCharacters for this account.  Without it, HandlePlayerLoginOpcode
+    // rejects the CMSG_PLAYER_LOGIN with "can't login with that character".
+    _handshakeState = HandshakeState::WaitCharEnum;
+    SendCharEnum();
+}
+
+void BackendSession::SendCharEnum()
+{
+    // CMSG_CHAR_ENUM (0x037): 6-byte header + 0-byte payload.
+    // size field = 4 (opcode only, no payload).
+    constexpr uint16 SIZE_FIELD      = 4;
+    constexpr uint32 CHAR_ENUM_OPCODE = 0x037;
+
+    uint8 header[6];
+    header[0] = static_cast<uint8>(SIZE_FIELD >> 8);
+    header[1] = static_cast<uint8>(SIZE_FIELD & 0xFF);
+    header[2] = static_cast<uint8>(CHAR_ENUM_OPCODE & 0xFF);
+    header[3] = static_cast<uint8>((CHAR_ENUM_OPCODE >> 8) & 0xFF);
+    header[4] = static_cast<uint8>((CHAR_ENUM_OPCODE >> 16) & 0xFF);
+    header[5] = static_cast<uint8>((CHAR_ENUM_OPCODE >> 24) & 0xFF);
+
+    // Encrypt header for the C→S backend direction (inverted: DecryptRecv() encrypts C→S).
+    if (_cryptInitialized)
+        _backendCrypt.DecryptRecv(header, 6);
+
+    std::vector<uint8> packet(header, header + 6);
+
+    LOG_DEBUG("proxy", "BackendSession: Sending synthesized CMSG_CHAR_ENUM to populate _legitCharacters");
+
+    SendRaw(packet);
+}
+
+void BackendSession::HandleCharEnum()
+{
+    LOG_INFO("proxy", "BackendSession: Got SMSG_CHAR_ENUM — sending CMSG_PLAYER_LOGIN (GUID {:016X})",
+             _playerGuid);
+    // _legitCharacters is now populated server-side.  Switch to Done so DispatchToClient
+    // will forward subsequent packets to the client, then send login and complete reroute.
     _handshakeState = HandshakeState::Done;
-
-    // Synthesize CMSG_PLAYER_LOGIN so the instance server loads the character.
     SendPlayerLogin();
-
-    // Notify ProxySocket to complete the backend switch.
     if (auto owner = _owner.lock())
         owner->OnRerouteComplete(shared_from_this());
 }
