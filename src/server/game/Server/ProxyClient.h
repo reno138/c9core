@@ -19,9 +19,17 @@
 #define ProxyClient_h__
 
 #include "Define.h"
-#include <nats.h>
 #include <string>
 #include <vector>
+
+// Forward-declare nats.c opaque types so consumers of ProxyClient.h don't need
+// to include <nats.h> directly (the implementation is in ProxyClient.cpp).
+struct __natsConnection;
+struct __natsSubscription;
+struct __natsMsg;
+typedef struct __natsConnection   natsConnection;
+typedef struct __natsSubscription natsSubscription;
+typedef struct __natsMsg          natsMsg;
 
 class Player;
 class WorldPacket;

@@ -16,6 +16,7 @@
  */
 
 #include "ProxyClient.h"
+#include <nats.h>
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "Battleground.h"
@@ -492,7 +493,7 @@ void ProxyClient::RelayToNode(uint8 targetNodeId, uint8 innerType, std::vector<u
 
     uint16 payloadLen = static_cast<uint16>(payload.size());
     std::vector<uint8> msg;
-    msg.reserve(1 + RELAY_HEADER_SIZE + payload.size());
+    msg.reserve(1 + 4 + payload.size()); // 4 = targetNode(1)+innerType(1)+payloadLen(2)
     msg.push_back(MSG_CLUSTER_RELAY_TO_NODE);
     msg.push_back(targetNodeId);
     msg.push_back(innerType);
@@ -508,7 +509,7 @@ void ProxyClient::SendGroupUpdate(uint64 groupGuid, std::vector<uint8> const& me
     if (!_connected)
         return;
 
-    uint8 memberCount = static_cast<uint8>(memberData.size() / GROUP_MEMBER_SIZE);
+    uint8 memberCount = static_cast<uint8>(memberData.size() / 11); // 11 = guid(8)+subgroup(1)+role(1)+nodeId(1)
     std::vector<uint8> msg;
     msg.reserve(1 + 8 + 1 + memberData.size());
     msg.push_back(MSG_CLUSTER_GROUP_UPDATE);

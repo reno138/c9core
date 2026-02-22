@@ -25,14 +25,6 @@
 #include <string>
 #include <vector>
 
-// ── Singleton ─────────────────────────────────────────────────────────────────
-
-NatsBus& NatsBus::Instance()
-{
-    static NatsBus instance;
-    return instance;
-}
-
 // ── Initialize / Shutdown ─────────────────────────────────────────────────────
 
 void NatsBus::Initialize(std::string const& natsUrl)
