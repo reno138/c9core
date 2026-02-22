@@ -838,10 +838,11 @@ void ProxyMgr::OnPlayerOffline(uint64 guid, uint8 nodeId)
             _nodeStatus[nodeId].playerCount = _nodePlayerCounts[nodeId];
     }
 
-    std::vector<uint8> msg(9);
+    std::vector<uint8> msg(10);
     msg[0] = 0x04;
     for (int i = 0; i < 8; ++i)
         msg[1 + i] = static_cast<uint8>((guid >> (i * 8)) & 0xFF);
+    msg[9] = nodeId;  // Appended so receivers can filter their own broadcasts
     BroadcastToOtherNodes(msg, nodeId);
 
     PushStatusToSubscribers();

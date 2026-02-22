@@ -202,8 +202,10 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             break;
         case MSG_CLUSTER_PLAYER_OFFLINE:
         {
-            if (payload.size() < 8) break;
+            if (payload.size() < 9) break;
             uint64 guid; std::memcpy(&guid, payload.data(), 8);
+            uint8 srcNodeId = payload[8];
+            if (srcNodeId == _nodeId) break; // our own broadcast — ignore
             HandleRemotePlayerOffline(guid);
             break;
         }
@@ -351,6 +353,12 @@ void ProxyClient::HandleRemotePlayerOnline(std::vector<uint8> const& payload)
     uint8 raceId  = payload[off + 2];
     uint8 teamId  = payload[off + 3];
     uint8 nodeId  = payload[off + 4];
+
+    // Ignore broadcasts about our own players — NATS delivers cluster.broadcast
+    // to ALL subscribers including the sender's node, so we'd otherwise kick our
+    // own freshly-logged-in players as "ghost sessions from another node".
+    if (nodeId == _nodeId)
+        return;
 
     LOG_INFO("server.worldserver", "ProxyClient: Remote player ONLINE  GUID {:016X} '{}' node={}",
              guid, name, nodeId);
