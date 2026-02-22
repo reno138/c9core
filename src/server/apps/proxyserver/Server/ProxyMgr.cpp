@@ -1070,13 +1070,39 @@ void ProxyMgr::RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps)
 
 // ── Cross-node BG queue aggregation ──────────────────────────────────────────
 
-uint8 ProxyMgr::GetInstanceNodeId()
+uint8 ProxyMgr::GetBestInstanceNodeId()
 {
     std::lock_guard<std::mutex> lock(_nodeMutex);
+
+    // Collect all currently-registered instance nodes in stable (sorted) order.
+    std::vector<uint8> candidates;
     for (auto const& [nodeId, serverType] : _nodeServerTypes)
         if (serverType == 1 && _registeredNodeIds.count(nodeId))
-            return nodeId;
-    return 0;
+            candidates.push_back(nodeId);
+
+    if (candidates.empty())
+        return 0;
+
+    // Round-robin: pick next candidate and advance the counter.
+    uint8 chosen = candidates[_instanceRoundRobin % candidates.size()];
+    ++_instanceRoundRobin;
+    return chosen;
+}
+
+bool ProxyMgr::GetBestInstanceAddress(std::string& outAddr, uint16& outPort)
+{
+    uint8 nodeId = GetBestInstanceNodeId();
+    if (nodeId == 0)
+        return false;
+
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    auto it = _nodeAddresses.find(nodeId);
+    if (it == _nodeAddresses.end())
+        return false;
+
+    outAddr = it->second.first;
+    outPort = it->second.second;
+    return true;
 }
 
 void ProxyMgr::OnBgQueueJoin(uint64 guid, uint8 nodeId, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam)
@@ -1135,8 +1161,8 @@ void ProxyMgr::OnBgQueueJoin(uint64 guid, uint8 nodeId, uint32 bgTypeId, uint8 b
     if (matchId == 0)
         return; // no match yet
 
-    // Send MSG_CLUSTER_BG_CREATE_INST to the instance node.
-    uint8 instNodeId = GetInstanceNodeId();
+    // Send MSG_CLUSTER_BG_CREATE_INST to the least-recently-used instance node.
+    uint8 instNodeId = GetBestInstanceNodeId();
     if (instNodeId == 0)
     {
         LOG_ERROR("proxy", "ProxyMgr: OnBgQueueJoin matchId={} — no instance node registered, cannot create BG",

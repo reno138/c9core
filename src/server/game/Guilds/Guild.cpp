@@ -2161,12 +2161,12 @@ void Guild::BroadcastPacket(WorldPacket const* packet) const
 
 void Guild::BroadcastPacketCrossNode(WorldPacket const* packet) const
 {
-    for (auto const& [guid, member] : m_members)
+    for (auto const& [lowGuid, member] : m_members)
     {
         if (Player* player = member.FindPlayer())
             player->SendDirectMessage(packet);
         else if (sProxyClient.IsConnected())
-            sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), *packet);
+            sProxyClient.DeliverPacketToPlayer(member.GetGUID().GetRawValue(), *packet);
     }
 }
 

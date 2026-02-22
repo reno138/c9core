@@ -145,6 +145,13 @@ public:
     void SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames, uint16 weekWins,
                          uint16 seasonGames, uint16 seasonWins, uint32 rank);
 
+    /// Query the proxy for the best available instance server address.
+    /// Uses NATS request-reply to cluster.instance.query.
+    /// @param outAddr  Filled with the instance server IP on success.
+    /// @param outPort  Filled with the instance server game port on success.
+    /// @return true if an instance server is available; false if none or disconnected.
+    bool QueryBestInstanceAddress(std::string& outAddr, uint16& outPort);
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid

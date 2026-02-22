@@ -388,6 +388,49 @@ void ProxyClient::HandleRemotePlayerOffline(uint64 guid)
     });
 }
 
+// ── Instance address query ────────────────────────────────────────────────────
+
+bool ProxyClient::QueryBestInstanceAddress(std::string& outAddr, uint16& outPort)
+{
+    if (!_connected || !_nc)
+        return false;
+
+    // Empty request payload — the proxy just looks up its own table.
+    natsMsg* reply = nullptr;
+    natsStatus s = natsConnection_Request(&reply, _nc, "cluster.instance.query",
+                                          "", 0, 500 /*ms timeout*/);
+    if (s != NATS_OK || !reply)
+    {
+        LOG_WARN("server.worldserver",
+                 "ProxyClient: QueryBestInstanceAddress timed out or failed — {}", natsStatus_GetText(s));
+        return false;
+    }
+
+    const uint8* d = reinterpret_cast<const uint8*>(natsMsg_GetData(reply));
+    int n          = natsMsg_GetDataLength(reply);
+    bool ok        = false;
+
+    if (n >= 1)
+    {
+        uint8 addrLen = d[0];
+        if (addrLen == 0)
+        {
+            LOG_WARN("server.worldserver", "ProxyClient: QueryBestInstanceAddress — no instance available");
+        }
+        else if (n >= 1 + addrLen + 2)
+        {
+            outAddr = std::string(reinterpret_cast<const char*>(d + 1), addrLen);
+            uint16 port;
+            std::memcpy(&port, d + 1 + addrLen, 2);
+            outPort = port;
+            ok = true;
+        }
+    }
+
+    natsMsg_Destroy(reply);
+    return ok;
+}
+
 // ── Outgoing cluster messages ─────────────────────────────────────────────────
 
 void ProxyClient::SendReroute(uint64 playerGuid, std::string const& address, uint16 port)

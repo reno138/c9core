@@ -235,8 +235,14 @@ public:
     void OnBgQueueLeave(uint64 guid, uint32 bgTypeId);
     /// Called when the instance node confirms a BG instance was created.
     void OnBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId);
-    /// Return the node ID of the registered instance server (serverType==1), or 0 if none.
-    uint8 GetInstanceNodeId();
+    /// Return the node ID of the least-recently-used instance server, or 0 if none registered.
+    /// Uses round-robin across all registered instance nodes for even load distribution.
+    uint8 GetBestInstanceNodeId();
+    /// Return the game address and port for the best (least-recently-used) instance node.
+    /// @param outAddr  Filled with the node's game IP string.
+    /// @param outPort  Filled with the node's game port.
+    /// @return true if a suitable instance node was found and outAddr/outPort were set.
+    bool  GetBestInstanceAddress(std::string& outAddr, uint16& outPort);
 
 private:
     ProxyMgr() = default;
@@ -289,6 +295,9 @@ private:
     // ── Group directory ────────────────────────────────────────────────────────
     std::mutex _groupMutex;
     std::unordered_map<uint64, std::vector<ProxyGroupMember>> _groupMembers;
+
+    // ── Instance server selection (round-robin across all registered instance nodes) ─
+    uint32 _instanceRoundRobin{ 0 };   ///< Protected by _nodeMutex
 
     // ── LFG master routing ────────────────────────────────────────────────────
     uint8 _lfgMasterNodeId{ 1 };
