@@ -60,6 +60,7 @@ BackendSession::~BackendSession()
 
 void BackendSession::Connect(std::string const& host, uint16 port)
 {
+    LOG_INFO("proxy", "BackendSession: Connecting to {}:{} (isReroute={})", host, port, _isReroute);
     // Arm a 10-second watchdog. If the backend is unreachable the client would
     // otherwise hang for the OS-level TCP timeout (30+ seconds). The timer fires
     // the callback with ec == 0; a successful connect cancels it (ec == operation_aborted).
@@ -110,7 +111,7 @@ void BackendSession::OnConnect(boost::system::error_code const& error)
         return;
     }
 
-    LOG_DEBUG("proxy", "BackendSession: Connected to backend.");
+    LOG_INFO("proxy", "BackendSession: TCP connected to backend (isReroute={})", _isReroute);
 
     // For non-reroute sessions: signal the owner to start reading from the client.
     // This prevents the race where CMSG_AUTH_SESSION arrives before the backend
@@ -286,6 +287,7 @@ void BackendSession::DispatchToClient()
 
 void BackendSession::HandleAuthChallenge()
 {
+    LOG_INFO("proxy", "BackendSession: Got SMSG_AUTH_CHALLENGE from backend, sending CMSG_AUTH_SESSION (account='{}')", _accountName);
     // SMSG_AUTH_CHALLENGE payload (72 bytes):
     //   uint32(1) | uint32 serverSeed | uint8[32] unk1 | uint8[32] unk2
     if (_payloadBuffer.GetActiveSize() < 8)
