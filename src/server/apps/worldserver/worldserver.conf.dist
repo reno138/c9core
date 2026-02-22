@@ -4752,18 +4752,29 @@ InstanceServer.Enable = 0
 ProxyServer.Enable = 0
 
 #
-#    ProxyServer.Address
-#        Description: IP address of the proxy server's control channel.
-#        Default:     "127.0.0.1"
+#    ClusterServer.NatsURL
+#        Description: NATS server URL used for the cluster control channel.
+#                     The worldserver connects to this NATS server to register with
+#                     the proxy and exchange all inter-node control messages (player
+#                     directory, BG queues, chat relay, group updates, etc.).
+#                     Replaces the old ProxyServer.Address + ProxyServer.ControlPort
+#                     TCP-based control channel (port 8090).
+#                     Only relevant when ProxyServer.Enable = 1.
+#        Default:     "nats://127.0.0.1:4222"
 
-ProxyServer.Address = "127.0.0.1"
+ClusterServer.NatsURL = "nats://127.0.0.1:4222"
 
 #
-#    ProxyServer.ControlPort
-#        Description: TCP port of the proxy server's control channel.
-#        Default:     8090
+#    ClusterServer.GameAddress
+#        Description: This node's own LAN IP address. Sent to the proxy during NATS
+#                     registration so the proxy can match this worldserver against its
+#                     configured node address table (NodeN.Address in proxyserver.conf).
+#                     Set to the actual LAN IP of the machine running this worldserver
+#                     (e.g. "192.0.2.71" for node2, "192.0.2.72" for the instance node).
+#                     Only relevant when ProxyServer.Enable = 1.
+#        Default:     "127.0.0.1"
 
-ProxyServer.ControlPort = 8090
+ClusterServer.GameAddress = "127.0.0.1"
 
 #
 #    InstanceServer.Address

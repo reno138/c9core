@@ -58,14 +58,19 @@ BindIP = "0.0.0.0"
 WorldServerPort = 8085
 
 #
-#    ControlPort
-#        Description: TCP port the proxy listens on for backend server control messages.
-#                     Backend worldservers and instance servers connect to this port to
-#                     register themselves and send reroute requests when players change
-#                     maps across server boundaries.
-#        Default:     8090
+#    NatsServer.URL
+#        Description: NATS server URL for the cluster control channel.
+#                     Backend worldservers and instance servers connect to NATS at this
+#                     URL to register with the proxy and exchange all inter-node control
+#                     messages (player directory, BG queues, chat relay, group updates,
+#                     LFG relay, arena results, etc.).
+#                     Replaces the old TCP ControlPort (8090). Requires nats-server to
+#                     be running (see bin/nats-server).  No auth is required on a
+#                     private LAN; add --auth <token> to nats-server and configure
+#                     natsOptions_SetToken() if the NATS port is exposed externally.
+#        Default:     "nats://127.0.0.1:4222"
 
-ControlPort = 8090
+NatsServer.URL = "nats://127.0.0.1:4222"
 
 #
 #    NodeMgrPort
