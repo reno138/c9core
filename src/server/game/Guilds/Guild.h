@@ -744,6 +744,9 @@ public:
     void BroadcastToGuild(WorldSession* session, bool officerOnly, std::string_view msg, uint32 language = LANG_UNIVERSAL) const;
     void BroadcastPacketToRank(WorldPacket const* packet, uint8 rankId) const;
     void BroadcastPacket(WorldPacket const* packet) const;
+    /// Like BroadcastPacket but also delivers to guild members whose sessions live on
+    /// other cluster nodes (uses sProxyClient.DeliverPacketToPlayer for remote members).
+    void BroadcastPacketCrossNode(WorldPacket const* packet) const;
 
     void MassInviteToEvent(WorldSession* session, uint32 minLevel, uint32 maxLevel, uint32 minRank);
 

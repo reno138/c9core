@@ -17,11 +17,13 @@
 
 #include "CalendarMgr.h"
 #include "GameTime.h"
+#include "Guild.h"
 #include "GuildMgr.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "ProxyClient.h"
 #include "QueryResult.h"
 #include <unordered_map>
 
@@ -522,10 +524,13 @@ void CalendarMgr::SendCalendarEventInvite(CalendarInvite const& invite)
         data.AppendPackedTime(statusTime);
     data << uint8(invite.GetSenderGUID() != invite.GetInviteeGUID()); // false only if the invite is sign-up
 
-    if (!calendarEvent) // Pre-invite
+    if (!calendarEvent) // Pre-invite: notify sender only
     {
-        if (Player* player = ObjectAccessor::FindConnectedPlayer(invite.GetSenderGUID()))
+        ObjectGuid senderGuid = invite.GetSenderGUID();
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(senderGuid))
             player->SendDirectMessage(&data);
+        else if (sProxyClient.IsConnected())
+            sProxyClient.DeliverPacketToPlayer(senderGuid.GetRawValue(), data);
     }
     else
     {
@@ -618,16 +623,24 @@ void CalendarMgr::SendCalendarEventInviteAlert(CalendarEvent const& calendarEven
     if (calendarEvent.IsGuildEvent() || calendarEvent.IsGuildAnnouncement())
     {
         if (Guild* guild = sGuildMgr->GetGuildById(calendarEvent.GetGuildId()))
-            guild->BroadcastPacket(&data);
+            guild->BroadcastPacketCrossNode(&data);
     }
-    else if (Player* player = ObjectAccessor::FindConnectedPlayer(invite.GetInviteeGUID()))
-        player->SendDirectMessage(&data);
+    else
+    {
+        ObjectGuid inviteeGuid = invite.GetInviteeGUID();
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(inviteeGuid))
+            player->SendDirectMessage(&data);
+        else if (sProxyClient.IsConnected())
+            sProxyClient.DeliverPacketToPlayer(inviteeGuid.GetRawValue(), data);
+    }
 }
 
 void CalendarMgr::SendCalendarEvent(ObjectGuid guid, CalendarEvent const& calendarEvent, CalendarSendEventType sendType)
 {
+    // If player is not on this node, build packet and deliver via cluster proxy.
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
-    if (!player)
+    bool isRemote = !player && sProxyClient.IsConnected();
+    if (!player && !isRemote)
         return;
 
     CalendarInviteStore const& eventInviteeList = _invites[calendarEvent.GetEventId()];
@@ -667,68 +680,82 @@ void CalendarMgr::SendCalendarEvent(ObjectGuid guid, CalendarEvent const& calend
         data << calendarInvite->GetText();
     }
 
-    player->SendDirectMessage(&data);
+    if (player)
+        player->SendDirectMessage(&data);
+    else
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendCalendarEventInviteRemoveAlert(ObjectGuid guid, CalendarEvent const& calendarEvent, CalendarInviteStatus status)
 {
-    if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-    {
-        WorldPacket data(SMSG_CALENDAR_EVENT_INVITE_REMOVED_ALERT, 8 + 4 + 4 + 1);
-        data << uint64(calendarEvent.GetEventId());
-        data.AppendPackedTime(calendarEvent.GetEventTime());
-        data << uint32(calendarEvent.GetFlags());
-        data << uint8(status);
+    WorldPacket data(SMSG_CALENDAR_EVENT_INVITE_REMOVED_ALERT, 8 + 4 + 4 + 1);
+    data << uint64(calendarEvent.GetEventId());
+    data.AppendPackedTime(calendarEvent.GetEventTime());
+    data << uint32(calendarEvent.GetFlags());
+    data << uint8(status);
 
+    if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->SendDirectMessage(&data);
-    }
+    else if (sProxyClient.IsConnected())
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendCalendarClearPendingAction(ObjectGuid guid)
 {
+    WorldPacket data(SMSG_CALENDAR_CLEAR_PENDING_ACTION, 0);
+
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
-    {
-        WorldPacket data(SMSG_CALENDAR_CLEAR_PENDING_ACTION, 0);
         player->SendDirectMessage(&data);
-    }
+    else if (sProxyClient.IsConnected())
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendCalendarCommandResult(ObjectGuid guid, CalendarError err, char const* param /*= nullptr*/)
 {
-    if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+    WorldPacket data(SMSG_CALENDAR_COMMAND_RESULT, 0);
+    data << uint32(0);
+    data << uint8(0);
+    switch (err)
     {
-        WorldPacket data(SMSG_CALENDAR_COMMAND_RESULT, 0);
-        data << uint32(0);
-        data << uint8(0);
-        switch (err)
-        {
-            case CALENDAR_ERROR_OTHER_INVITES_EXCEEDED:
-            case CALENDAR_ERROR_ALREADY_INVITED_TO_EVENT_S:
-            case CALENDAR_ERROR_IGNORING_YOU_S:
-                data << param;
-                break;
-            default:
-                data << uint8(0);
-                break;
-        }
-
-        data << uint32(err);
-
-        player->SendDirectMessage(&data);
+        case CALENDAR_ERROR_OTHER_INVITES_EXCEEDED:
+        case CALENDAR_ERROR_ALREADY_INVITED_TO_EVENT_S:
+        case CALENDAR_ERROR_IGNORING_YOU_S:
+            data << param;
+            break;
+        default:
+            data << uint8(0);
+            break;
     }
+    data << uint32(err);
+
+    if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        player->SendDirectMessage(&data);
+    else if (sProxyClient.IsConnected())
+        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendPacketToAllEventRelatives(WorldPacket packet, CalendarEvent const& calendarEvent)
 {
-    // Send packet to all guild members
+    // Send packet to all guild members (cross-node aware).
     if (calendarEvent.IsGuildEvent() || calendarEvent.IsGuildAnnouncement())
         if (Guild* guild = sGuildMgr->GetGuildById(calendarEvent.GetGuildId()))
-            guild->BroadcastPacket(&packet);
+            guild->BroadcastPacketCrossNode(&packet);
 
-    // Send packet to all invitees if event is non-guild, in other case only to non-guild invitees (packet was broadcasted for them)
+    // Send to all invitees not already covered by the guild broadcast above.
     CalendarInviteStore invites = _invites[calendarEvent.GetEventId()];
     for (CalendarInviteStore::iterator itr = invites.begin(); itr != invites.end(); ++itr)
-        if (Player* player = ObjectAccessor::FindConnectedPlayer((*itr)->GetInviteeGUID()))
+    {
+        ObjectGuid inviteeGuid = (*itr)->GetInviteeGUID();
+        if (Player* player = ObjectAccessor::FindConnectedPlayer(inviteeGuid))
+        {
             if (!calendarEvent.IsGuildEvent() || player->GetGuildId() != calendarEvent.GetGuildId())
                 player->SendDirectMessage(&packet);
+        }
+        else if (!calendarEvent.IsGuildEvent() && sProxyClient.IsConnected())
+        {
+            // Remote invitee on another node (non-guild events only; guild members
+            // were already covered by BroadcastPacketCrossNode above).
+            sProxyClient.DeliverPacketToPlayer(inviteeGuid.GetRawValue(), packet);
+        }
+    }
 }

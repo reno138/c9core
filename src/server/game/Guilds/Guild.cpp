@@ -2159,6 +2159,17 @@ void Guild::BroadcastPacket(WorldPacket const* packet) const
             player->SendDirectMessage(packet);
 }
 
+void Guild::BroadcastPacketCrossNode(WorldPacket const* packet) const
+{
+    for (auto const& [guid, member] : m_members)
+    {
+        if (Player* player = member.FindPlayer())
+            player->SendDirectMessage(packet);
+        else if (sProxyClient.IsConnected())
+            sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), *packet);
+    }
+}
+
 void Guild::MassInviteToEvent(WorldSession* session, uint32 minLevel, uint32 maxLevel, uint32 minRank)
 {
     uint32 count = 0;
