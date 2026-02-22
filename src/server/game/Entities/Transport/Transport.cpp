@@ -622,8 +622,11 @@ void MotionTransport::UpdatePassengerPositions(PassengerSet& passengers)
     for (PassengerSet::iterator itr = passengers.begin(); itr != passengers.end(); ++itr)
     {
         WorldObject* passenger = *itr;
-        // transport teleported but passenger not yet (can happen for players)
-        if (passenger->GetMap() != GetMap())
+        // transport teleported but passenger not yet (can happen for players);
+        // also guard against passengers whose map was reset during cross-node
+        // reroute or logout (m_currMap == nullptr) — FindMap() is the non-asserting form.
+        Map* passengerMap = passenger->FindMap();
+        if (!passengerMap || passengerMap != GetMap())
             continue;
 
         // if passenger is on vehicle we have to assume the vehicle is also on transport and its the vehicle that will be updating its passengers

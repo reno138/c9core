@@ -1598,12 +1598,15 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // If the player is riding a transport, detach them cleanly before
-                // saving. Without this the destination node would re-board the player
-                // on a transport that only exists on the origin node, causing the
-                // transport to fire DelayedTeleportTransport → crash on the dest node.
+                // If the player is riding a transport, detach them fully (withAll=true)
+                // before saving.  withAll=true clears m_transport + transport movement
+                // flags so that:
+                //   1. SaveToDB writes no transport GUID — the dest node won't try to
+                //      re-board the player on a transport instance it doesn't know about.
+                //   2. CleanupsBeforeDelete won't attempt a second RemovePassenger on an
+                //      already-detached player (m_transport == nullptr after this call).
                 if (m_transport)
-                    m_transport->RemovePassenger(this);
+                    m_transport->RemovePassenger(this, true);
 
                 // Set the far-teleport semaphore BEFORE SaveToDB so _SaveCharacter
                 // uses teleportStore_dest (the correct destination map/position)
