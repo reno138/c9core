@@ -304,6 +304,54 @@ void BackendSession::DispatchToClient()
     if (!owner)
         return;
 
+    // After the reroute handshake, drop pre-login S→C packets and wait for
+    // SMSG_LOGIN_VERIFY_WORLD.  When found, rewrite it to SMSG_NEW_WORLD
+    // (identical payload: mapId + x + y + z + orientation) so the client
+    // completes the SMSG_TRANSFER_PENDING loading-screen flow without disconnecting.
+    if (_rerouteLoginPending)
+    {
+        if (_opcode == SMSG_LOGIN_VERIFY_WORLD_OPCODE)
+        {
+            _rerouteLoginPending = false;
+
+            // Rewrite the opcode in-place.  SMSG_NEW_WORLD (0x03E) and
+            // SMSG_LOGIN_VERIFY_WORLD (0x236) have identical payload layouts,
+            // so only the opcode bytes in the header need changing.
+            uint8 rewrittenHeader[5];
+            std::memcpy(rewrittenHeader, _plainHeader, _headerLen);
+            uint8 opcLow  = static_cast<uint8>(SMSG_NEW_WORLD_OPCODE & 0xFF);
+            uint8 opcHigh = static_cast<uint8>((SMSG_NEW_WORLD_OPCODE >> 8) & 0xFF);
+            if (_headerLen == 5)
+            {
+                rewrittenHeader[3] = opcLow;
+                rewrittenHeader[4] = opcHigh;
+            }
+            else
+            {
+                rewrittenHeader[2] = opcLow;
+                rewrittenHeader[3] = opcHigh;
+            }
+
+            if (packetLog)
+                LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}→0x{:04X}  size {}  [reroute-rewrite]",
+                          _playerGuid, SMSG_LOGIN_VERIFY_WORLD_OPCODE, SMSG_NEW_WORLD_OPCODE, _payloadSize);
+
+            owner->QueuePacketForClient(rewrittenHeader, _headerLen, _payloadBuffer);
+            // Tell ProxySocket to silently drop the client's MSG_MOVE_WORLDPORT_ACK:
+            // the destination node already spawned the player via PLAYER_LOGIN and does
+            // not expect (or need) a worldport ack.
+            owner->SetDropWorldportAck(true);
+            return;
+        }
+
+        // Pre-login packet (account data, spells, action bars, etc.) — drop it.
+        // The client already has this data from the initial login session.
+        if (packetLog)
+            LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}  [reroute-prelogin-drop]",
+                      _playerGuid, _opcode, _payloadSize);
+        return;
+    }
+
     if (packetLog)
     {
         uint64 guid = _isReroute ? _playerGuid : owner->GetPlayerGuid();
@@ -474,6 +522,10 @@ void BackendSession::HandleCharEnum()
     // _legitCharacters is now populated server-side.  Switch to Done so DispatchToClient
     // will forward subsequent packets to the client, then send login and complete reroute.
     _handshakeState = HandshakeState::Done;
+    // Enable pre-login packet buffering: drop all S→C packets until SMSG_LOGIN_VERIFY_WORLD,
+    // then rewrite it to SMSG_NEW_WORLD so the client completes its loading-screen transition
+    // cleanly (it received SMSG_TRANSFER_PENDING and is waiting for SMSG_NEW_WORLD).
+    _rerouteLoginPending = true;
     SendPlayerLogin();
     if (auto owner = _owner.lock())
         owner->OnRerouteComplete(shared_from_this());

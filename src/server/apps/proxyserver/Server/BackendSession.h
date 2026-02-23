@@ -115,6 +115,12 @@ private:
     enum class HandshakeState { WaitChallenge, WaitResponse, WaitCharEnum, Done };
     HandshakeState _handshakeState{ HandshakeState::Done };
 
+    /// After the reroute handshake completes, buffer and drop pre-login S→C packets
+    /// until SMSG_LOGIN_VERIFY_WORLD arrives.  At that point we rewrite it to
+    /// SMSG_NEW_WORLD (identical payload format) so the client completes its
+    /// SMSG_TRANSFER_PENDING loading-screen flow cleanly, without a disconnect.
+    bool _rerouteLoginPending{ false };
+
     /// Reroute data (valid when _isReroute == true).
     std::string _accountName;
     SessionKey  _sessionKey;
@@ -123,11 +129,13 @@ private:
     std::string _clientIp;   ///< Real client IP — appended to CMSG_AUTH_SESSION for ProxyServer.Enable backends.
 
     /// Opcode constants used for reroute handshake interception.
-    static constexpr uint16 SMSG_AUTH_CHALLENGE_OPCODE = 0x1EC;
-    static constexpr uint16 SMSG_AUTH_RESPONSE_OPCODE  = 0x1EE;
-    static constexpr uint16 SMSG_CHAR_ENUM_OPCODE      = 0x03B;
-    static constexpr uint32 WOTLK_CLIENT_BUILD         = 12340;
-    static constexpr uint8  AUTH_OK_CODE               = 0x0C;
+    static constexpr uint16 SMSG_AUTH_CHALLENGE_OPCODE     = 0x1EC;
+    static constexpr uint16 SMSG_AUTH_RESPONSE_OPCODE      = 0x1EE;
+    static constexpr uint16 SMSG_CHAR_ENUM_OPCODE          = 0x03B;
+    static constexpr uint16 SMSG_LOGIN_VERIFY_WORLD_OPCODE = 0x236;
+    static constexpr uint16 SMSG_NEW_WORLD_OPCODE          = 0x03E;
+    static constexpr uint32 WOTLK_CLIENT_BUILD             = 12340;
+    static constexpr uint8  AUTH_OK_CODE                   = 0x0C;
 
     static constexpr std::size_t READ_SIZE = 4096;
     MessageBuffer _readBuffer;

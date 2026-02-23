@@ -164,6 +164,18 @@ bool ProxySocket::ReadDataHandler()
         LOG_DEBUG("proxy.packets", "C→S  GUID {:016X}  opcode 0x{:04X}  size {}",
                   _playerGuid, opcode, CLIENT_HEADER_SIZE + _packetBuffer.GetActiveSize());
 
+    // After a cross-node reroute, the proxy synthesized SMSG_NEW_WORLD for the client.
+    // The client responds with MSG_MOVE_WORLDPORT_ACK which must be dropped — the
+    // destination node already spawned the player via PLAYER_LOGIN and has no handler
+    // waiting for this opcode.
+    if (_dropWorldportAck && opcode == MSG_MOVE_WORLDPORT_ACK_OPCODE)
+    {
+        _dropWorldportAck = false;
+        LOG_DEBUG("proxy", "ProxySocket: Dropping MSG_MOVE_WORLDPORT_ACK for GUID {:016X} (cross-node reroute)",
+                  _playerGuid);
+        return true;
+    }
+
     if (opcode == CMSG_AUTH_SESSION_OPCODE)
     {
         // Intercept: extract account name, query session key, pause reading.

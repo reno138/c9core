@@ -1577,22 +1577,10 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             // if the player is saved before worldportack (at logout for example)
             // this will be used instead of the current location in SaveToDB
 
-            if (!GetSession()->PlayerLogout())
-            {
-                SetCanTeleport(true);
-                WorldPacket data(SMSG_NEW_WORLD, 4 + 4 + 4 + 4 + 4);
-                data << uint32(mapid);
-                if (m_transport)
-                    data << m_movementInfo.transport.pos.PositionXYZOStream();
-                else
-                    data << teleportStore_dest.PositionXYZOStream();
-
-                SendDirectMessage(&data);
-                SendSavedInstances();
-            }
-
-            // Cross-node teleport: if a proxy is enabled and the destination map is
-            // handled by a different cluster node, reroute the player via the proxy.
+            // Cross-node teleport: check here, BEFORE sending SMSG_NEW_WORLD, so
+            // the client never enters far-teleport loading mode.  The destination
+            // node's fresh login sequence (SMSG_LOGIN_VERIFY_WORLD) handles the
+            // map transition cleanly without requiring MSG_MOVE_WORLDPORT_ACK.
             if (!GetSession()->PlayerLogout()
                 && sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
                 && sProxyClient.IsConnected()
@@ -1640,6 +1628,20 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 }
 
                 return true;
+            }
+
+            if (!GetSession()->PlayerLogout())
+            {
+                SetCanTeleport(true);
+                WorldPacket data(SMSG_NEW_WORLD, 4 + 4 + 4 + 4 + 4);
+                data << uint32(mapid);
+                if (m_transport)
+                    data << m_movementInfo.transport.pos.PositionXYZOStream();
+                else
+                    data << teleportStore_dest.PositionXYZOStream();
+
+                SendDirectMessage(&data);
+                SendSavedInstances();
             }
 
             // move packet sent by client always after far teleport
