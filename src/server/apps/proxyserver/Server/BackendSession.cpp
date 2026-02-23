@@ -16,6 +16,7 @@
  */
 
 #include "BackendSession.h"
+#include "Config.h"
 #include "IoContext.h"
 #include "ProxySocket.h"
 #include "CryptoHash.h"
@@ -261,10 +262,24 @@ bool BackendSession::TryConsumePayload()
 
 void BackendSession::DispatchToClient()
 {
+    bool const packetLog = sConfigMgr->GetOption<bool>("Proxy.PacketLog", false);
+
     // During the reroute handshake, intercept specific opcodes and discard all others.
     // Nothing gets forwarded to the client until the handshake is fully complete.
     if (_isReroute && _handshakeState != HandshakeState::Done)
     {
+        if (packetLog)
+        {
+            bool handled = (_handshakeState == HandshakeState::WaitChallenge &&
+                                (_opcode == SMSG_AUTH_CHALLENGE_OPCODE || _opcode == SMSG_AUTH_RESPONSE_OPCODE))
+                        || (_handshakeState == HandshakeState::WaitResponse &&
+                                _opcode == SMSG_AUTH_RESPONSE_OPCODE)
+                        || (_handshakeState == HandshakeState::WaitCharEnum &&
+                                _opcode == SMSG_CHAR_ENUM_OPCODE);
+            LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}  [reroute-{}]",
+                      _playerGuid, _opcode, _payloadSize, handled ? "intercept" : "drop");
+        }
+
         switch (_handshakeState)
         {
             case HandshakeState::WaitChallenge:
@@ -288,6 +303,13 @@ void BackendSession::DispatchToClient()
     auto owner = _owner.lock();
     if (!owner)
         return;
+
+    if (packetLog)
+    {
+        uint64 guid = _isReroute ? _playerGuid : owner->GetPlayerGuid();
+        LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}",
+                  guid, _opcode, _payloadSize);
+    }
 
     // Pass the plaintext header bytes and payload to ProxySocket.
     // ProxySocket will re-encrypt the header for the client direction.

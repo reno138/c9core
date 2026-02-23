@@ -160,6 +160,10 @@ bool ProxySocket::ReadDataHandler()
                   | (static_cast<uint32>(header[4]) << 16)
                   | (static_cast<uint32>(header[5]) << 24);
 
+    if (sConfigMgr->GetOption<bool>("Proxy.PacketLog", false))
+        LOG_DEBUG("proxy.packets", "C→S  GUID {:016X}  opcode 0x{:04X}  size {}",
+                  _playerGuid, opcode, CLIENT_HEADER_SIZE + _packetBuffer.GetActiveSize());
+
     if (opcode == CMSG_AUTH_SESSION_OPCODE)
     {
         // Intercept: extract account name, query session key, pause reading.

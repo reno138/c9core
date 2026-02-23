@@ -120,6 +120,10 @@ private:
 
     /// Account name extracted from CMSG_AUTH_SESSION (needed for DB query).
     std::string _accountName;
+
+public:
+    /// Expose player GUID for opcode logging in BackendSession.
+    uint64 GetPlayerGuid() const { return _playerGuid; }
 };
 
 #endif // ProxySocket_h__
