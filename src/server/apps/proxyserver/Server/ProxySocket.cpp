@@ -209,8 +209,10 @@ bool ProxySocket::ReadDataHandler()
     std::memcpy(backendHeader, header, CLIENT_HEADER_SIZE);
 
     // Re-encrypt using inverted backend crypto: DecryptRecv() encrypts C→S toward backend.
-    // This is only valid after crypto is initialized; before that, headers are plaintext.
-    if (_clientCrypt.IsInitialized())
+    // Only applies when the backend ARC4 is initialized (direct-client mode without proxy).
+    // In cluster proxy mode the backend runs plaintext, so we send the decrypted header as-is.
+    // Note: AuthCrypt::DecryptRecv() ASSERTs on IsInitialized(), so the guard is mandatory.
+    if (_clientCrypt.IsInitialized() && _backend->GetCrypt().IsInitialized())
         _backend->GetCrypt().DecryptRecv(backendHeader, CLIENT_HEADER_SIZE);
 
     std::vector<uint8> packet;
@@ -352,7 +354,8 @@ void ProxySocket::RerouteToBackend(std::string const& address, uint16 port)
         sProxySocketMgr.GetIoContext(),
         shared_from_this(),
         _accountName, _sessionKey, _realmId, _playerGuid,
-        GetRemoteIpAddress().to_string());
+        GetRemoteIpAddress().to_string(),
+        /*isLoginReroute=*/ !_clientInWorld);
 
     _pendingBackend->Connect(address, port);
 }

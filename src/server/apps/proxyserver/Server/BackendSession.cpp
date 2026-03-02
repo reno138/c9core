@@ -37,7 +37,8 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
 
 BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<ProxySocket> owner,
                                std::string accountName, SessionKey const& sessionKey,
-                               uint32 realmId, uint64 playerGuid, std::string clientIp)
+                               uint32 realmId, uint64 playerGuid, std::string clientIp,
+                               bool isLoginReroute)
     : _owner(std::move(owner))
     , _socket(static_cast<boost::asio::io_context&>(ioContext))
     , _resolver(static_cast<boost::asio::io_context&>(ioContext))
@@ -46,6 +47,7 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
     , _payloadBuffer(0)
     , _isReroute(true)
     , _handshakeState(HandshakeState::WaitChallenge)
+    , _isLoginReroute(isLoginReroute)
     , _accountName(std::move(accountName))
     , _sessionKey(sessionKey)
     , _realmId(realmId)
@@ -146,7 +148,14 @@ void BackendSession::OnRead(boost::system::error_code const& error, std::size_t 
 {
     if (error)
     {
-        LOG_DEBUG("proxy", "BackendSession: Read closed: {}", error.message());
+        if (_closedByProxy)
+        {
+            // The proxy intentionally closed this backend (e.g. reroute). Do NOT
+            // propagate the error to the client — the new backend is already active.
+            LOG_DEBUG("proxy", "BackendSession: Socket closed by proxy (expected): {}", error.message());
+            return;
+        }
+        LOG_DEBUG("proxy", "BackendSession: Read closed unexpectedly: {}", error.message());
         if (auto owner = _owner.lock())
             owner->CloseSocket();
         return;
@@ -336,6 +345,7 @@ void BackendSession::DispatchToClient()
                 LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}→0x{:04X}  size {}  [reroute-rewrite]",
                           _playerGuid, SMSG_LOGIN_VERIFY_WORLD_OPCODE, SMSG_NEW_WORLD_OPCODE, _payloadSize);
 
+            owner->SetClientInWorld(); // rewrite counts as client having received world position
             owner->QueuePacketForClient(rewrittenHeader, _headerLen, _payloadBuffer);
             // Tell ProxySocket to silently drop the client's MSG_MOVE_WORLDPORT_ACK:
             // the destination node already spawned the player via PLAYER_LOGIN and does
@@ -358,6 +368,12 @@ void BackendSession::DispatchToClient()
         LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}",
                   guid, _opcode, _payloadSize);
     }
+
+    // Track when SMSG_LOGIN_VERIFY_WORLD first reaches the client so subsequent reroutes
+    // know whether the client has entered the world (in-world teleport) or is still in
+    // the initial login state (GAP-1 login reroute).
+    if (_opcode == SMSG_LOGIN_VERIFY_WORLD_OPCODE)
+        owner->SetClientInWorld();
 
     // Pass the plaintext header bytes and payload to ProxySocket.
     // ProxySocket will re-encrypt the header for the client direction.
@@ -452,12 +468,10 @@ void BackendSession::HandleAuthChallenge()
 
     SendRaw(msg);
 
-    // The worldserver calls _authCrypt.Init(sessionKey) immediately upon processing
-    // CMSG_AUTH_SESSION and sends ALL subsequent packets (including SMSG_AUTH_RESPONSE)
-    // with encrypted headers.  We must mirror that here so we can decrypt the incoming
-    // SMSG_AUTH_RESPONSE header — exactly what the real WoW client does by pre-initializing
-    // its decryption with the session key it received from the auth server.
-    InitCrypt(_sessionKey);
+    // The proxy↔worldserver channel runs in plaintext (worldserver skips _authCrypt.Init
+    // when ProxyServer.Enable = 1).  Do NOT call InitCrypt() here — all subsequent
+    // backend packets are unencrypted and BackendSession reads/writes them as-is.
+    // The proxy handles ARC4 with the real client independently via _clientCrypt.
 
     _handshakeState = HandshakeState::WaitResponse;
 }
@@ -519,13 +533,24 @@ void BackendSession::HandleCharEnum()
 {
     LOG_INFO("proxy", "BackendSession: Got SMSG_CHAR_ENUM — sending CMSG_PLAYER_LOGIN (GUID {:016X})",
              _playerGuid);
-    // _legitCharacters is now populated server-side.  Switch to Done so DispatchToClient
-    // will forward subsequent packets to the client, then send login and complete reroute.
     _handshakeState = HandshakeState::Done;
-    // Enable pre-login packet buffering: drop all S→C packets until SMSG_LOGIN_VERIFY_WORLD,
-    // then rewrite it to SMSG_NEW_WORLD so the client completes its loading-screen transition
-    // cleanly (it received SMSG_TRANSFER_PENDING and is waiting for SMSG_NEW_WORLD).
-    _rerouteLoginPending = true;
+
+    if (_isLoginReroute)
+    {
+        // GAP-1 login reroute: the client is still in initial-login state (has NOT received
+        // SMSG_TRANSFER_PENDING).  Forward all pre-login packets and SMSG_LOGIN_VERIFY_WORLD
+        // as-is — no drop, no rewrite.  The client expects the full login sequence.
+        LOG_DEBUG("proxy", "BackendSession: Login reroute — forwarding all login packets (no rewrite)");
+        _rerouteLoginPending = false;
+    }
+    else
+    {
+        // In-world cross-node teleport: client received SMSG_TRANSFER_PENDING and is waiting
+        // for SMSG_NEW_WORLD.  Drop pre-login packets (client already has them) and rewrite
+        // SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD to complete the loading-screen transition.
+        _rerouteLoginPending = true;
+    }
+
     SendPlayerLogin();
     if (auto owner = _owner.lock())
         owner->OnRerouteComplete(shared_from_this());
@@ -608,6 +633,7 @@ void BackendSession::AsyncWrite()
 
 void BackendSession::Close()
 {
+    _closedByProxy = true; // suppress OnRead error-cascade before closing
     if (_socket.is_open())
     {
         boost::system::error_code ec;

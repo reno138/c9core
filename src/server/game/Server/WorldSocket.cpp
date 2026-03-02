@@ -603,8 +603,13 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
     LoginDatabase.Execute(stmt);
     // This also allows to check for possible "hack" attempts on account
 
-    // even if auth credentials are bad, try using the session key we have - client cannot read auth response error without it
-    _authCrypt.Init(account.SessionKey);
+    // In cluster proxy mode all connections come from the proxy, which handles
+    // client-side ARC4 itself.  The proxy↔worldserver channel runs plaintext so
+    // there is no ARC4 stream-position to synchronise across reroutes.
+    // When ProxyServer.Enable = 0 (direct client connections) we still init crypto
+    // so that error responses (AUTH_REJECT, etc.) are encrypted as the client expects.
+    if (!sConfigMgr->GetOption<bool>("ProxyServer.Enable", false))
+        _authCrypt.Init(account.SessionKey);
 
     // First reject the connection if packet contains invalid data or realm state doesn't allow logging in
     if (sWorld->IsClosed())
