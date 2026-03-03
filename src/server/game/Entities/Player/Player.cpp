@@ -1584,46 +1584,26 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // If the player is riding a transport, we need to:
-                //   1. Set teleportStore_dest to the dock position as a fallback.
-                //   2. Keep m_transport attached until AFTER SaveToDB so _SaveCharacter
-                //      can write the transguid + relative offsets — the destination node
-                //      uses those to re-board the player on the synchronized transport.
-                //   3. Call RemovePassenger AFTER SaveToDB (see below) so that
-                //      CleanupsBeforeDelete finds m_transport == nullptr on this node.
+                // Save to DB with m_transport still attached (if on a transport) so
+                // _SaveCharacter writes transguid + relative deck offsets.  The
+                // destination node's LoadFromDB finds the same transport (all nodes
+                // keep the full transport set) and re-boards the player at their exact
+                // deck position via CalculatePassengerPosition.  The saved world
+                // position (teleportStore_dest) acts as a dock fallback if the transport
+                // lookup fails on the destination node.
+                SetSemaphoreTeleportNear(GameTime::GetGameTime().count());
+                SaveToDB(false, false);
+                SetSemaphoreTeleportNear(0);
+                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
+
+                // Detach from transport AFTER saving so this node cleans up cleanly.
                 if (m_transport)
                 {
-                    // Find the dock position on the destination map to use as the
-                    // saved world position — avoids storing a mid-air transport coordinate.
-                    if (MotionTransport* mt = m_transport->ToMotionTransport())
-                    {
-                        for (auto const& kf : mt->GetKeyFrames())
-                        {
-                            if (kf.Node->mapid == mapid && kf.IsStopFrame())
-                            {
-                                teleportStore_dest.Relocate(kf.Node->x, kf.Node->y, kf.Node->z,
-                                                            kf.InitialOrientation);
-                                break;
-                            }
-                        }
-                    }
-                    // Detach before saving so _SaveCharacter writes no transguid.
-                    // The destination node will spawn the player at the dock position.
                     m_transport->RemovePassenger(this);
                     m_transport = nullptr;
                     m_movementInfo.transport.Reset();
                     m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
                 }
-
-                // Save current position to DB so the destination node loads the character
-                // at the correct map and coordinates.
-                // Use Near semaphore so SaveToDB runs immediately and _SaveCharacter
-                // writes teleportStore_dest (the dock position set above) rather than
-                // the player's current map coordinates.
-                SetSemaphoreTeleportNear(GameTime::GetGameTime().count());
-                SaveToDB(false, false);
-                SetSemaphoreTeleportNear(0);
-                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
 
                 // Redirect this client to the correct node via SMSG_REDIRECT_CLIENT.
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);

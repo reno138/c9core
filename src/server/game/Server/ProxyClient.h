@@ -156,8 +156,20 @@ public:
     bool QueryBestInstanceAddress(std::string& outAddr, uint16& outPort);
 
     /// Periodic housekeeping — call from World::Update() every world tick.
-    /// Sends MSG_NODE_STATUS every 10s and MSG_NODE_REFRESH every 5min.
+    /// Sends MSG_NODE_STATUS every 10s, MSG_NODE_REFRESH every 5min, and
+    /// MSG_TRANSPORT_SYNC at the configured ClusterServer.TransportSyncInterval.
     void Update();
+
+    /// Broadcast all live MotionTransport PathProgress values to peer nodes via
+    /// MSG_TRANSPORT_SYNC.  Peer nodes apply a correction if their local position
+    /// drifts by more than 2 seconds from the received value.
+    void SendTransportSync();
+
+    /// Query a running peer node for its current transport PathProgress values via
+    /// NATS request-reply on cluster.transport.query.  Returns a map of
+    /// {guid_low → PathProgress} suitable for seeding CreateTransport() on this
+    /// node's first startup.  Returns an empty map if no peer responds within 500 ms.
+    std::unordered_map<uint32, uint32> QueryTransportSync();
 
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
@@ -223,6 +235,14 @@ private:
     void HandleBgQueueLeave(std::vector<uint8> const& payload);
     void HandleBgInstCreated(std::vector<uint8> const& payload);
 
+    /// Apply transport PathProgress corrections received in MSG_TRANSPORT_SYNC.
+    void HandleTransportSync(std::vector<uint8> const& payload);
+
+    /// NATS callback for cluster.transport.query request-reply.
+    /// Runs on the NATS dispatch thread; replies with current PathProgress data.
+    static void OnTransportQueryMsg(natsConnection* nc, natsSubscription* sub,
+                                     natsMsg* msg, void* closure);
+
     /// NATS callback — fires on NATS dispatch thread for cluster.node.{N} and cluster.broadcast.
     static void OnNatsMsg(natsConnection* nc, natsSubscription* sub,
                           natsMsg* msg, void* closure);
@@ -256,12 +276,16 @@ private:
     static constexpr uint8 MSG_CLUSTER_BG_READY        = 0x18;
     static constexpr uint8 MSG_NODE_STATUS             = 0x19;
     static constexpr uint8 MSG_NODE_REFRESH            = 0x1A;
+    /// Periodic broadcast of all live transport PathProgress values to peer nodes.
+    /// Payload: [count:2][guid_low:4][path_progress:4]...
+    static constexpr uint8 MSG_TRANSPORT_SYNC          = 0x1B;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
-    natsSubscription* _subNode{nullptr};       ///< cluster.node.{_nodeId}
-    natsSubscription* _subBroadcast{nullptr};  ///< cluster.broadcast
-    natsSubscription* _subAnnounce{nullptr};   ///< cluster.announce (peer discovery)
+    natsSubscription* _subNode{nullptr};           ///< cluster.node.{_nodeId}
+    natsSubscription* _subBroadcast{nullptr};      ///< cluster.broadcast
+    natsSubscription* _subAnnounce{nullptr};       ///< cluster.announce (peer discovery)
+    natsSubscription* _subTransportQuery{nullptr}; ///< cluster.transport.query (req-reply)
 
     // ── Node identity ─────────────────────────────────────────────────────────
     uint8       _nodeId{ 0 };    ///< Config-derived node ID (ClusterServer.NodeId).
@@ -273,8 +297,10 @@ private:
     bool _connected{ false };
 
     // ── Periodic update timers ────────────────────────────────────────────────
-    uint32 _lastHeartbeatMs{ 0 }; ///< getMSTime() at last MSG_NODE_STATUS send
-    uint32 _lastRefreshMs{ 0 };   ///< getMSTime() at last MSG_NODE_REFRESH send
+    uint32 _lastHeartbeatMs{ 0 };      ///< getMSTime() at last MSG_NODE_STATUS send
+    uint32 _lastRefreshMs{ 0 };        ///< getMSTime() at last MSG_NODE_REFRESH send
+    uint32 _lastTransportSyncMs{ 0 };  ///< getMSTime() at last MSG_TRANSPORT_SYNC broadcast
+    uint32 _transportSyncIntervalMs{ 60000 }; ///< broadcast interval (from config, ms)
 
     // ── NATS bandwidth counters (reset after each MSG_NODE_STATUS) ────────────
     std::atomic<uint32> _natsBytesTx{ 0 }; ///< bytes published via NATS since last heartbeat

@@ -30,6 +30,7 @@
 #include "LFGMgr.h"
 #include "SocialMgr.h"
 #include "Entities/Player/Player.h"
+#include "Entities/Transport/Transport.h"
 #include "Globals/ObjectAccessor.h"
 #include "Groups/Group.h"
 #include "Log.h"
@@ -109,14 +110,35 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
         return;
     }
 
+    // Subscribe to transport sync queries (new nodes query us on startup to seed
+    // their transport positions without depending on the system clock).
+    s = natsConnection_Subscribe(&_subTransportQuery, _nc,
+                                  "cluster.transport.query", OnTransportQueryMsg, this);
+    if (s != NATS_OK)
+    {
+        // Non-fatal: transport sync falls back to system_clock epoch.
+        LOG_WARN("server.worldserver",
+                 "ProxyClient: Failed to subscribe to cluster.transport.query — {} "
+                 "(transport sync will use system clock as fallback)",
+                 natsStatus_GetText(s));
+    }
+
+    // Read transport sync broadcast interval (seconds) from config.
+    int32 const syncIntervalSec = sConfigMgr->GetOption<int32>(
+        "ClusterServer.TransportSyncInterval", 60);
+    _transportSyncIntervalMs = (syncIntervalSec > 0)
+        ? static_cast<uint32>(syncIntervalSec) * 1000u
+        : 0u;
+
     _connected = true;
 
     // Announce ourselves to peer nodes.
     PublishAnnounce();
 
     LOG_INFO("server.worldserver",
-             "ProxyClient: Connected to NATS as node {} (serverType={}, gamePort={} addr={})",
-             _nodeId, serverType, gamePort, gameAddress);
+             "ProxyClient: Connected to NATS as node {} (serverType={}, gamePort={} addr={}) "
+             "transport_sync_interval={}s",
+             _nodeId, serverType, gamePort, gameAddress, syncIntervalSec);
 }
 
 // ── NATS publish helpers ──────────────────────────────────────────────────────
@@ -411,6 +433,10 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             // Player nodes: invite matched players to the BG.
             HandleBgReady(payload);
             break;
+        case MSG_TRANSPORT_SYNC:
+            // Live correction: apply PathProgress values from a peer node.
+            HandleTransportSync(payload);
+            break;
         case MSG_PING:
         {
             // Echo timestamp back as MSG_PONG on cluster.broadcast.
@@ -545,6 +571,164 @@ void ProxyClient::Update()
     {
         SendNodeRefresh();
         _lastRefreshMs = now;
+    }
+
+    // Periodic transport position broadcast for drift correction across nodes.
+    if (_transportSyncIntervalMs > 0 &&
+        now - _lastTransportSyncMs >= _transportSyncIntervalMs)
+    {
+        SendTransportSync();
+        _lastTransportSyncMs = now;
+    }
+}
+
+// ── Transport sync ────────────────────────────────────────────────────────────
+
+void ProxyClient::OnTransportQueryMsg(natsConnection* nc, natsSubscription* /*sub*/,
+                                       natsMsg* msg, void* /*closure*/)
+{
+    // Called on NATS dispatch thread: build a reply with current PathProgress for
+    // every live MotionTransport.  The caller (QueryTransportSync) is waiting with
+    // a 500 ms timeout.
+    auto& container = HashMapHolder<MotionTransport>::GetContainer();
+    std::shared_lock lock(*HashMapHolder<MotionTransport>::GetLock());
+
+    // Wire: [count:2][guid_low:4][path_progress:4]...
+    uint16 const count = static_cast<uint16>(container.size());
+    std::vector<uint8> reply(2 + static_cast<std::size_t>(count) * 8);
+    std::memcpy(reply.data(), &count, 2);
+
+    uint16 idx = 0;
+    for (auto const& [guid, trans] : container)
+    {
+        uint32 guidLow  = guid.GetCounter();
+        uint32 progress = trans->GetPathProgress();
+        std::memcpy(reply.data() + 2 + idx * 8,     &guidLow,  4);
+        std::memcpy(reply.data() + 2 + idx * 8 + 4, &progress, 4);
+        ++idx;
+    }
+
+    char const* replySubj = natsMsg_GetReply(msg);
+    if (replySubj && replySubj[0] != '\0')
+    {
+        natsConnection_Publish(nc, replySubj,
+                               reply.data(), static_cast<int>(reply.size()));
+    }
+}
+
+std::unordered_map<uint32, uint32> ProxyClient::QueryTransportSync()
+{
+    std::unordered_map<uint32, uint32> result;
+    if (!_nc || !_connected)
+        return result;
+
+    natsMsg* reply = nullptr;
+    // Empty request payload; 500 ms timeout.
+    natsStatus s = natsConnection_Request(&reply, _nc, "cluster.transport.query",
+                                          nullptr, 0, 500);
+    if (s == NATS_TIMEOUT)
+    {
+        // No peer responded — this is the first node, or peers aren't up yet.
+        return result;
+    }
+    if (s != NATS_OK)
+    {
+        LOG_WARN("server.worldserver",
+                 "ProxyClient::QueryTransportSync — NATS request failed: {}",
+                 natsStatus_GetText(s));
+        return result;
+    }
+
+    // Parse [count:2][guid_low:4][path_progress:4]...
+    void const* data = natsMsg_GetData(reply);
+    int         len  = natsMsg_GetDataLength(reply);
+    if (data && len >= 2)
+    {
+        uint8 const* p   = static_cast<uint8 const*>(data);
+        uint8 const* end = p + len;
+        uint16 count;
+        std::memcpy(&count, p, 2);
+        p += 2;
+        for (uint16 i = 0; i < count && p + 8 <= end; ++i, p += 8)
+        {
+            uint32 guidLow, progress;
+            std::memcpy(&guidLow,  p,     4);
+            std::memcpy(&progress, p + 4, 4);
+            result[guidLow] = progress;
+        }
+    }
+
+    natsMsg_Destroy(reply); // caller owns the reply from natsConnection_Request
+    return result;
+}
+
+void ProxyClient::SendTransportSync()
+{
+    auto& container = HashMapHolder<MotionTransport>::GetContainer();
+    std::shared_lock lock(*HashMapHolder<MotionTransport>::GetLock());
+    if (container.empty())
+        return;
+
+    uint16 const count = static_cast<uint16>(container.size());
+    std::vector<uint8> payload(2 + static_cast<std::size_t>(count) * 8);
+    std::memcpy(payload.data(), &count, 2);
+
+    uint16 idx = 0;
+    for (auto const& [guid, trans] : container)
+    {
+        uint32 guidLow  = guid.GetCounter();
+        uint32 progress = trans->GetPathProgress();
+        std::memcpy(payload.data() + 2 + idx * 8,     &guidLow,  4);
+        std::memcpy(payload.data() + 2 + idx * 8 + 4, &progress, 4);
+        ++idx;
+    }
+
+    PublishBroadcast(MSG_TRANSPORT_SYNC, payload.data(), static_cast<int>(payload.size()));
+    LOG_DEBUG("server.worldserver",
+              "ProxyClient: Sent transport sync for {} transport(s)", idx);
+}
+
+void ProxyClient::HandleTransportSync(std::vector<uint8> const& payload)
+{
+    if (payload.size() < 2)
+        return;
+
+    uint16 count;
+    std::memcpy(&count, payload.data(), 2);
+    if (payload.size() < static_cast<std::size_t>(2 + count * 8))
+        return;
+
+    for (uint16 i = 0; i < count; ++i)
+    {
+        uint32 guidLow, remoteProgress;
+        std::memcpy(&guidLow,        payload.data() + 2 + i * 8,     4);
+        std::memcpy(&remoteProgress, payload.data() + 2 + i * 8 + 4, 4);
+
+        ObjectGuid guid = ObjectGuid(HighGuid::Mo_Transport, guidLow);
+        MotionTransport* trans = HashMapHolder<MotionTransport>::Find(guid);
+        if (!trans)
+            continue;
+
+        uint32 const period = trans->GetPeriod();
+        if (period == 0)
+            continue;
+
+        uint32 const localProgress = trans->GetPathProgress();
+
+        // Compute the circular distance between local and remote progress.
+        // Take the shorter arc so wrap-around doesn't cause false corrections.
+        uint32 fwd = (remoteProgress >= localProgress)
+            ? remoteProgress - localProgress
+            : period - (localProgress - remoteProgress);
+        uint32 const diff = (fwd <= period / 2) ? fwd : period - fwd;
+
+        if (diff > 2000)
+        {
+            trans->InitializeToTime(remoteProgress);
+            LOG_DEBUG("server.worldserver",
+                      "ProxyClient: Transport {:08X} synced: local={} remote={} drift={}ms",
+                      guidLow, localProgress, remoteProgress, diff);
+        }
     }
 }
 
