@@ -39,15 +39,16 @@ class WorldPacket;
  * @brief Worldserver-side NATS client for the cluster control channel.
  *
  * On startup (when ProxyServer.Enable = 1), the worldserver connects to NATS,
- * sends a registration request on "cluster.register", and receives back its
- * assigned node ID.  After that, all control messages flow via NATS subjects:
+ * reads its nodeId from ClusterServer.NodeId config, subscribes to its own
+ * cluster.node.{N} subject plus cluster.broadcast, and publishes a cluster.announce
+ * message so peer nodes can discover it.  All inter-node game messages flow via:
  *
- *   cluster.proxy        — worldserver → proxy  (all outgoing control messages)
- *   cluster.node.{N}     — proxy → this worldserver (targeted delivery)
- *   cluster.broadcast    — proxy → ALL worldservers (fanout)
+ *   cluster.broadcast    — fanout to ALL worldservers (player online/offline, group, chat…)
+ *   cluster.node.{N}     — targeted delivery to specific node (packet deliver, LFG relay…)
+ *   cluster.announce     — startup broadcast for peer node discovery + routing table
  *
- * The public SendXxx() / HandleXxx() API is identical to the old TCP version —
- * only the transport internals have changed.
+ * Cross-node player rerouting (cross-map travel) is handled by
+ * WorldSession::SendRedirectClient (SMSG_REDIRECT_CLIENT) rather than the proxy.
  */
 class ProxyClient
 {
@@ -180,11 +181,22 @@ private:
     ProxyClient() = default;
     ~ProxyClient() = default;
 
-    // ── NATS publish helper ───────────────────────────────────────────────────
-    /// Prepend [nodeId][msgType] header and publish to "cluster.proxy".
-    void PublishToProxy(uint8 msgType, uint8 const* payload, int payloadLen);
+    // ── NATS publish helpers ──────────────────────────────────────────────────
 
-    /// Send MSG_NODE_STATUS (player count + NATS bandwidth) to the proxy.
+    /// Publish [msgType:1][payload] directly to cluster.node.{targetNodeId}.
+    void PublishToNode(uint8 targetNodeId, uint8 msgType, uint8 const* payload, int payloadLen);
+
+    /// Publish [msgType:1][payload] to cluster.broadcast (all nodes).
+    void PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadLen);
+
+    /// Build and publish a cluster.announce payload with this node's identity.
+    void PublishAnnounce();
+
+    /// NATS callback for cluster.announce messages — registers peer nodes.
+    static void OnAnnounceMsg(natsConnection* nc, natsSubscription* sub,
+                               natsMsg* msg, void* closure);
+
+    /// Send MSG_NODE_STATUS (player count + NATS bandwidth) as a broadcast.
     void SendNodeStatus();
 
     /// Send MSG_NODE_REFRESH (full port/map re-registration) to the proxy.
@@ -243,9 +255,10 @@ private:
     natsConnection*   _nc{nullptr};
     natsSubscription* _subNode{nullptr};       ///< cluster.node.{_nodeId}
     natsSubscription* _subBroadcast{nullptr};  ///< cluster.broadcast
+    natsSubscription* _subAnnounce{nullptr};   ///< cluster.announce (peer discovery)
 
     // ── Node identity ─────────────────────────────────────────────────────────
-    uint8       _nodeId{ 0 };    ///< Assigned by proxy after NATS registration request-reply.
+    uint8       _nodeId{ 0 };    ///< Config-derived node ID (ClusterServer.NodeId).
     uint8       _serverType{ 0 };
     uint16      _gamePort{ 0 };
     std::string _gameAddress;    ///< Own LAN IP (sent in registration so proxy can match it)

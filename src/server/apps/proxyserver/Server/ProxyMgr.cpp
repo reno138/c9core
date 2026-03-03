@@ -22,6 +22,7 @@
 #include "NatsBus.h"
 #include "NodeMgrSocket.h"
 #include "ProxySocket.h"
+#include "ProxySocketMgr.h"
 #include <algorithm>
 #include <cstring>
 
@@ -277,7 +278,13 @@ void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 por
         return;
     }
     LOG_INFO("proxy", "ProxyMgr: Rerouting GUID {:016X} to {}:{}", guid, address, port);
-    socket->RerouteToBackend(address, port);
+    // Post to the io_context thread so RerouteToBackend() is serialized with
+    // ReadHandler(). Calling it directly from the NATS dispatch thread races
+    // with a mid-loop ReadHandler(): _rerouting is set too late, ReadHandler()
+    // returns KeepReading, Boost.ASIO posts async_read A, then OnRerouteComplete()
+    // posts async_read B — two concurrent reads corrupt packet framing.
+    Acore::Asio::post(sProxySocketMgr.GetIoContext(),
+        [socket, address, port]() mutable { socket->RerouteToBackend(address, port); });
 }
 
 // ── Worldserver node registry ─────────────────────────────────────────────────

@@ -302,7 +302,6 @@ void MailDraft::SendMailTo(CharacterDatabaseTransaction trans, MailReceiver cons
     // to whichever node hosts the recipient's session. Only notify for immediate mail
     // (no delivery delay) since delayed mail is announced at login via AddNewMailDeliverTime.
     if (!pReceiver && deliver_delay == 0
-        && sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
         && sProxyClient.IsConnected())
     {
         uint64 rawGuid = ObjectGuid(HighGuid::Player, receiver.GetPlayerGUIDLow()).GetRawValue();

@@ -146,15 +146,16 @@ void BackendSession::AsyncRead()
 
 void BackendSession::OnRead(boost::system::error_code const& error, std::size_t transferred)
 {
+    // Guard against any callbacks (error or data) that arrive after the proxy has
+    // intentionally closed this backend (e.g. during a reroute). Without this check,
+    // already-queued async_read_some callbacks with transferred > 0 and error == success
+    // would still reach ProcessReadBuffer() and forward stale packets to the client,
+    // causing ARC4 desync on the live backend.
+    if (_closedByProxy)
+        return;
+
     if (error)
     {
-        if (_closedByProxy)
-        {
-            // The proxy intentionally closed this backend (e.g. reroute). Do NOT
-            // propagate the error to the client — the new backend is already active.
-            LOG_DEBUG("proxy", "BackendSession: Socket closed by proxy (expected): {}", error.message());
-            return;
-        }
         LOG_DEBUG("proxy", "BackendSession: Read closed unexpectedly: {}", error.message());
         if (auto owner = _owner.lock())
             owner->CloseSocket();
@@ -323,39 +324,59 @@ void BackendSession::DispatchToClient()
         {
             _rerouteLoginPending = false;
 
-            // Rewrite the opcode in-place.  SMSG_NEW_WORLD (0x03E) and
-            // SMSG_LOGIN_VERIFY_WORLD (0x236) have identical payload layouts,
-            // so only the opcode bytes in the header need changing.
-            uint8 rewrittenHeader[5];
-            std::memcpy(rewrittenHeader, _plainHeader, _headerLen);
-            uint8 opcLow  = static_cast<uint8>(SMSG_NEW_WORLD_OPCODE & 0xFF);
-            uint8 opcHigh = static_cast<uint8>((SMSG_NEW_WORLD_OPCODE >> 8) & 0xFF);
-            if (_headerLen == 5)
+            if (_isLoginReroute)
             {
-                rewrittenHeader[3] = opcLow;
-                rewrittenHeader[4] = opcHigh;
+                // GAP-1 login reroute: client is in initial login state and expects
+                // SMSG_LOGIN_VERIFY_WORLD directly (not SMSG_NEW_WORLD).  Forward as-is.
+                // No SetDropWorldportAck — the client won't send MSG_MOVE_WORLDPORT_ACK
+                // in the normal login flow.
+                if (packetLog)
+                    LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}  [login-reroute-verify-world]",
+                              _playerGuid, _opcode, _payloadSize);
+
+                owner->SetClientInWorld();
+                owner->QueuePacketForClient(_plainHeader, _headerLen, _payloadBuffer);
             }
             else
             {
-                rewrittenHeader[2] = opcLow;
-                rewrittenHeader[3] = opcHigh;
+                // In-world cross-node teleport: rewrite SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD
+                // so the client completes the SMSG_TRANSFER_PENDING loading-screen flow.
+                // SMSG_NEW_WORLD (0x03E) and SMSG_LOGIN_VERIFY_WORLD (0x236) share the same
+                // payload layout (mapId + x + y + z + orientation), only the opcode differs.
+                uint8 rewrittenHeader[5];
+                std::memcpy(rewrittenHeader, _plainHeader, _headerLen);
+                uint8 opcLow  = static_cast<uint8>(SMSG_NEW_WORLD_OPCODE & 0xFF);
+                uint8 opcHigh = static_cast<uint8>((SMSG_NEW_WORLD_OPCODE >> 8) & 0xFF);
+                if (_headerLen == 5)
+                {
+                    rewrittenHeader[3] = opcLow;
+                    rewrittenHeader[4] = opcHigh;
+                }
+                else
+                {
+                    rewrittenHeader[2] = opcLow;
+                    rewrittenHeader[3] = opcHigh;
+                }
+
+                if (packetLog)
+                    LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}→0x{:04X}  size {}  [reroute-rewrite]",
+                              _playerGuid, SMSG_LOGIN_VERIFY_WORLD_OPCODE, SMSG_NEW_WORLD_OPCODE, _payloadSize);
+
+                owner->SetClientInWorld();
+                owner->QueuePacketForClient(rewrittenHeader, _headerLen, _payloadBuffer);
+                // Tell ProxySocket to silently drop the client's MSG_MOVE_WORLDPORT_ACK:
+                // the destination node already spawned the player via PLAYER_LOGIN and does
+                // not expect (or need) a worldport ack.
+                owner->SetDropWorldportAck(true);
             }
-
-            if (packetLog)
-                LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}→0x{:04X}  size {}  [reroute-rewrite]",
-                          _playerGuid, SMSG_LOGIN_VERIFY_WORLD_OPCODE, SMSG_NEW_WORLD_OPCODE, _payloadSize);
-
-            owner->SetClientInWorld(); // rewrite counts as client having received world position
-            owner->QueuePacketForClient(rewrittenHeader, _headerLen, _payloadBuffer);
-            // Tell ProxySocket to silently drop the client's MSG_MOVE_WORLDPORT_ACK:
-            // the destination node already spawned the player via PLAYER_LOGIN and does
-            // not expect (or need) a worldport ack.
-            owner->SetDropWorldportAck(true);
             return;
         }
 
-        // Pre-login packet (account data, spells, action bars, etc.) — drop it.
-        // The client already has this data from the initial login session.
+        // Pre-login packet — drop it.
+        // For in-world reroutes: client already has character data from initial login.
+        // For login reroutes: node2's pre-login packets (SMSG_ACCOUNT_DATA_TIMES, etc.)
+        //   must be suppressed to prevent ARC4 desync; character data will arrive after
+        //   SMSG_LOGIN_VERIFY_WORLD on the live stream.
         if (packetLog)
             LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}  [reroute-prelogin-drop]",
                       _playerGuid, _opcode, _payloadSize);
@@ -535,21 +556,19 @@ void BackendSession::HandleCharEnum()
              _playerGuid);
     _handshakeState = HandshakeState::Done;
 
-    if (_isLoginReroute)
-    {
-        // GAP-1 login reroute: the client is still in initial-login state (has NOT received
-        // SMSG_TRANSFER_PENDING).  Forward all pre-login packets and SMSG_LOGIN_VERIFY_WORLD
-        // as-is — no drop, no rewrite.  The client expects the full login sequence.
-        LOG_DEBUG("proxy", "BackendSession: Login reroute — forwarding all login packets (no rewrite)");
-        _rerouteLoginPending = false;
-    }
-    else
-    {
-        // In-world cross-node teleport: client received SMSG_TRANSFER_PENDING and is waiting
-        // for SMSG_NEW_WORLD.  Drop pre-login packets (client already has them) and rewrite
-        // SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD to complete the loading-screen transition.
-        _rerouteLoginPending = true;
-    }
+    // For BOTH login reroutes and in-world reroutes, suppress all pre-login S→C packets
+    // from the destination node until SMSG_LOGIN_VERIFY_WORLD arrives.
+    //
+    // In-world reroute (_isLoginReroute=false): drop pre-login packets (client already has
+    //   character data) and rewrite SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD.
+    //
+    // Login reroute (_isLoginReroute=true): same drop, but forward SMSG_LOGIN_VERIFY_WORLD
+    //   as-is — client is in initial login state and expects it directly (not SMSG_NEW_WORLD).
+    //   Pre-login packets from the destination node must NOT reach the client because some
+    //   (e.g. SMSG_AUTH_RESPONSE lookalikes from the node's login sequence) can desync the
+    //   ARC4 stream.  The client obtains character data via the subsequent SMSG_* flood that
+    //   comes AFTER SMSG_LOGIN_VERIFY_WORLD on the normal world stream.
+    _rerouteLoginPending = true;
 
     SendPlayerLogin();
     if (auto owner = _owner.lock())

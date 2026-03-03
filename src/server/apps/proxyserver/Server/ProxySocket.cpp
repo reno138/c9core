@@ -314,8 +314,9 @@ void ProxySocket::HandleAuthSessionCallback(PreparedQueryResult result)
     // Initialize client-side crypto (normal server perspective).
     _clientCrypt.Init(sessionKey);
 
-    // Initialize backend-side crypto (inverted perspective, same key).
-    _backend->InitCrypt(sessionKey);
+    // Backend crypto is intentionally NOT initialized here.  The proxy↔worldserver
+    // channel runs in plaintext (worldserver skips _authCrypt.Init when
+    // ProxyServer.Enable=1), so BackendSession must never encrypt/decrypt.
 
     ResumeAfterAuth();
 }

@@ -1577,36 +1577,66 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             // if the player is saved before worldportack (at logout for example)
             // this will be used instead of the current location in SaveToDB
 
-            // Cross-node teleport: check here, BEFORE sending SMSG_NEW_WORLD, so
-            // the client never enters far-teleport loading mode.  The destination
-            // node's fresh login sequence (SMSG_LOGIN_VERIFY_WORLD) handles the
-            // map transition cleanly without requiring MSG_MOVE_WORLDPORT_ACK.
+            // Cross-node teleport: send SMSG_REDIRECT_CLIENT so the client reconnects
+            // directly to the destination worldserver.  The loading screen is already
+            // showing (transport crossing always shows one), making the reconnect invisible.
             if (!GetSession()->PlayerLogout()
-                && sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // If the player is riding a transport, detach them fully (withAll=true)
-                // before saving.  withAll=true clears m_transport + transport movement
-                // flags so that:
-                //   1. SaveToDB writes no transport GUID — the dest node won't try to
-                //      re-board the player on a transport instance it doesn't know about.
-                //   2. CleanupsBeforeDelete won't attempt a second RemovePassenger on an
-                //      already-detached player (m_transport == nullptr after this call).
+                // If the player is riding a transport, we need to:
+                //   1. Set teleportStore_dest to the dock position as a fallback.
+                //   2. Keep m_transport attached until AFTER SaveToDB so _SaveCharacter
+                //      can write the transguid + relative offsets — the destination node
+                //      uses those to re-board the player on the synchronized transport.
+                //   3. Call RemovePassenger AFTER SaveToDB (see below) so that
+                //      CleanupsBeforeDelete finds m_transport == nullptr on this node.
                 if (m_transport)
-                    m_transport->RemovePassenger(this, true);
+                {
+                    // Find the dock position on the destination map to use as the
+                    // saved world position — avoids storing a mid-air transport coordinate.
+                    if (MotionTransport* mt = m_transport->ToMotionTransport())
+                    {
+                        for (auto const& kf : mt->GetKeyFrames())
+                        {
+                            if (kf.Node->mapid == mapid && kf.IsStopFrame())
+                            {
+                                teleportStore_dest.Relocate(kf.Node->x, kf.Node->y, kf.Node->z,
+                                                            kf.InitialOrientation);
+                                break;
+                            }
+                        }
+                    }
+                    // Detach before saving so _SaveCharacter writes no transguid.
+                    // The destination node will spawn the player at the dock position.
+                    m_transport->RemovePassenger(this);
+                    m_transport = nullptr;
+                    m_movementInfo.transport.Reset();
+                    m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+                }
 
-                // Set the far-teleport semaphore BEFORE SaveToDB so _SaveCharacter
-                // uses teleportStore_dest (the correct destination map/position)
-                // instead of the stale pre-teleport GetMapId()/GetPosition values.
+                // Save current position to DB so the destination node loads the character
+                // at the correct map and coordinates.
+                // Use Near semaphore so SaveToDB runs immediately and _SaveCharacter
+                // writes teleportStore_dest (the dock position set above) rather than
+                // the player's current map coordinates.
+                SetSemaphoreTeleportNear(GameTime::GetGameTime().count());
+                SaveToDB(false, false);
+                SetSemaphoreTeleportNear(0);
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
 
-                // Save to DB so the target node can load the character at the
-                // destination map and position (teleportStore_dest set above).
-                SaveToDB(false, false);
-
-                // Ask the proxy to reroute this player to whichever node handles mapid.
-                sProxyClient.SendRerouteToMap(GetGUID().GetRawValue(), mapid);
+                // Redirect this client to the correct node via SMSG_REDIRECT_CLIENT.
+                auto destNode = sClusterMgr.GetNodeForMap(mapid);
+                if (destNode)
+                {
+                    GetSession()->SendRedirectClient(destNode->address, destNode->port);
+                }
+                else
+                {
+                    LOG_WARN("server.worldserver",
+                             "Player::TeleportTo: no node info for map {} — cannot redirect player {}",
+                             mapid, GetGUID().ToString());
+                }
 
                 // For group/raid cross-node entry: relay reroute to remote member nodes
                 // so the whole group lands on the same instance node together.
@@ -9439,7 +9469,7 @@ void Player::Say(std::string_view text, Language language, WorldObject const* /*
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY));
 
     // Relay to players on other cluster nodes in the same zone.
-    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+    if (sProxyClient.IsConnected())
         sProxyClient.SendChatRelay(CHAT_MSG_SAY, GetZoneId(), data);
 }
 
@@ -9465,7 +9495,7 @@ void Player::Yell(std::string_view text, Language language, WorldObject const* /
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_YELL));
 
     // Relay to players on other cluster nodes in the same zone.
-    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+    if (sProxyClient.IsConnected())
         sProxyClient.SendChatRelay(CHAT_MSG_YELL, GetZoneId(), data);
 }
 
@@ -9491,7 +9521,7 @@ void Player::TextEmote(std::string_view text, WorldObject const* /*= nullptr*/, 
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_TEXTEMOTE));
 
     // Relay to players on other cluster nodes in the same zone.
-    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+    if (sProxyClient.IsConnected())
         sProxyClient.SendChatRelay(CHAT_MSG_EMOTE, GetZoneId(), data);
 }
 

@@ -118,6 +118,11 @@ private:
     /// destination node already spawned the player via PLAYER_LOGIN and doesn't need it.
     bool _dropWorldportAck{ false };
 
+    /// Set to true the first time SMSG_LOGIN_VERIFY_WORLD is forwarded to the client.
+    /// Used to distinguish GAP-1 login reroutes (client not yet in world) from in-world
+    /// cross-node teleport reroutes (client received SMSG_TRANSFER_PENDING).
+    bool _clientInWorld{ false };
+
     /// Whether we are waiting for the DB auth query to complete.
     bool _waitingForQuery{ false };
 
@@ -134,6 +139,13 @@ public:
     /// Called by BackendSession after rewriting SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD
     /// so we can drop the client's subsequent MSG_MOVE_WORLDPORT_ACK.
     void SetDropWorldportAck(bool drop) { _dropWorldportAck = drop; }
+
+    /// Called by BackendSession when SMSG_LOGIN_VERIFY_WORLD is forwarded to the client
+    /// (either directly or as a rewrite).  Marks this session as "client has entered world".
+    void SetClientInWorld() { _clientInWorld = true; }
+
+    /// True if the client has already entered the world (received SMSG_LOGIN_VERIFY_WORLD).
+    bool IsClientInWorld() const { return _clientInWorld; }
 };
 
 #endif // ProxySocket_h__
