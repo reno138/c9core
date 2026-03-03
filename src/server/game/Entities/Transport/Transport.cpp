@@ -472,6 +472,52 @@ void MotionTransport::MoveToNextWaypoint()
         _nextFrame = GetKeyFrames().begin();
 }
 
+void MotionTransport::InitializeToTime(uint32 timer)
+{
+    // Degenerate transports (single waypoint or zero period) stay at frame 0.
+    if (GetKeyFrames().size() <= 1 || !_transportInfo->pathTime)
+        return;
+
+    // Reset iterators to the beginning (mirrors CreateMoTrans initial state).
+    _currentFrame = _transportInfo->keyFrames.begin();
+    _nextFrame     = _currentFrame;
+    ++_nextFrame;
+
+    // Silently advance to the frame that owns 'timer', skipping events and
+    // map teleports (CreateTransport already spawned us on the correct map).
+    for (;;)
+    {
+        if (timer >= _currentFrame->ArriveTime)
+        {
+            if (timer < _currentFrame->DepartureTime)
+            {
+                SetMoving(false);
+                break;  // stop frame — transport is docked here
+            }
+        }
+
+        SetMoving(true);
+
+        if (timer >= _currentFrame->DepartureTime && timer < _currentFrame->NextArriveTime)
+            break;  // moving between current departure and next arrival
+
+        // Advance to next frame without firing events (mirrors MoveToNextWaypoint
+        // but preserves the true/true event flags we set below).
+        _currentFrame = _nextFrame++;
+        if (_nextFrame == _transportInfo->keyFrames.end())
+            _nextFrame = _transportInfo->keyFrames.begin();
+        // Teleport frames are silently skipped; the caller already placed us
+        // on the correct map.
+    }
+
+    // Suppress first-tick event double-firing.
+    _triggeredArrivalEvent   = true;
+    _triggeredDepartureEvent = true;
+
+    // Resume the clock so Update() continues forward from exactly 'timer'.
+    SetPathProgress(timer);
+}
+
 float MotionTransport::CalculateSegmentPos(float now)
 {
     KeyFrame const& frame = *_currentFrame;

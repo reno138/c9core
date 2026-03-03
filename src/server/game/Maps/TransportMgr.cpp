@@ -16,6 +16,7 @@
  */
 
 #include "TransportMgr.h"
+#include "GameTime.h"
 #include "InstanceScript.h"
 #include "MapMgr.h"
 #include "MoveSpline.h"
@@ -377,40 +378,74 @@ MotionTransport* TransportMgr::CreateTransport(uint32 entry, ObjectGuid::LowType
         return nullptr;
     }
 
+    // Synchronise the spawn position to the server clock so all cluster nodes
+    // start transports at identical positions regardless of startup time.
+    uint32 const period = tInfo->pathTime;
+    uint32 const timer  = period ? static_cast<uint32>(GameTime::GetGameTimeMS().count() % period) : 0;
+
+    // Walk key frames to find the spawn map and reference position for 'timer'.
+    uint32 spawnMapId = tInfo->keyFrames.begin()->Node->mapid;
+    float  spawnX     = tInfo->keyFrames.begin()->Node->x;
+    float  spawnY     = tInfo->keyFrames.begin()->Node->y;
+    float  spawnZ     = tInfo->keyFrames.begin()->Node->z;
+    float  spawnO     = tInfo->keyFrames.begin()->InitialOrientation;
+
+    if (period)
+    {
+        auto cur = tInfo->keyFrames.begin();
+        auto nxt = cur; ++nxt;
+
+        for (;;)
+        {
+            // Stop frame: docked here.
+            if (timer >= cur->ArriveTime && timer < cur->DepartureTime)
+                break;
+            // Moving between cur departure and nxt arrival.
+            if (timer >= cur->DepartureTime && timer < cur->NextArriveTime)
+                break;
+            // Advance (teleport frames are silently skipped — spawn map is
+            // determined by where the timer lands after all advances).
+            cur = nxt++;
+            if (nxt == tInfo->keyFrames.end())
+                nxt = tInfo->keyFrames.begin();
+        }
+
+        spawnMapId = cur->Node->mapid;
+        spawnX     = cur->Node->x;
+        spawnY     = cur->Node->y;
+        spawnZ     = cur->Node->z;
+        spawnO     = cur->InitialOrientation;
+    }
+
     // create transport...
     MotionTransport* trans = new MotionTransport();
 
-    // ...at first waypoint
-    TaxiPathNodeEntry const* startNode = tInfo->keyFrames.begin()->Node;
-    uint32 mapId = startNode->mapid;
-    float x = startNode->x;
-    float y = startNode->y;
-    float z = startNode->z;
-    float o = tInfo->keyFrames.begin()->InitialOrientation;
-
-    // initialize the gameobject base
+    // initialize the gameobject base at the clock-synchronised position
     ObjectGuid::LowType guidLow = guid ? guid : sObjectMgr->GetGenerator<HighGuid::Mo_Transport>().Generate();
 
-    if (!trans->CreateMoTrans(guidLow, entry, mapId, x, y, z, o, 255))
+    if (!trans->CreateMoTrans(guidLow, entry, spawnMapId, spawnX, spawnY, spawnZ, spawnO, 255))
     {
         delete trans;
         return nullptr;
     }
 
-    if (MapEntry const* mapEntry = sMapStore.LookupEntry(mapId))
+    if (MapEntry const* mapEntry = sMapStore.LookupEntry(spawnMapId))
     {
         if (mapEntry->Instanceable() != tInfo->inInstance)
         {
-            LOG_ERROR("entities.transport", "Transport {} (name: {}) attempted creation in instance map (id: {}) but it is not an instanced transport!", entry, trans->GetName(), mapId);
+            LOG_ERROR("entities.transport", "Transport {} (name: {}) attempted creation in instance map (id: {}) but it is not an instanced transport!", entry, trans->GetName(), spawnMapId);
             delete trans;
             return nullptr;
         }
     }
 
     // use preset map for instances (need to know which instance)
-    trans->SetMap(map ? map : sMapMgr->CreateMap(mapId, nullptr));
+    trans->SetMap(map ? map : sMapMgr->CreateMap(spawnMapId, nullptr));
     if (map && map->IsDungeon())
         trans->m_zoneScript = map->ToInstanceMap()->GetInstanceScript();
+
+    // Advance frame state to match the server clock (no events, no teleport).
+    trans->InitializeToTime(timer);
 
     HashMapHolder<MotionTransport>::Insert(trans);
     trans->GetMap()->AddToMap<Transport>(trans);

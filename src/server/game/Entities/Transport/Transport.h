@@ -82,6 +82,13 @@ public:
     void SetPeriod(uint32 period) { SetUInt32Value(GAMEOBJECT_LEVEL, period); }
 
     std::string GetDebugInfo() const override;
+
+    /// Silently advance frame state to match @p timer (milliseconds into the
+    /// transport period).  Call after CreateMoTrans() to synchronise the
+    /// transport to the server wall-clock so all cluster nodes agree on
+    /// transport positions from the very first tick.
+    void InitializeToTime(uint32 timer);
+
 private:
     void MoveToNextWaypoint();
     float CalculateSegmentPos(float perc);

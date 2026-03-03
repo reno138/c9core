@@ -21,6 +21,7 @@
 #include "Define.h"
 #include <atomic>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Forward-declare nats.c opaque types so consumers of ProxyClient.h don't need
@@ -217,6 +218,11 @@ private:
     void HandleBgCreateInst(std::vector<uint8> const& payload);
     void HandleBgReady(std::vector<uint8> const& payload);
 
+    // ── BG coordinator — only active on ClusterServer.BgCoordinatorNode ──────
+    void HandleBgQueueJoin(std::vector<uint8> const& payload);
+    void HandleBgQueueLeave(std::vector<uint8> const& payload);
+    void HandleBgInstCreated(std::vector<uint8> const& payload);
+
     /// NATS callback — fires on NATS dispatch thread for cluster.node.{N} and cluster.broadcast.
     static void OnNatsMsg(natsConnection* nc, natsSubscription* sub,
                           natsMsg* msg, void* closure);
@@ -273,6 +279,31 @@ private:
     // ── NATS bandwidth counters (reset after each MSG_NODE_STATUS) ────────────
     std::atomic<uint32> _natsBytesTx{ 0 }; ///< bytes published via NATS since last heartbeat
     std::atomic<uint32> _natsBytesRx{ 0 }; ///< bytes received via NATS since last heartbeat
+
+    // ── BG coordinator state (world-thread-only; no mutex needed) ─────────────
+    struct BgQueueEntry
+    {
+        uint64 guid{ 0 };
+        uint8  nodeId{ 0 };
+        uint8  teamId{ 0 };
+    };
+    struct BgMatchState
+    {
+        std::vector<BgQueueEntry> alliance;
+        std::vector<BgQueueEntry> horde;
+        uint8  minPlayersPerTeam{ 1 };
+    };
+    struct PendingBgMatch
+    {
+        uint32 bgTypeId{ 0 };
+        uint8  bracketId{ 0 };
+        std::vector<BgQueueEntry> alliance;
+        std::vector<BgQueueEntry> horde;
+    };
+    /// _bgQueues[bgTypeId][bracketId] → queue state.  Only used on coordinator node.
+    std::unordered_map<uint32, std::unordered_map<uint8, BgMatchState>> _bgQueues;
+    std::unordered_map<uint32, PendingBgMatch> _pendingBgMatches;
+    uint32 _nextBgMatchId{ 1 };
 };
 
 #define sProxyClient ProxyClient::Instance()

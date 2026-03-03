@@ -16,6 +16,7 @@
  */
 
 #include "WaypointMovementGenerator.h"
+#include "ClusterMgr.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "CreatureGroups.h"
@@ -25,6 +26,7 @@
 #include "MoveSplineInit.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "ProxyClient.h"
 #include "Spell.h"
 #include "Transport.h"
 #include "World.h"
@@ -425,6 +427,16 @@ void FlightPathMovementGenerator::DoFinalize(Player* player)
     }
 
     player->RemovePlayerFlag(PLAYER_FLAGS_TAXI_BENCHMARK);
+
+    // Phase 6 — cross-node redirect: if the player's destination is on a map
+    // not hosted by this cluster node, redirect them to the correct node.
+    // For standard WoW taxi paths (per-continent) this never triggers, but
+    // provides a safety net for custom content or unusual node configurations.
+    if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(player->GetMapId()))
+    {
+        if (auto nodeInfo = sClusterMgr.GetNodeForMap(player->GetMapId()))
+            player->GetSession()->SendRedirectClient(nodeInfo->address, nodeInfo->port);
+    }
 }
 
 #define PLAYER_FLIGHT_SPEED 32.0f
