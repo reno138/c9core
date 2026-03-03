@@ -60,7 +60,7 @@ bool ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
     if (wasRevived)
     {
         info.dead = false;
-        LOG_INFO("server.worldserver",
+        LOG_WARN("server.worldserver",
                  "ClusterMgr: Node {} REVIVED (re-announced) addr={}:{} type={} maps={}",
                  nodeId, info.address, info.port, info.type, info.maps.size());
     }
@@ -92,7 +92,7 @@ bool ClusterMgr::UpdateNodeStatus(uint8 nodeId, uint32 playerCount, uint32 nowMs
         it->second.dead = false;
         for (uint32 mapId : it->second.maps)
             _mapToNode[mapId] = nodeId;
-        LOG_INFO("server.worldserver",
+        LOG_WARN("server.worldserver",
                  "ClusterMgr: Node {} revived via heartbeat — {} map(s) restored", nodeId, it->second.maps.size());
     }
 

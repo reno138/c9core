@@ -464,6 +464,9 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             PublishBroadcast(MSG_PONG, pongBuf, 8);
             break;
         }
+        case MSG_PONG:
+            // Silently discard — pong is only consumed by the sender; peers ignore it.
+            break;
         default:
             LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming msgType 0x{:02X}", msgType);
             break;
@@ -840,7 +843,7 @@ void ProxyClient::RestoreBgCoordIfNeeded(uint8 revivedNodeId)
     if (revivedNodeId == configCoordId && _bgCoordNodeId != configCoordId)
     {
         _bgCoordNodeId = configCoordId;
-        LOG_INFO("server.worldserver",
+        LOG_WARN("server.worldserver",
                  "ProxyClient: BG coordinator restored to configured node {} (revived).",
                  _bgCoordNodeId);
     }
