@@ -130,6 +130,9 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
         ? static_cast<uint32>(syncIntervalSec) * 1000u
         : 0u;
 
+    // Initialize BG coordinator to the configured node (may change on failover).
+    _bgCoordNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
+
     _connected = true;
 
     // Announce ourselves to peer nodes.
@@ -278,9 +281,13 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         return;
 
     // Register on world thread (ClusterMgr is world-thread-safe via mutex).
-    sWorld->QueueCallback([info = std::move(info)]() mutable
+    // If the node was previously dead, RegisterRemoteNode returns true and we
+    // restore the BG coordinator assignment if it was that node's role.
+    sWorld->QueueCallback([info = std::move(info), announceNodeId = nodeId]() mutable
     {
-        sClusterMgr.RegisterRemoteNode(std::move(info));
+        bool wasRevived = sClusterMgr.RegisterRemoteNode(std::move(info));
+        if (wasRevived)
+            sProxyClient.RestoreBgCoordIfNeeded(announceNodeId);
     });
 }
 
@@ -437,6 +444,14 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             // Live correction: apply PathProgress values from a peer node.
             HandleTransportSync(payload);
             break;
+        case MSG_NODE_STATUS:
+            // Heartbeat from a peer node — update its lastSeen timestamp.
+            HandleNodeStatus(payload);
+            break;
+        case MSG_NODE_DEAD:
+            // A peer node detected that another node died — sync our routing table.
+            HandleNodeDeadMsg(payload);
+            break;
         case MSG_PING:
         {
             // Echo timestamp back as MSG_PONG on cluster.broadcast.
@@ -579,6 +594,17 @@ void ProxyClient::Update()
     {
         SendTransportSync();
         _lastTransportSyncMs = now;
+    }
+
+    // Dead-node detection: check every 15 seconds whether any known peer has gone silent.
+    constexpr uint32 DEAD_CHECK_INTERVAL_MS = 15 * 1000;
+    if (now - _lastDeadCheckMs >= DEAD_CHECK_INTERVAL_MS)
+    {
+        _lastDeadCheckMs = now;
+        uint32 deadThresholdMs = static_cast<uint32>(
+            sConfigMgr->GetOption<int32>("ClusterServer.NodeDeadThreshold", 30)) * 1000u;
+        for (uint8 deadNodeId : sClusterMgr.GetStaleNodeIds(deadThresholdMs, now))
+            HandleNodeDead(deadNodeId);
     }
 }
 
@@ -732,18 +758,109 @@ void ProxyClient::HandleTransportSync(std::vector<uint8> const& payload)
     }
 }
 
+// ── Node health / failover ────────────────────────────────────────────────────
+
+void ProxyClient::HandleNodeStatus(std::vector<uint8> const& payload)
+{
+    // Wire: [nodeId:1][playerCount:4][natsBytesTx:4][natsBytesRx:4] = 13 bytes
+    if (payload.size() < 13)
+        return;
+
+    uint8 srcNodeId = payload[0];
+    if (srcNodeId == _nodeId)
+        return;  // our own broadcast — ignore
+
+    uint32 playerCount;
+    std::memcpy(&playerCount, payload.data() + 1, 4);
+    // natsBytesTx/Rx at +5/+9 — not used for failover, ignore
+
+    uint32 nowMs = getMSTime();
+    bool wasRevived = sClusterMgr.UpdateNodeStatus(srcNodeId, playerCount, nowMs);
+    if (wasRevived)
+        RestoreBgCoordIfNeeded(srcNodeId);
+}
+
+void ProxyClient::HandleNodeDead(uint8 deadNodeId)
+{
+    auto orphanedMaps = sClusterMgr.MarkNodeDead(deadNodeId);
+
+    LOG_WARN("server.worldserver",
+             "ProxyClient: Node {} declared DEAD (missed heartbeats). Orphaned {} map(s).",
+             deadNodeId, orphanedMaps.size());
+
+    // Elect a new BG coordinator if the dead node held that role.
+    if (deadNodeId == _bgCoordNodeId)
+    {
+        uint8 newCoord = sClusterMgr.GetLowestAliveNonInstanceNodeId();
+        // If no peer qualifies, this node takes over.
+        if (newCoord == 0)
+            newCoord = _nodeId;
+        _bgCoordNodeId = newCoord;
+        LOG_WARN("server.worldserver",
+                 "ProxyClient: BG coordinator was node {} (dead). Elected new coordinator: node {}.",
+                 deadNodeId, _bgCoordNodeId);
+    }
+
+    // Broadcast so all surviving peer nodes update their routing tables.
+    uint8 deadPayload[1] = { deadNodeId };
+    PublishBroadcast(MSG_NODE_DEAD, deadPayload, 1);
+}
+
+void ProxyClient::HandleNodeDeadMsg(std::vector<uint8> const& payload)
+{
+    if (payload.empty())
+        return;
+
+    uint8 deadNodeId = payload[0];
+    if (deadNodeId == _nodeId)
+        return;  // guard against self-declaration
+
+    auto orphanedMaps = sClusterMgr.MarkNodeDead(deadNodeId);
+
+    LOG_WARN("server.worldserver",
+             "ProxyClient: Received MSG_NODE_DEAD for node {}. Orphaned {} map(s).",
+             deadNodeId, orphanedMaps.size());
+
+    if (deadNodeId == _bgCoordNodeId)
+    {
+        uint8 newCoord = sClusterMgr.GetLowestAliveNonInstanceNodeId();
+        if (newCoord == 0)
+            newCoord = _nodeId;
+        _bgCoordNodeId = newCoord;
+        LOG_WARN("server.worldserver",
+                 "ProxyClient: BG coordinator was node {} (dead). Elected new coordinator: node {}.",
+                 deadNodeId, _bgCoordNodeId);
+    }
+}
+
+void ProxyClient::RestoreBgCoordIfNeeded(uint8 revivedNodeId)
+{
+    uint8 configCoordId = static_cast<uint8>(
+        sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
+    if (revivedNodeId == configCoordId && _bgCoordNodeId != configCoordId)
+    {
+        _bgCoordNodeId = configCoordId;
+        LOG_INFO("server.worldserver",
+                 "ProxyClient: BG coordinator restored to configured node {} (revived).",
+                 _bgCoordNodeId);
+    }
+}
+
 void ProxyClient::SendNodeStatus()
 {
     uint32 playerCount = static_cast<uint32>(sWorldSessionMgr->GetActiveSessionCount());
     uint32 natsBytesTx = _natsBytesTx.exchange(0, std::memory_order_relaxed);
     uint32 natsBytesRx = _natsBytesRx.exchange(0, std::memory_order_relaxed);
 
-    uint8 payload[12];
-    std::memcpy(payload,     &playerCount, 4);
-    std::memcpy(payload + 4, &natsBytesTx, 4);
-    std::memcpy(payload + 8, &natsBytesRx, 4);
+    // Wire: [nodeId:1][playerCount:4][natsBytesTx:4][natsBytesRx:4] = 13 bytes
+    // nodeId is prepended so receiving nodes know which peer sent this heartbeat.
+    uint8 payload[13];
+    payload[0] = _nodeId;
+    std::memcpy(payload + 1, &playerCount, 4);
+    std::memcpy(payload + 5, &natsBytesTx, 4);
+    std::memcpy(payload + 9, &natsBytesRx, 4);
 
-    PublishBroadcast(MSG_NODE_STATUS, payload, 12);
+    PublishBroadcast(MSG_NODE_STATUS, payload, 13);
     LOG_DEBUG("server.worldserver",
               "ProxyClient: Sent NODE_STATUS players={} nats_tx={}B nats_rx={}B",
               playerCount, natsBytesTx, natsBytesRx);
@@ -1599,9 +1716,6 @@ void ProxyClient::SendBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId,
     if (!_connected || _nodeId == 0)
         return;
 
-    uint8 bgCoordNodeId = static_cast<uint8>(
-        sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
-
     // payload: guid(8)+bgTypeId(4)+bracketId(1)+teamId(1)+minPerTeam(1)+srcNodeId(1) = 16 bytes
     uint8 payload[16];
     std::memcpy(payload,      &guid,     8);
@@ -1610,7 +1724,7 @@ void ProxyClient::SendBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId,
     payload[13] = teamId;
     payload[14] = minPerTeam;
     payload[15] = _nodeId;   // so coordinator knows which node this player is on
-    PublishToNode(bgCoordNodeId, MSG_CLUSTER_BG_QUEUE_JOIN, payload, 16);
+    PublishToNode(_bgCoordNodeId, MSG_CLUSTER_BG_QUEUE_JOIN, payload, 16);
 }
 
 void ProxyClient::SendBgQueueLeave(uint64 guid, uint32 bgTypeId)
@@ -1618,14 +1732,11 @@ void ProxyClient::SendBgQueueLeave(uint64 guid, uint32 bgTypeId)
     if (!_connected || _nodeId == 0)
         return;
 
-    uint8 bgCoordNodeId = static_cast<uint8>(
-        sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
-
     // payload: guid(8)+bgTypeId(4) = 12 bytes
     uint8 payload[12];
     std::memcpy(payload,     &guid,     8);
     std::memcpy(payload + 8, &bgTypeId, 4);
-    PublishToNode(bgCoordNodeId, MSG_CLUSTER_BG_QUEUE_LEAVE, payload, 12);
+    PublishToNode(_bgCoordNodeId, MSG_CLUSTER_BG_QUEUE_LEAVE, payload, 12);
 }
 
 void ProxyClient::SendBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId)
@@ -1633,16 +1744,13 @@ void ProxyClient::SendBgInstCreated(uint32 matchId, uint32 instanceId, uint32 ma
     if (!_connected || _nodeId == 0)
         return;
 
-    uint8 bgCoordNodeId = static_cast<uint8>(
-        sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
-
     // payload: matchId(4)+instanceId(4)+mapId(4)+clientInstanceId(4) = 16 bytes
     uint8 payload[16];
     std::memcpy(payload,      &matchId,          4);
     std::memcpy(payload + 4,  &instanceId,       4);
     std::memcpy(payload + 8,  &mapId,            4);
     std::memcpy(payload + 12, &clientInstanceId, 4);
-    PublishToNode(bgCoordNodeId, MSG_CLUSTER_BG_INST_CREATED, payload, 16);
+    PublishToNode(_bgCoordNodeId, MSG_CLUSTER_BG_INST_CREATED, payload, 16);
 }
 
 // ── BG queue relay — incoming handlers ────────────────────────────────────────

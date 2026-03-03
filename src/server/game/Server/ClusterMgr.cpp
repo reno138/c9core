@@ -19,19 +19,32 @@
 #include "Config.h"
 #include "Log.h"
 #include "DBCStores.h"
+#include "Timer.h"
 #include <algorithm>
 #include <cstring>
 #include <sstream>
 
 // ── Peer node routing table ───────────────────────────────────────────────────
 
-void ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
+bool ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
 {
     std::lock_guard<std::mutex> lock(_nodeMutex);
 
     uint8 nodeId = info.nodeId;
 
-    // Remove old map→node entries for this nodeId (in case of re-announce).
+    // Check if this node was previously known (may have been dead).
+    bool wasRevived = false;
+    auto existingIt = _nodes.find(nodeId);
+    if (existingIt != _nodes.end())
+    {
+        wasRevived = existingIt->second.dead;
+        // Treat a re-announcement as a freshly-seen heartbeat so dead detection
+        // doesn't immediately fire again before the first MSG_NODE_STATUS arrives.
+        info.lastSeenMs  = getMSTime();
+        info.playerCount = existingIt->second.playerCount;
+    }
+
+    // Remove old map→node entries for this nodeId (handles re-announce after dead removal).
     for (auto it = _mapToNode.begin(); it != _mapToNode.end(); )
     {
         if (it->second == nodeId)
@@ -44,11 +57,102 @@ void ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
     for (uint32 mapId : info.maps)
         _mapToNode[mapId] = nodeId;
 
-    LOG_INFO("server.worldserver",
-             "ClusterMgr: RegisterRemoteNode nodeId={} addr={}:{} type={} maps={}",
-             nodeId, info.address, info.port, info.type, info.maps.size());
+    if (wasRevived)
+    {
+        info.dead = false;
+        LOG_INFO("server.worldserver",
+                 "ClusterMgr: Node {} REVIVED (re-announced) addr={}:{} type={} maps={}",
+                 nodeId, info.address, info.port, info.type, info.maps.size());
+    }
+    else
+    {
+        LOG_INFO("server.worldserver",
+                 "ClusterMgr: RegisterRemoteNode nodeId={} addr={}:{} type={} maps={}",
+                 nodeId, info.address, info.port, info.type, info.maps.size());
+    }
 
     _nodes[nodeId] = std::move(info);
+    return wasRevived;
+}
+
+bool ClusterMgr::UpdateNodeStatus(uint8 nodeId, uint32 playerCount, uint32 nowMs)
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    auto it = _nodes.find(nodeId);
+    if (it == _nodes.end())
+        return false;
+
+    bool wasRevived = it->second.dead;
+    it->second.lastSeenMs  = nowMs;
+    it->second.playerCount = playerCount;
+
+    if (wasRevived)
+    {
+        // Node came back — restore its map routing entries.
+        it->second.dead = false;
+        for (uint32 mapId : it->second.maps)
+            _mapToNode[mapId] = nodeId;
+        LOG_INFO("server.worldserver",
+                 "ClusterMgr: Node {} revived via heartbeat — {} map(s) restored", nodeId, it->second.maps.size());
+    }
+
+    return wasRevived;
+}
+
+std::vector<uint8> ClusterMgr::GetStaleNodeIds(uint32 deadThresholdMs, uint32 nowMs) const
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    std::vector<uint8> result;
+    for (auto const& [id, info] : _nodes)
+    {
+        // Only consider nodes that have sent at least one heartbeat and aren't already dead.
+        if (info.dead || info.lastSeenMs == 0)
+            continue;
+        if (nowMs - info.lastSeenMs >= deadThresholdMs)
+            result.push_back(id);
+    }
+    return result;
+}
+
+std::unordered_set<uint32> ClusterMgr::MarkNodeDead(uint8 nodeId)
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    std::unordered_set<uint32> orphaned;
+
+    auto it = _nodes.find(nodeId);
+    if (it == _nodes.end() || it->second.dead)
+        return orphaned;  // unknown or already dead
+
+    it->second.dead = true;
+
+    // Remove this node's maps from the active routing table.
+    for (auto mit = _mapToNode.begin(); mit != _mapToNode.end(); )
+    {
+        if (mit->second == nodeId)
+        {
+            orphaned.insert(mit->first);
+            mit = _mapToNode.erase(mit);
+        }
+        else
+            ++mit;
+    }
+
+    return orphaned;
+}
+
+uint8 ClusterMgr::GetLowestAliveNonInstanceNodeId() const
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    uint8 lowest = 0;
+    for (auto const& [id, info] : _nodes)
+    {
+        if (!info.dead && info.type != 1)   // alive + not instance server
+        {
+            if (lowest == 0 || id < lowest)
+                lowest = id;
+        }
+    }
+    return lowest;
 }
 
 std::optional<ClusterNodeInfo> ClusterMgr::GetNodeInfo(uint8 nodeId) const

@@ -158,7 +158,12 @@ public:
     /// Periodic housekeeping — call from World::Update() every world tick.
     /// Sends MSG_NODE_STATUS every 10s, MSG_NODE_REFRESH every 5min, and
     /// MSG_TRANSPORT_SYNC at the configured ClusterServer.TransportSyncInterval.
+    /// Also checks for dead peers every 15s (ClusterServer.NodeDeadThreshold).
     void Update();
+
+    /// Restore BG coordinator to its configured node if that node has come back online.
+    /// Called from the world thread when a previously-dead node re-announces or heartbeats.
+    void RestoreBgCoordIfNeeded(uint8 revivedNodeId);
 
     /// Broadcast all live MotionTransport PathProgress values to peer nodes via
     /// MSG_TRANSPORT_SYNC.  Peer nodes apply a correction if their local position
@@ -235,6 +240,17 @@ private:
     void HandleBgQueueLeave(std::vector<uint8> const& payload);
     void HandleBgInstCreated(std::vector<uint8> const& payload);
 
+    // ── Node health / failover ─────────────────────────────────────────────────
+
+    /// Handle an incoming MSG_NODE_STATUS heartbeat from a peer node.
+    void HandleNodeStatus(std::vector<uint8> const& payload);
+
+    /// Declare a peer node dead: orphan its maps, elect new BG coordinator, broadcast MSG_NODE_DEAD.
+    void HandleNodeDead(uint8 deadNodeId);
+
+    /// Handle MSG_NODE_DEAD received from another node (they detected the death first).
+    void HandleNodeDeadMsg(std::vector<uint8> const& payload);
+
     /// Apply transport PathProgress corrections received in MSG_TRANSPORT_SYNC.
     void HandleTransportSync(std::vector<uint8> const& payload);
 
@@ -279,6 +295,9 @@ private:
     /// Periodic broadcast of all live transport PathProgress values to peer nodes.
     /// Payload: [count:2][guid_low:4][path_progress:4]...
     static constexpr uint8 MSG_TRANSPORT_SYNC          = 0x1B;
+    /// Broadcast when a node is declared dead after missing heartbeats.
+    /// Payload: [deadNodeId:1]
+    static constexpr uint8 MSG_NODE_DEAD               = 0x1C;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
@@ -301,6 +320,10 @@ private:
     uint32 _lastRefreshMs{ 0 };        ///< getMSTime() at last MSG_NODE_REFRESH send
     uint32 _lastTransportSyncMs{ 0 };  ///< getMSTime() at last MSG_TRANSPORT_SYNC broadcast
     uint32 _transportSyncIntervalMs{ 60000 }; ///< broadcast interval (from config, ms)
+    uint32 _lastDeadCheckMs{ 0 };      ///< getMSTime() at last dead-node check
+
+    // ── Dynamic BG coordinator tracking ──────────────────────────────────────
+    uint8  _bgCoordNodeId{ 0 };        ///< Currently elected BG coordinator node (from config, updated on failover)
 
     // ── NATS bandwidth counters (reset after each MSG_NODE_STATUS) ────────────
     std::atomic<uint32> _natsBytesTx{ 0 }; ///< bytes published via NATS since last heartbeat

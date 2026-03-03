@@ -4855,4 +4855,19 @@ ClusterServer.Maps = ""
 ClusterServer.TransportSyncInterval = 60
 
 #
+#    ClusterServer.NodeDeadThreshold
+#        Description: Time in seconds without a MSG_NODE_STATUS heartbeat before a peer node
+#                     is declared dead.  When a node is declared dead its maps are removed from
+#                     the routing table, a MSG_NODE_DEAD broadcast is sent to all survivors,
+#                     and a new BG queue coordinator is elected (lowest alive non-instance nodeId).
+#                     A node that comes back online will be detected on its next cluster.announce
+#                     or MSG_NODE_STATUS heartbeat and its maps will be restored automatically.
+#
+#                     Must be greater than the MSG_NODE_STATUS broadcast interval (10 s).
+#                     Setting too low risks false positives on heavily loaded hosts.
+#        Default:     30
+
+ClusterServer.NodeDeadThreshold = 30
+
+#
 ###################################################################################################

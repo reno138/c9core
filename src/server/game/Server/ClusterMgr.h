@@ -42,6 +42,9 @@ struct ClusterNodeInfo
     uint16      port{ 0 };          ///< WoW game port (typically 8085)
     uint8       type{ 0 };          ///< 0 = regular worldserver, 1 = instance server
     std::unordered_set<uint32> maps; ///< mapIds served by this node
+    uint32      lastSeenMs{ 0 };    ///< getMSTime() when last MSG_NODE_STATUS received; 0 = never seen
+    uint32      playerCount{ 0 };   ///< player count from most recent MSG_NODE_STATUS
+    bool        dead{ false };      ///< true after dead-node detection; cleared on re-announce
 };
 
 /**
@@ -107,7 +110,8 @@ public:
     // ── Peer node routing table ───────────────────────────────────────────────
 
     /// Register or update a peer node (called from ProxyClient on NATS announce).
-    void RegisterRemoteNode(ClusterNodeInfo info);
+    /// @return true if this was a revival of a previously-dead node.
+    bool RegisterRemoteNode(ClusterNodeInfo info);
 
     /// Get routing info for a specific node by ID.
     std::optional<ClusterNodeInfo> GetNodeInfo(uint8 nodeId) const;
@@ -118,6 +122,21 @@ public:
 
     /// Return the nodeId of the registered instance server (type == 1), or 0 if none.
     uint8 GetInstanceNodeId() const;
+
+    /// Update a peer node's heartbeat timestamp and player count (from MSG_NODE_STATUS).
+    /// @return true if the node was previously dead and this heartbeat revived it.
+    bool UpdateNodeStatus(uint8 nodeId, uint32 playerCount, uint32 nowMs);
+
+    /// Return nodeIds of peers whose lastSeenMs is older than deadThresholdMs ago.
+    /// Only returns nodes that have sent at least one heartbeat and are not already dead.
+    std::vector<uint8> GetStaleNodeIds(uint32 deadThresholdMs, uint32 nowMs) const;
+
+    /// Mark a node dead: set dead=true and remove its maps from the routing table.
+    /// @return the set of mapIds that were orphaned (for logging).
+    std::unordered_set<uint32> MarkNodeDead(uint8 nodeId);
+
+    /// Return the lowest nodeId among alive (non-dead) non-instance peer nodes, or 0 if none.
+    uint8 GetLowestAliveNonInstanceNodeId() const;
 
     // ── Local map set (zone-based routing) ───────────────────────────────────
 
