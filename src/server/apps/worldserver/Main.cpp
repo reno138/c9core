@@ -305,6 +305,25 @@ int main(int argc, char** argv)
 
     Acore::Module::SetEnableModulesList(AC_MODULES_LIST);
 
+    // Connect to NATS cluster bus BEFORE loading the world so that
+    // SpawnContinentTransports() can query peer transport PathProgress values
+    // via ProxyClient::QueryTransportSync() during SetInitialWorldSettings().
+    // (Handlers are queued via QueueCallback, so no race with in-flight world state.)
+    if (sConfigMgr->GetOption<int32>("ClusterServer.NodeId", 0) > 0)
+    {
+        sClusterMgr.LoadLocalMaps();
+
+        std::string natsUrl     = sConfigMgr->GetOption<std::string>("ClusterServer.NatsURL", "nats://127.0.0.1:4222");
+        std::string gameAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
+        // Read port from config directly — sWorld->getIntConfig(CONFIG_PORT_WORLD) isn't
+        // populated until SetInitialWorldSettings() runs below.
+        uint16 gamePort = static_cast<uint16>(
+            sConfigMgr->GetOption<int32>("WorldServerPort", 8085));
+        uint8 serverType = (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false) ||
+                            sConfigMgr->GetOption<bool>("InstanceServer.Enable", false)) ? 1 : 0;
+        sProxyClient.Initialize(natsUrl, serverType, gamePort, gameAddress);
+    }
+
     ///- Initialize the World
     sSecretMgr->Initialize();
     sWorld->SetInitialWorldSettings();
@@ -369,21 +388,6 @@ int main(int argc, char** argv)
         ///- Clean database before leaving
         ClearOnlineAccounts();
     });
-
-    // Connect to NATS cluster bus if ClusterServer.NodeId is configured.
-    // ClusterServer.NodeId = 0 (default) disables cluster mode for standalone use.
-    if (sConfigMgr->GetOption<int32>("ClusterServer.NodeId", 0) > 0)
-    {
-        sClusterMgr.LoadLocalMaps();
-
-        std::string natsUrl     = sConfigMgr->GetOption<std::string>("ClusterServer.NatsURL", "nats://127.0.0.1:4222");
-        std::string gameAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
-        uint16 gamePort         = static_cast<uint16>(sWorld->getIntConfig(CONFIG_PORT_WORLD));
-        // server_type: 1 = instance server, 0 = regular worldserver.
-        uint8 serverType = (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false) ||
-                            sConfigMgr->GetOption<bool>("InstanceServer.Enable", false)) ? 1 : 0;
-        sProxyClient.Initialize(natsUrl, serverType, gamePort, gameAddress);
-    }
 
     // Set server online (allow connecting now)
     LoginDatabase.DirectExecute("UPDATE realmlist SET flag = flag & ~{}, population = 0 WHERE id = '{}'", REALM_FLAG_VERSION_MISMATCH, realm.Id.Realm);
