@@ -17,11 +17,13 @@
 
 /**
  * @file clustermgr/Main.cpp
- * @brief clustermgr — ncurses TUI for C9Core cluster management.
+ * @brief clustermgr — ncurses TUI + embedded web UI for C9Core cluster management.
  *
- * Connects to the proxy's management port (default 9090) using a PSK-encrypted
- * channel, subscribes to node status updates, and presents a Midnight Commander-
- * style interface for monitoring and controlling cluster nodes.
+ * Architecture:
+ *   - NatsMonitor subscribes to cluster.mgmt.status + cluster.mgmt.players
+ *   - HistoryStore retains time-series samples (default 1 hour @ 5 s)
+ *   - WebServer (Boost.Beast, port 9191) serves the HTML5 SPA + REST/WS API
+ *   - ClusterUI (ncurses) runs on the main thread; updated via NatsMonitor callbacks
  *
  * Usage:
  *   clustermgr [-c clustermgr.conf]
@@ -32,18 +34,18 @@
 #include "Errors.h"
 #include "GitRevision.h"
 #include "Log.h"
-#include "ManagementClient.h"
+#include "NatsMonitor.h"
+#include "HistoryStore.h"
+#include "WebServer.h"
 #include "ClusterUI.h"
-#include "OpenSSLCrypto.h"
-#include <boost/asio/io_context.hpp>
 #include <boost/program_options.hpp>
 #include <boost/version.hpp>
+#include <chrono>
 #include <csignal>
+#include <ctime>
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <openssl/crypto.h>
-#include <openssl/opensslv.h>
 #include <thread>
 
 #ifndef _ACORE_CLUSTERMGR_CONFIG
@@ -80,58 +82,110 @@ int main(int argc, char** argv)
         []()
         {
             LOG_INFO("server.clustermgr", "> Config: {}", sConfigMgr->GetFilename());
-            LOG_INFO("server.clustermgr", "> SSL:    {}", OPENSSL_VERSION_TEXT);
             LOG_INFO("server.clustermgr", "> Boost:  {}.{}.{}",
                      BOOST_VERSION / 100000, BOOST_VERSION / 100 % 1000, BOOST_VERSION % 100);
         });
 
-    OpenSSLCrypto::threadsSetup();
-    std::shared_ptr<void> opensslHandle(nullptr, [](void*) { OpenSSLCrypto::threadsCleanup(); });
-
     // ── Read config ────────────────────────────────────────────────────────────
-    std::string proxyHost    = sConfigMgr->GetOption<std::string>("ProxyAddress",         "127.0.0.1");
-    uint16 proxyPort         = static_cast<uint16>(sConfigMgr->GetOption<int32>("ProxyManagementPort", 9090));
-    std::string sharedSecret = sConfigMgr->GetOption<std::string>("Management.SharedSecret", "change-me");
+    std::string natsUrl      = sConfigMgr->GetOption<std::string>("ClusterServer.NatsUrl", "nats://127.0.0.1:4222");
+    bool        webEnabled   = sConfigMgr->GetOption<bool>("Web.Enabled", true);
+    uint16      webPort      = static_cast<uint16>(sConfigMgr->GetOption<int32>("Web.Port",     9191));
+    std::string webBind      = sConfigMgr->GetOption<std::string>("Web.BindAddr", "0.0.0.0");
+    std::string tilesPath    = sConfigMgr->GetOption<std::string>("Map.TilesPath", "");
+    uint32      retentionSec = static_cast<uint32>(sConfigMgr->GetOption<int32>("History.RetentionSeconds", 3600));
+    uint32      deadThresh   = static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.NodeDeadThreshold", 30));
 
-    // ── Create IO context and ManagementClient ─────────────────────────────────
-    auto ioCtx = std::make_shared<boost::asio::io_context>();
+    // MgmtStatusInterval tells us how many samples per hour.
+    uint32 statusIntervalSec = static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.MgmtStatusInterval", 5));
+    std::size_t maxSamples = (statusIntervalSec > 0) ? (retentionSec / statusIntervalSec) : 720;
 
-    auto client = std::make_shared<ManagementClient>(*ioCtx);
-    auto ui     = std::make_shared<ClusterUI>(proxyHost, proxyPort, client);
+    // ── Construct core objects ─────────────────────────────────────────────────
+    auto history = std::make_shared<HistoryStore>(maxSamples);
+    auto monitor = std::make_shared<NatsMonitor>();
 
-    // Wire up callbacks — these are called from the io_context thread
-    ManagementClient::StatusCallback statusCb = [ui](std::vector<NodeInfo> nodes)
+    // ── Create WebServer (optional) ────────────────────────────────────────────
+    std::unique_ptr<WebServer> webServer;
+    if (webEnabled)
+        webServer = std::make_unique<WebServer>(monitor, history, tilesPath, webPort, webBind);
+
+    // ── Create TUI ────────────────────────────────────────────────────────────
+    auto ui = std::make_shared<ClusterUI>(natsUrl, monitor);
+
+    // ── Wire NatsMonitor callbacks ────────────────────────────────────────────
+    //
+    // These lambdas run on NATS internal threads — all UI / WebServer calls
+    // are thread-safe (mutex-protected or posted to io_context).
+    //
+    NatsMonitor::StatusCallback statusCb = [&](std::vector<NodeInfo> nodes)
     {
-        ui->UpdateNodes(std::move(nodes));
-    };
-    ManagementClient::ConnectCallback connectCb = [ui](bool connected)
-    {
-        ui->SetConnected(connected);
-    };
+        // Record history samples.
+        uint32 nowSec = static_cast<uint32>(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
 
-    client->Start(proxyHost, proxyPort, sharedSecret,
-                  std::move(statusCb), std::move(connectCb));
-
-    // ── Launch io_context in background thread ─────────────────────────────────
-    std::thread ioThread([&ioCtx]()
-    {
-        try
+        for (auto const& n : nodes)
         {
-            ioCtx->run();
+            // Detect RUNNING → CRASHED transition for crash log.
+            // We infer this from state == 5 (watchdog set it).
+            // Look up previous state from history — if we just got a new "state=5"
+            // sample after previous samples, this is a new crash.
+            // For simplicity, record a crash whenever state flips to 5 and the
+            // most recent sample had playerCount > 0 or uptimeSecs > 0.
+            if (n.state == 5)
+            {
+                auto prev = history->GetSamples(n.nodeId);
+                bool wasCrash = prev.empty() || prev.back().playerCount > 0 ||
+                                (prev.size() > 1 && prev.back().playerCount == 0 && n.uptimeSecs == 0);
+                // Record crash only once (when we get the first crashed sample).
+                if (!prev.empty() || wasCrash)
+                {
+                    CrashEvent ce;
+                    ce.timestampSec = nowSec;
+                    ce.uptimeSecs   = n.uptimeSecs;
+                    ce.playerCount  = n.playerCount;
+                    auto crashes = history->GetCrashes(n.nodeId);
+                    // Avoid duplicate crash entries within 30s.
+                    bool isDup = !crashes.empty() && (nowSec - crashes.back().timestampSec < 30);
+                    if (!isDup)
+                    {
+                        history->RecordCrash(n.nodeId, ce);
+                        if (webServer)
+                            webServer->OnCrash(n.nodeId, ce);
+                    }
+                }
+            }
+            else if (n.state == 3)
+            {
+                NodeSample s;
+                s.timestampSec = nowSec;
+                s.playerCount  = n.playerCount;
+                s.memUsageMB   = n.memUsageMB;
+                s.cpuPercent   = n.cpuPercent;
+                history->RecordSample(n.nodeId, s);
+            }
         }
-        catch (std::exception const& e)
-        {
-            LOG_ERROR("clustermgr", "IO thread exception: {}", e.what());
-        }
-    });
+
+        ui->UpdateNodes(nodes);
+        ui->SetConnected(monitor->IsConnected());
+
+        if (webServer)
+            webServer->OnNodeUpdate(nodes);
+    };
+
+    monitor->Start(natsUrl, std::move(statusCb), deadThresh);
+
+    if (webServer)
+        webServer->Start();
 
     // ── Run TUI (blocks main thread until user presses F10 / q) ───────────────
     LOG_INFO("server.clustermgr", "clustermgr: Starting TUI. Press F10 to quit.");
+    LOG_INFO("server.clustermgr", "clustermgr: Web UI at http://{}:{}/", webBind == "0.0.0.0" ? "localhost" : webBind, webPort);
+
     ui->Run();
 
     // ── Shutdown ───────────────────────────────────────────────────────────────
-    ioCtx->stop();
-    ioThread.join();
+    if (webServer)
+        webServer->Stop();
 
     LOG_INFO("server.clustermgr", "clustermgr: Exited cleanly.");
     return 0;

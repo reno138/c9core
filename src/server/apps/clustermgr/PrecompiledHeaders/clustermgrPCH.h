@@ -20,20 +20,28 @@
 
 #include "Config.h"
 #include "Log.h"
-#include "PskCrypt.h"
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/post.hpp>
 #include <boost/asio/steady_timer.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
+#include <boost/beast/websocket.hpp>
 #include "BoostProcess.h"
 #include <atomic>
 #include <chrono>
+#include <deque>
+#include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #endif // clustermgrPCH_h__

@@ -6,97 +6,107 @@
 ###################################################################################################
 # SECTION INDEX
 #
-#    PROXY CONNECTION
+#    NATS CONNECTION
+#    WEB UI
+#    HISTORY
 #    DEPLOY DEFAULTS
 #    LOGGING
 #
 ###################################################################################################
 
 ###################################################################################################
-# PROXY CONNECTION
+# NATS CONNECTION
 #
-#    ProxyAddress
-#        Description: IP address or hostname of the proxy server.
-#        Default:     "127.0.0.1"
+#    ClusterServer.NatsUrl
+#        Description: NATS server URL.  Must point to the same NATS broker used by worldservers.
+#                     clustermgr subscribes to cluster.mgmt.status and cluster.mgmt.players.
+#        Default:     "nats://192.0.2.70:4222"
 
-ProxyAddress = "127.0.0.1"
-
-#
-#    ProxyManagementPort
-#        Description: Port the proxy listens on for management connections (must match proxyserver.conf ManagementPort).
-#        Default:     9090
-
-ProxyManagementPort = 9090
+ClusterServer.NatsUrl = "nats://192.0.2.70:4222"
 
 #
-#    Management.SharedSecret
-#        Description: Pre-shared secret for channel encryption (must match proxyserver.conf and nodemgr.conf).
-#        Default:     "change-me"
+#    ClusterServer.NodeDeadThreshold
+#        Description: Seconds of silence from a node's cluster.mgmt.status before it is marked
+#                     CRASHED in the TUI and web UI.  Must be > ClusterServer.MgmtStatusInterval.
+#        Default:     30
 
-Management.SharedSecret = "change-me"
+ClusterServer.NodeDeadThreshold = 30
+
+#
+#    ClusterServer.MgmtStatusInterval
+#        Description: Expected publish interval (seconds) for cluster.mgmt.status from worldservers.
+#                     Used to compute the HistoryStore maxSamples.  Must match the worldserver config.
+#        Default:     5
+
+ClusterServer.MgmtStatusInterval = 5
+
+#
+###################################################################################################
+
+###################################################################################################
+# WEB UI
+#
+#    Web.Enabled
+#        Description: Enable the embedded Boost.Beast HTTP + WebSocket server.
+#                     When enabled, the C9Core web UI is accessible at http://host:Web.Port/.
+#        Default:     1
+
+Web.Enabled = 1
+
+#
+#    Web.Port
+#        Description: TCP port for the embedded web server.
+#        Default:     9191
+
+Web.Port = 9191
+
+#
+#    Web.BindAddr
+#        Description: IP address to bind the web server to.
+#                     "0.0.0.0" = all interfaces; "127.0.0.1" = localhost only.
+#        Default:     "0.0.0.0"
+
+Web.BindAddr = "0.0.0.0"
+
+#
+#    Map.TilesPath
+#        Description: Local directory containing WoW 3.3.5a map tiles (Keira3-format).
+#                     Directory structure: {TilesPath}/{mapId}/{z}/{x}/{y}.png
+#                     Leave empty to serve empty placeholder tiles (map viewer shows labels only).
+#        Default:     ""
+#        Example:     "/home/wow/wowcluster/map-tiles"
+
+Map.TilesPath = ""
+
+#
+###################################################################################################
+
+###################################################################################################
+# HISTORY
+#
+#    History.RetentionSeconds
+#        Description: How many seconds of node health history to retain in memory.
+#                     At the default 5s publish interval, 3600s = 720 samples per node.
+#        Default:     3600
+
+History.RetentionSeconds = 3600
 
 #
 ###################################################################################################
 
 ###################################################################################################
 # DEPLOY DEFAULTS
-#    These are the default values pre-filled in the Deploy Wizard (F4).
-#    All values can be overridden interactively at deploy time.
+#    Pre-filled values for the Deploy Wizard (TUI F4 or web UI modal).
 #
-#    Deploy.WorldserverBin
-#        Description: Local path to the worldserver binary to deploy.
-#        Default:     "./worldserver"
 
-Deploy.WorldserverBin = "./worldserver"
-
-#
-#    Deploy.NodemgrBin
-#        Description: Local path to the nodemgr binary to deploy.
-#        Default:     "./nodemgr"
-
-Deploy.NodemgrBin = "./nodemgr"
-
-#
-#    Deploy.WorldserverConf
-#        Description: Local path to the worldserver.conf to deploy.
-#        Default:     "./worldserver.conf"
-
+Deploy.WorldserverBin  = "./worldserver"
+Deploy.NodemgrBin      = "./nodemgr"
 Deploy.WorldserverConf = "./worldserver.conf"
-
-#
-#    Deploy.NodemgrConf
-#        Description: Local path to the nodemgr.conf to deploy.
-#        Default:     "./nodemgr.conf"
-
-Deploy.NodemgrConf = "./nodemgr.conf"
-
-#
-#    Deploy.DefaultSSHUser
-#        Description: Default SSH username for deployment.
-#        Default:     "wow"
-
-Deploy.DefaultSSHUser = "wow"
-
-#
-#    Deploy.DefaultSSHPort
-#        Description: Default SSH port for deployment.
-#        Default:     22
-
-Deploy.DefaultSSHPort = 22
-
-#
-#    Deploy.DefaultSSHKey
-#        Description: Default SSH private key path for deployment.
-#        Default:     "~/.ssh/id_rsa"
-
-Deploy.DefaultSSHKey = "~/.ssh/id_rsa"
-
-#
-#    Deploy.DefaultRemotePath
-#        Description: Default remote base path for deployment.
-#        Default:     "/opt/c9core"
-
-Deploy.DefaultRemotePath = "/opt/c9core"
+Deploy.NodemgrConf     = "./nodemgr.conf"
+Deploy.DefaultSSHUser  = "reno"
+Deploy.DefaultSSHPort  = 22
+Deploy.DefaultSSHKey   = "~/.ssh/id_rsa"
+Deploy.DefaultRemotePath = "/home/wow/wowcluster"
 
 #
 ###################################################################################################
@@ -113,6 +123,7 @@ Appender.ClusterMgr=2,4,0,clustermgr.log,w
 Logger.root=4,Console ClusterMgr
 Logger.server.clustermgr=4,Console ClusterMgr
 Logger.clustermgr=4,Console ClusterMgr
+Logger.clustermgr.web=4,Console ClusterMgr
 
 #
 ###################################################################################################

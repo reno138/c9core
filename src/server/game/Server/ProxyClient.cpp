@@ -17,6 +17,10 @@
 
 #include "ProxyClient.h"
 #include <nats.h>
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+#include <unistd.h>
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "Battleground.h"
@@ -47,10 +51,11 @@
 void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
                               uint16 gamePort, std::string const& gameAddress)
 {
-    _natsUrl     = natsUrl;
-    _serverType  = serverType;
-    _gamePort    = gamePort;
-    _gameAddress = gameAddress;
+    _natsUrl        = natsUrl;
+    _serverType     = serverType;
+    _gamePort       = gamePort;
+    _gameAddress    = gameAddress;
+    _startupTimeMs  = getMSTime();
 
     // NodeId comes from config — no proxy request-reply needed.
     _nodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.NodeId", 0));
@@ -609,6 +614,23 @@ void ProxyClient::Update()
         for (uint8 deadNodeId : sClusterMgr.GetStaleNodeIds(deadThresholdMs, now))
             HandleNodeDead(deadNodeId);
     }
+
+    // Management monitoring publishes (consumed by clustermgr).
+    uint32 mgmtStatusIntervalMs =
+        static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.MgmtStatusInterval", 5)) * 1000u;
+    if (mgmtStatusIntervalMs > 0 && now - _lastMgmtStatusMs >= mgmtStatusIntervalMs)
+    {
+        SendMgmtStatus();
+        _lastMgmtStatusMs = now;
+    }
+
+    uint32 mgmtPlayersIntervalMs =
+        static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.MgmtPlayersInterval", 3)) * 1000u;
+    if (mgmtPlayersIntervalMs > 0 && now - _lastMgmtPlayersMs >= mgmtPlayersIntervalMs)
+    {
+        SendMgmtPlayers();
+        _lastMgmtPlayersMs = now;
+    }
 }
 
 // ── Transport sync ────────────────────────────────────────────────────────────
@@ -804,6 +826,10 @@ void ProxyClient::HandleNodeDead(uint8 deadNodeId)
                  deadNodeId, _bgCoordNodeId);
     }
 
+    // Track cluster instability for management monitoring.
+    if (_nodeCrashCount < 65535u)
+        ++_nodeCrashCount;
+
     // Broadcast so all surviving peer nodes update their routing tables.
     uint8 deadPayload[1] = { deadNodeId };
     PublishBroadcast(MSG_NODE_DEAD, deadPayload, 1);
@@ -875,6 +901,216 @@ void ProxyClient::SendNodeRefresh()
     PublishAnnounce();
     LOG_INFO("server.worldserver",
              "ProxyClient: Sent node re-announce (port={} nodeId={})", _gamePort, _nodeId);
+}
+
+// ── Management monitoring publishes (cluster.mgmt.*) ─────────────────────────
+
+void ProxyClient::PublishRaw(std::string const& subject, uint8 const* data, int len)
+{
+    if (!_nc)
+        return;
+    natsStatus s = natsConnection_Publish(_nc, subject.c_str(), data, len);
+    if (s != NATS_OK)
+        LOG_WARN("server.worldserver", "ProxyClient: PublishRaw to {} failed — {}",
+                 subject, natsStatus_GetText(s));
+    else
+        _natsBytesTx.fetch_add(static_cast<uint32>(len), std::memory_order_relaxed);
+}
+
+/// Read VmRSS from /proc/self/status in MB.
+static uint32 ReadMemUsageMB()
+{
+    std::ifstream f("/proc/self/status");
+    std::string line;
+    while (std::getline(f, line))
+    {
+        if (line.rfind("VmRSS:", 0) == 0)
+        {
+            uint32 kb = 0;
+            std::sscanf(line.c_str(), "VmRSS: %u", &kb);
+            return kb / 1024u;
+        }
+    }
+    return 0;
+}
+
+/// Compute CPU% from /proc/self/stat delta between calls.
+/// lastJiffies and lastCheckMs are persistent across calls (stored in ProxyClient).
+static uint8 ComputeCpuPercent(uint32& lastJiffies, uint32& lastCheckMs)
+{
+    // /proc/self/stat fields: pid(1) comm(2) state(3) ... utime(14) stime(15)
+    std::ifstream f("/proc/self/stat");
+    if (!f)
+        return 0;
+
+    std::string token;
+    unsigned long utime = 0, stime = 0;
+    // Skip fields 1-13 by reading tokens; field 2 (comm) may contain spaces
+    // inside parens so read whole line and parse from the end of the ')'
+    std::string line;
+    std::getline(f, line);
+    f.close();
+
+    // Find end of comm field — last ')'
+    auto rp = line.rfind(')');
+    if (rp == std::string::npos)
+        return 0;
+
+    // Fields after ')': state ppid pgrp session tty_nr tpgid flags
+    //   minflt cminflt majflt cmajflt utime stime   (12 more tokens)
+    std::istringstream ss(line.substr(rp + 1));
+    std::string skip;
+    for (int i = 0; i < 11; ++i)
+        ss >> skip;          // state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt
+    ss >> utime >> stime;
+
+    uint32 totalJiffies = static_cast<uint32>(utime + stime);
+    uint32 now = getMSTime();
+
+    if (lastJiffies == 0 || lastCheckMs == 0)
+    {
+        lastJiffies  = totalJiffies;
+        lastCheckMs  = now;
+        return 0;
+    }
+
+    uint32 diffJiffies = totalJiffies - lastJiffies;
+    uint32 diffMs      = now - lastCheckMs;
+    lastJiffies        = totalJiffies;
+    lastCheckMs        = now;
+
+    if (diffMs == 0)
+        return 0;
+
+    // Linux HZ = 100: each jiffy is 10ms.
+    // cpu% = (diffJiffies * 10ms) / diffMs * 100
+    uint32 pct = diffJiffies * 1000u / diffMs;
+    return static_cast<uint8>(std::min(pct, 100u));
+}
+
+void ProxyClient::SendMgmtStatus()
+{
+    if (!_nc || !_connected)
+        return;
+
+    // Collect metrics.
+    uint32 playerCount = static_cast<uint32>(sWorldSessionMgr->GetPlayerCount());
+    uint32 maxPlayers  = static_cast<uint32>(sWorldSessionMgr->GetPlayerAmountLimit());
+    uint32 pid         = static_cast<uint32>(::getpid());
+    uint32 uptimeSecs  = (getMSTime() - _startupTimeMs) / 1000u;
+    uint32 memUsageMB  = ReadMemUsageMB();
+    uint8  cpuPercent  = ComputeCpuPercent(_lastCpuJiffies, _lastCpuCheckMs);
+    uint32 natsTxBps   = _natsBytesTx.load(std::memory_order_relaxed) / 10u;  // ÷ heartbeat interval
+    uint32 natsRxBps   = _natsBytesRx.load(std::memory_order_relaxed) / 10u;
+
+    // Maps list.
+    std::unordered_set<uint32> localMaps = sClusterMgr.GetLocalMaps();
+    uint8 mapCount = static_cast<uint8>(std::min(localMaps.size(), std::size_t(128)));
+
+    // Address string.
+    uint8 addrLen = static_cast<uint8>(std::min(_gameAddress.size(), std::size_t(255)));
+
+    // Wire format (fixed 30 bytes + mapCount*4 + 1 + addrLen):
+    // [nodeId:1][state:1][playerCount:2][maxPlayers:2][pid:4][uptimeSecs:4]
+    // [memUsageMB:4][cpuPercent:1][crashCount:2][natsTxBps:4][natsRxBps:4]
+    // [mapCount:1][mapIds:4×n][addrLen:1][addr:n]
+    std::size_t fixedLen = 1+1+2+2+4+4+4+1+2+4+4+1;  // 30 bytes
+    std::size_t totalLen = fixedLen + static_cast<std::size_t>(mapCount) * 4 + 1 + addrLen;
+    std::vector<uint8> buf(totalLen, 0);
+
+    std::size_t off = 0;
+    buf[off++] = _nodeId;
+    buf[off++] = 3;   // state = RUNNING (we only publish when alive)
+    uint16 pc16 = static_cast<uint16>(std::min(playerCount, 65535u));
+    uint16 mp16 = static_cast<uint16>(std::min(maxPlayers,  65535u));
+    std::memcpy(buf.data() + off, &pc16, 2);      off += 2;
+    std::memcpy(buf.data() + off, &mp16, 2);      off += 2;
+    std::memcpy(buf.data() + off, &pid, 4);        off += 4;
+    std::memcpy(buf.data() + off, &uptimeSecs, 4); off += 4;
+    std::memcpy(buf.data() + off, &memUsageMB, 4); off += 4;
+    buf[off++] = cpuPercent;
+    std::memcpy(buf.data() + off, &_nodeCrashCount, 2); off += 2;
+    std::memcpy(buf.data() + off, &natsTxBps, 4);  off += 4;
+    std::memcpy(buf.data() + off, &natsRxBps, 4);  off += 4;
+    buf[off++] = mapCount;
+    uint8 mIdx = 0;
+    for (uint32 mapId : localMaps)
+    {
+        if (mIdx >= mapCount) break;
+        std::memcpy(buf.data() + off, &mapId, 4);
+        off += 4;
+        ++mIdx;
+    }
+    buf[off++] = addrLen;
+    if (addrLen > 0)
+        std::memcpy(buf.data() + off, _gameAddress.data(), addrLen);
+
+    PublishRaw("cluster.mgmt.status", buf.data(), static_cast<int>(totalLen));
+}
+
+void ProxyClient::SendMgmtPlayers()
+{
+    if (!_nc || !_connected)
+        return;
+
+    // Collect all online players' positions.
+    // DoForAllOnlinePlayers is thread-safe internally via session map mutex.
+    std::vector<uint8> buf;
+    buf.reserve(3 + 64 * 32);  // rough estimate
+
+    // Header: [nodeId:1][playerCount:2]
+    buf.push_back(_nodeId);
+    std::size_t countOff = buf.size();
+    buf.push_back(0);  // playerCount low byte — filled in below
+    buf.push_back(0);  // playerCount high byte
+
+    uint16 playerCount = 0;
+    sWorldSessionMgr->DoForAllOnlinePlayers([&](Player* player)
+    {
+        if (!player || !player->IsInWorld())
+            return;
+
+        uint64 guid   = player->GetGUID().GetRawValue();
+        uint16 mapId  = static_cast<uint16>(player->GetMapId());
+        float  x      = player->GetPositionX();
+        float  y      = player->GetPositionY();
+        float  z      = player->GetPositionZ();
+        uint16 zoneId = static_cast<uint16>(player->GetZoneId());
+        uint8  level  = static_cast<uint8>(player->GetLevel());
+        uint8  cls    = player->getClass();
+        uint8  race   = player->getRace();
+        uint8  team   = static_cast<uint8>(player->GetTeamId());
+
+        std::string const& name = player->GetName();
+        uint8 nameLen = static_cast<uint8>(std::min(name.size(), std::size_t(48)));
+
+        // Per-player: guid(8)+mapId(2)+x(4)+y(4)+z(4)+zoneId(2)+level(1)+class(1)+race(1)+team(1)+nameLen(1)+name
+        std::size_t needed = 8+2+4+4+4+2+1+1+1+1+1 + nameLen;
+        std::size_t base   = buf.size();
+        buf.resize(base + needed);
+
+        std::size_t off = base;
+        std::memcpy(buf.data() + off, &guid,   8); off += 8;
+        std::memcpy(buf.data() + off, &mapId,  2); off += 2;
+        std::memcpy(buf.data() + off, &x,      4); off += 4;
+        std::memcpy(buf.data() + off, &y,      4); off += 4;
+        std::memcpy(buf.data() + off, &z,      4); off += 4;
+        std::memcpy(buf.data() + off, &zoneId, 2); off += 2;
+        buf[off++] = level;
+        buf[off++] = cls;
+        buf[off++] = race;
+        buf[off++] = team;
+        buf[off++] = nameLen;
+        if (nameLen > 0)
+            std::memcpy(buf.data() + off, name.data(), nameLen);
+
+        ++playerCount;
+    });
+
+    // Fill in actual count
+    std::memcpy(buf.data() + countOff, &playerCount, 2);
+
+    PublishRaw("cluster.mgmt.players", buf.data(), static_cast<int>(buf.size()));
 }
 
 // ── Outgoing cluster messages ─────────────────────────────────────────────────

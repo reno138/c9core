@@ -170,6 +170,14 @@ public:
     /// drifts by more than 2 seconds from the received value.
     void SendTransportSync();
 
+    /// Publish a node health snapshot to cluster.mgmt.status.
+    /// Called from Update() every ClusterServer.MgmtStatusInterval seconds (default 5).
+    void SendMgmtStatus();
+
+    /// Publish all online player positions to cluster.mgmt.players.
+    /// Called from Update() every ClusterServer.MgmtPlayersInterval seconds (default 3).
+    void SendMgmtPlayers();
+
     /// Query a running peer node for its current transport PathProgress values via
     /// NATS request-reply on cluster.transport.query.  Returns a map of
     /// {guid_low → PathProgress} suitable for seeding CreateTransport() on this
@@ -209,6 +217,9 @@ private:
 
     /// Build and publish a cluster.announce payload with this node's identity.
     void PublishAnnounce();
+
+    /// Publish raw bytes to an arbitrary NATS subject (no msgType prefix).
+    void PublishRaw(std::string const& subject, uint8 const* data, int len);
 
     /// NATS callback for cluster.announce messages — registers peer nodes.
     static void OnAnnounceMsg(natsConnection* nc, natsSubscription* sub,
@@ -298,6 +309,12 @@ private:
     /// Broadcast when a node is declared dead after missing heartbeats.
     /// Payload: [deadNodeId:1]
     static constexpr uint8 MSG_NODE_DEAD               = 0x1C;
+    /// Published to cluster.mgmt.status every MgmtStatusInterval seconds.
+    /// Payload documented in SendMgmtStatus().  Consumed by clustermgr.
+    static constexpr uint8 MSG_MGMT_STATUS             = 0x1D;
+    /// Published to cluster.mgmt.players every MgmtPlayersInterval seconds.
+    /// Payload documented in SendMgmtPlayers().  Consumed by clustermgr.
+    static constexpr uint8 MSG_MGMT_PLAYERS            = 0x1E;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
@@ -321,6 +338,18 @@ private:
     uint32 _lastTransportSyncMs{ 0 };  ///< getMSTime() at last MSG_TRANSPORT_SYNC broadcast
     uint32 _transportSyncIntervalMs{ 60000 }; ///< broadcast interval (from config, ms)
     uint32 _lastDeadCheckMs{ 0 };      ///< getMSTime() at last dead-node check
+    uint32 _lastMgmtStatusMs{ 0 };     ///< getMSTime() at last cluster.mgmt.status publish
+    uint32 _lastMgmtPlayersMs{ 0 };    ///< getMSTime() at last cluster.mgmt.players publish
+
+    // ── Startup time (for uptime reporting) ───────────────────────────────────
+    uint32 _startupTimeMs{ 0 };        ///< getMSTime() at Initialize()
+
+    // ── CPU tracking for mgmt status ─────────────────────────────────────────
+    uint32 _lastCpuJiffies{ 0 };       ///< utime+stime from last /proc/self/stat read
+    uint32 _lastCpuCheckMs{ 0 };       ///< getMSTime() at last CPU measurement
+
+    // ── Cluster instability counter ───────────────────────────────────────────
+    uint16 _nodeCrashCount{ 0 };       ///< Incremented each time we detect a peer node death
 
     // ── Dynamic BG coordinator tracking ──────────────────────────────────────
     uint8  _bgCoordNodeId{ 0 };        ///< Currently elected BG coordinator node (from config, updated on failover)

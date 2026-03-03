@@ -142,10 +142,13 @@ foreach(APPLICATION_NAME ${APPLICATIONS_BUILD_LIST})
         shared)
   elseif(${APP_PROJECT_NAME} MATCHES "clustermgr")
     find_package(Curses REQUIRED)
+    find_package(Threads REQUIRED)
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC
         shared
-        ${CURSES_LIBRARIES})
+        nats_static
+        ${CURSES_LIBRARIES}
+        Threads::Threads)
     target_include_directories(${APP_PROJECT_NAME}
       PUBLIC
         ${CURSES_INCLUDE_DIR})

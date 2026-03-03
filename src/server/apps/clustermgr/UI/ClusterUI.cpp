@@ -24,28 +24,25 @@
 #include <sstream>
 #include <thread>
 
-
-// ── Column widths (content only, not counting the `|` separator) ──────────────
-static constexpr int W_ID      = 4;
-static constexpr int W_STATE   = 10;
-static constexpr int W_PLAYERS = 10;
+// ── Column widths (content width, not counting `|` separator) ─────────────────
+static constexpr int W_ID      = 3;
+static constexpr int W_STATE   = 9;
+static constexpr int W_PLAYERS = 9;
+static constexpr int W_MEM     = 7;   // "1200MB"
+static constexpr int W_CPU     = 5;   // " 14%"
 static constexpr int W_PID     = 7;
-static constexpr int W_UPTIME  = 9;
-static constexpr int W_LATENCY = 8;
-static constexpr int W_BW      = 13;  // "1.2M↑ 900K↓"
-// W_HOST: remaining width after all columns + separators
+static constexpr int W_UPTIME  = 7;
+// W_HOST: remaining
 
-ClusterUI::ClusterUI(std::string proxyHost, uint16 proxyPort, std::shared_ptr<ManagementClient> client)
-    : _proxyHost(std::move(proxyHost))
-    , _proxyPort(proxyPort)
-    , _client(std::move(client))
+ClusterUI::ClusterUI(std::string natsUrl, std::shared_ptr<NatsMonitor> monitor)
+    : _natsUrl(std::move(natsUrl))
+    , _monitor(std::move(monitor))
     , _lastUpdate(std::chrono::steady_clock::now())
 {
 }
 
 ClusterUI::~ClusterUI()
 {
-    // Stop ping thread if still running
     _pingRunning = false;
     if (_pingThread.joinable())
         _pingThread.join();
@@ -55,18 +52,18 @@ ClusterUI::~ClusterUI()
 
 void ClusterUI::InitColors()
 {
-    // Background colors use COLOR_BLACK; title/status bars use COLOR_BLUE bg
-    init_pair(COLOR_TITLE,        COLOR_WHITE,  COLOR_BLUE);
-    init_pair(COLOR_HEADER,       COLOR_CYAN,   COLOR_BLACK);
-    init_pair(COLOR_SELECTED,     COLOR_BLACK,  COLOR_CYAN);
-    init_pair(COLOR_RUNNING,      COLOR_GREEN,  COLOR_BLACK);
-    init_pair(COLOR_STOPPED,      COLOR_WHITE,  COLOR_BLACK);
-    init_pair(COLOR_STARTING,     COLOR_YELLOW, COLOR_BLACK);
-    init_pair(COLOR_CRASHED,      COLOR_RED,    COLOR_BLACK);
-    init_pair(COLOR_STATUS,       COLOR_WHITE,  COLOR_BLUE);
-    init_pair(COLOR_FKEY,         COLOR_BLACK,  COLOR_CYAN);
-    init_pair(COLOR_CONNECTED,    COLOR_GREEN,  COLOR_BLUE);
-    init_pair(COLOR_DISCONNECTED, COLOR_RED,    COLOR_BLUE);
+    init_pair(COLOR_TITLE,        COLOR_WHITE,   COLOR_BLUE);
+    init_pair(COLOR_HEADER,       COLOR_CYAN,    COLOR_BLACK);
+    init_pair(COLOR_SELECTED,     COLOR_BLACK,   COLOR_CYAN);
+    init_pair(COLOR_RUNNING,      COLOR_GREEN,   COLOR_BLACK);
+    init_pair(COLOR_STOPPED,      COLOR_WHITE,   COLOR_BLACK);
+    init_pair(COLOR_STARTING,     COLOR_YELLOW,  COLOR_BLACK);
+    init_pair(COLOR_CRASHED,      COLOR_RED,     COLOR_BLACK);
+    init_pair(COLOR_STATUS,       COLOR_WHITE,   COLOR_BLUE);
+    init_pair(COLOR_FKEY,         COLOR_BLACK,   COLOR_CYAN);
+    init_pair(COLOR_CONNECTED,    COLOR_GREEN,   COLOR_BLUE);
+    init_pair(COLOR_DISCONNECTED, COLOR_RED,     COLOR_BLUE);
+    init_pair(COLOR_CRASH_SUB,    COLOR_RED,     COLOR_BLACK);
 }
 
 void ClusterUI::Run()
@@ -75,8 +72,8 @@ void ClusterUI::Run()
     cbreak();
     noecho();
     keypad(stdscr, TRUE);
-    halfdelay(5);   // 0.5 second timeout on getch()
-    curs_set(0);    // hide cursor
+    halfdelay(5);
+    curs_set(0);
 
     if (has_colors())
     {
@@ -87,9 +84,8 @@ void ClusterUI::Run()
 
     _dirty = true;
 
-    // Start background latency ping thread
     _pingRunning = true;
-    _pingThread = std::thread(&ClusterUI::PingLoop, this);
+    _pingThread  = std::thread(&ClusterUI::PingLoop, this);
 
     bool running = true;
     while (running)
@@ -100,7 +96,6 @@ void ClusterUI::Run()
         int ch = getch();
         if (ch == ERR)
         {
-            // Half-delay timeout — redraw to update uptime counters in status bar
             Draw();
             continue;
         }
@@ -118,7 +113,6 @@ void ClusterUI::Run()
 
     endwin();
 
-    // Stop ping thread
     _pingRunning = false;
     if (_pingThread.joinable())
         _pingThread.join();
@@ -177,36 +171,38 @@ void ClusterUI::DrawTitle()
 
 void ClusterUI::DrawNodeTable()
 {
-    // Compute host column width from remaining space
-    // Columns: space(1) + ID + | + STATE + | + PLAYERS + | + PID + | + UPTIME + | + LATENCY + | + BW + | + HOST
-    int hostW = COLS - 1 - W_ID - 1 - W_STATE - 1 - W_PLAYERS - 1 - W_PID - 1 - W_UPTIME - 1 - W_LATENCY - 1 - W_BW - 1;
+    // Compute host column width from remaining space.
+    // Fixed columns: space(1)+ID(W_ID)+|+STATE(W_STATE)+|+PLAYERS(W_PLAYERS)+|+MEM(W_MEM)+|+CPU(W_CPU)+|+PID(W_PID)+|+UPTIME(W_UPTIME)+|+HOST
+    int fixedW = 1 + W_ID + 1 + W_STATE + 1 + W_PLAYERS + 1 + W_MEM + 1 + W_CPU + 1 + W_PID + 1 + W_UPTIME + 1;
+    int hostW  = COLS - fixedW;
     if (hostW < 8) hostW = 8;
 
-    // ── Column header row ─────────────────────────────────────────────────────
+    // Header
     attron(COLOR_PAIR(COLOR_HEADER) | A_BOLD);
     mvhline(1, 0, ' ', COLS);
     mvprintw(1, 0, " %-*s|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s",
              W_ID,      "ID",
              W_STATE,   " State",
              W_PLAYERS, " Players",
+             W_MEM,     " Mem",
+             W_CPU,     " CPU",
              W_PID,     " PID",
              W_UPTIME,  " Uptime",
-             W_LATENCY, " Ping",
-             W_BW,      " Bandwidth",
              hostW,     " Host");
     attroff(COLOR_PAIR(COLOR_HEADER) | A_BOLD);
 
-    // Separator below header
     mvhline(2, 0, ACS_HLINE, COLS);
 
-    // ── Node data rows ────────────────────────────────────────────────────────
+    // Node rows
     std::vector<NodeInfo> nodes;
     {
         std::lock_guard<std::mutex> lock(_nodesMutex);
         nodes = _nodes;
     }
+    // Sort by nodeId
+    std::sort(nodes.begin(), nodes.end(),
+              [](NodeInfo const& a, NodeInfo const& b) { return a.nodeId < b.nodeId; });
 
-    // Clamp selection
     if (!nodes.empty())
     {
         if (_selectedRow >= static_cast<int>(nodes.size()))
@@ -214,86 +210,90 @@ void ClusterUI::DrawNodeTable()
         if (_selectedRow < 0) _selectedRow = 0;
     }
 
-    int maxDataRows = LINES - 6;  // title(1)+header(1)+sep(1)+sep(1)+status(1)+fkey(1)
-    int startRow    = 3;
+    int maxDataRows = LINES - 6;
+    int screenRow   = 3;
+    int nodeIdx     = 0;
 
-    for (int i = 0; i < maxDataRows; ++i)
+    for (; nodeIdx < static_cast<int>(nodes.size()) && screenRow < LINES - 3; ++nodeIdx)
     {
-        int row = startRow + i;
-        mvhline(row, 0, ' ', COLS);  // clear line
+        NodeInfo const& n  = nodes[nodeIdx];
+        bool selected      = (nodeIdx == _selectedRow);
+        bool isCrashed     = (n.state == 5);
 
-        if (nodes.empty())
-        {
-            if (i == 0)
-            {
-                attron(COLOR_PAIR(COLOR_STOPPED));
-                mvprintw(row, 2, "No nodes registered with proxy.");
-                attroff(COLOR_PAIR(COLOR_STOPPED));
-            }
-            continue;
-        }
-
-        if (i >= static_cast<int>(nodes.size()))
-            continue;
-
-        NodeInfo const& n = nodes[i];
-        bool selected = (i == _selectedRow);
-
-        std::string stateStr  = FormatState(n.state);
-        std::string players   = std::to_string(n.playerCount) + "/" + std::to_string(n.maxPlayers);
-        std::string pidStr    = n.pid ? std::to_string(n.pid) : "-";
-        std::string uptime    = FormatUptime(n.uptimeSecs);
-        std::string host      = n.address.empty() ? "-" : (n.address + ":" + std::to_string(n.port));
+        std::string stateStr = FormatState(n.state);
+        std::string players  = std::to_string(n.playerCount) + "/" + std::to_string(n.maxPlayers);
+        std::string pidStr   = n.pid ? std::to_string(n.pid) : "-";
+        std::string uptime   = FormatUptime(n.uptimeSecs);
+        std::string memStr   = isCrashed ? "-" : FormatMemory(n.memUsageMB);
+        std::string cpuStr   = isCrashed ? "-" : (std::to_string(n.cpuPercent) + "%");
+        std::string host     = n.address.empty() ? "-" : (n.address + ":" + std::to_string(n.port));
         if (static_cast<int>(host.size()) > hostW)
             host = host.substr(0, hostW - 1) + ">";
 
-        // Latency: prefer control-channel RTT from proxy; fall back to ICMP ping.
-        int32 latMs = -1;
-        if (n.latencyMs > 0)
-        {
-            // Control-channel RTT measured by proxy via MSG_PING/MSG_PONG.
-            latMs = static_cast<int32>(n.latencyMs);
-        }
-        else
-        {
-            std::lock_guard<std::mutex> lock(_latencyMutex);
-            auto it = _latencyMs.find(n.nodeId);
-            if (it != _latencyMs.end())
-                latMs = it->second;
-        }
-        std::string latStr = FormatLatency(latMs);
-
-        // Bandwidth
-        std::string bwStr = FormatBandwidth(n.txBps, n.rxBps);
-
-        // Print whole row in selected/normal color
+        // Main node row
+        mvhline(screenRow, 0, ' ', COLS);
         if (selected)
             attron(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
 
-        mvprintw(row, 0, " %-*d|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s",
+        mvprintw(screenRow, 0, " %-*d|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s|%-*s",
                  W_ID,      n.nodeId,
                  W_STATE,   stateStr.c_str(),
                  W_PLAYERS, players.c_str(),
+                 W_MEM,     memStr.c_str(),
+                 W_CPU,     cpuStr.c_str(),
                  W_PID,     pidStr.c_str(),
                  W_UPTIME,  uptime.c_str(),
-                 W_LATENCY, latStr.c_str(),
-                 W_BW,      bwStr.c_str(),
                  hostW,     host.c_str());
 
         if (selected)
             attroff(COLOR_PAIR(COLOR_SELECTED) | A_BOLD);
 
-        // For non-selected rows, recolor the state column
         if (!selected)
         {
-            int stateCol = 1 + W_ID + 1;  // space + ID + '|'
+            int stateCol = 1 + W_ID + 1;
             attron(COLOR_PAIR(StateColorPair(n.state)) | A_BOLD);
-            mvprintw(row, stateCol, "%-*s", W_STATE, stateStr.c_str());
+            mvprintw(screenRow, stateCol, "%-*s", W_STATE, stateStr.c_str());
             attroff(COLOR_PAIR(StateColorPair(n.state)) | A_BOLD);
+        }
+
+        ++screenRow;
+
+        // Crash sub-row
+        if (isCrashed && screenRow < LINES - 3)
+        {
+            std::string sub;
+            if (n.uptimeSecs > 0 || n.playerCount > 0)
+            {
+                sub = "   \u2514 Was up " + FormatUptime(n.uptimeSecs) +
+                      " \xB7 " + std::to_string(n.playerCount) + " players" +
+                      " \xB7 Crashes detected: " + std::to_string(n.crashCount);
+            }
+            else
+            {
+                sub = "   \u2514 Crashes detected: " + std::to_string(n.crashCount);
+            }
+            if (static_cast<int>(sub.size()) > COLS - 2)
+                sub = sub.substr(0, COLS - 5) + "...";
+
+            mvhline(screenRow, 0, ' ', COLS);
+            attron(COLOR_PAIR(COLOR_CRASH_SUB) | A_DIM);
+            mvprintw(screenRow, 0, "%s", sub.c_str());
+            attroff(COLOR_PAIR(COLOR_CRASH_SUB) | A_DIM);
+            ++screenRow;
         }
     }
 
-    // Separator above status bar
+    // Clear remaining rows
+    for (; screenRow < LINES - 3; ++screenRow)
+        mvhline(screenRow, 0, ' ', COLS);
+
+    if (nodes.empty())
+    {
+        attron(COLOR_PAIR(COLOR_STOPPED));
+        mvprintw(3, 2, "No nodes seen yet — waiting for cluster.mgmt.status...");
+        attroff(COLOR_PAIR(COLOR_STOPPED));
+    }
+
     mvhline(LINES - 3, 0, ACS_HLINE, COLS);
 }
 
@@ -312,8 +312,8 @@ void ClusterUI::DrawStatusBar()
 
     attron(COLOR_PAIR(COLOR_STATUS));
     mvhline(LINES - 2, 0, ' ', COLS);
-    mvprintw(LINES - 2, 1, "Proxy: %s:%d  |  Nodes: %zu  |  Last update: %s",
-             _proxyHost.c_str(), _proxyPort, nodeCount, ageStr.c_str());
+    mvprintw(LINES - 2, 1, "NATS: %s  |  Nodes: %zu  |  Last update: %s",
+             _natsUrl.c_str(), nodeCount, ageStr.c_str());
     attroff(COLOR_PAIR(COLOR_STATUS));
 }
 
@@ -336,16 +336,13 @@ void ClusterUI::DrawFkeyBar()
     {
         int keyLen   = static_cast<int>(std::strlen(fk.key));
         int labelLen = static_cast<int>(std::strlen(fk.label));
-        if (x + keyLen + labelLen >= COLS)
-            break;
+        if (x + keyLen + labelLen >= COLS) break;
 
-        // Key number: reverse video on cyan
         attron(A_REVERSE);
         mvprintw(LINES - 1, x, "%s", fk.key);
         attroff(A_REVERSE);
         x += keyLen;
 
-        // Label: normal cyan background
         mvprintw(LINES - 1, x, "%s", fk.label);
         x += labelLen;
     }
@@ -392,7 +389,7 @@ void ClusterUI::StartSelected()
             return;
         nodeId = _nodes[_selectedRow].nodeId;
     }
-    _client->SendStartNode(nodeId);
+    _monitor->SendStartNode(nodeId);
 }
 
 void ClusterUI::StopSelected()
@@ -404,12 +401,11 @@ void ClusterUI::StopSelected()
             return;
         nodeId = _nodes[_selectedRow].nodeId;
     }
-    _client->SendStopNode(nodeId);
+    _monitor->SendStopNode(nodeId);
 }
 
 void ClusterUI::OpenDeployWizard()
 {
-    // Transition to blocking input mode for the wizard form
     nocbreak();
     cbreak();
     noecho();
@@ -425,13 +421,12 @@ void ClusterUI::OpenDeployWizard()
     cfg.sshPort         = sConfigMgr->GetOption<int32>      ("Deploy.DefaultSSHPort",  22);
     cfg.sshKey          = sConfigMgr->GetOption<std::string>("Deploy.DefaultSSHKey",   "~/.ssh/id_rsa");
     cfg.remotePath      = sConfigMgr->GetOption<std::string>("Deploy.DefaultRemotePath","/opt/c9core");
-    cfg.proxyAddress    = _proxyHost;  // pass proxy address for sed patching
+    cfg.proxyAddress    = _natsUrl;  // pass NATS url for reference
 
     DeployWizard wizard(std::move(cfg));
     std::string errMsg;
     wizard.Run(errMsg);
 
-    // Restore half-delay for the main event loop
     halfdelay(5);
     curs_set(0);
     _dirty = true;
@@ -439,7 +434,6 @@ void ClusterUI::OpenDeployWizard()
 
 void ClusterUI::Refresh()
 {
-    // The proxy sends status pushes automatically; we just ask for a redraw.
     _dirty = true;
 }
 
@@ -447,7 +441,6 @@ void ClusterUI::Refresh()
 
 void ClusterUI::PingLoop()
 {
-    // Stagger the first ping by 2 seconds so the UI has time to get nodes
     for (int i = 0; i < 4 && _pingRunning; ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
@@ -461,13 +454,11 @@ void ClusterUI::PingLoop()
 
         for (auto const& n : snap)
         {
-            if (!_pingRunning)
-                break;
+            if (!_pingRunning) break;
             if (!n.address.empty())
                 PingNode(n.nodeId, n.address);
         }
 
-        // Sleep 10 seconds between rounds, checking stop flag
         for (int i = 0; i < 20 && _pingRunning; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
@@ -475,9 +466,7 @@ void ClusterUI::PingLoop()
 
 void ClusterUI::PingNode(uint8 nodeId, std::string const& addr)
 {
-    // ping -c 1 -W 1 <addr> → parse "time=X.X ms" from stdout
     std::vector<std::string> args = { "-c", "1", "-W", "1", addr };
-
     try
     {
         bp::ipstream out;
@@ -487,7 +476,6 @@ void ClusterUI::PingNode(uint8 nodeId, std::string const& addr)
         std::string line;
         while (std::getline(out, line))
         {
-            // Look for "time=X.X ms" or "time=X ms"
             auto pos = line.find("time=");
             if (pos != std::string::npos)
             {
@@ -497,7 +485,6 @@ void ClusterUI::PingNode(uint8 nodeId, std::string const& addr)
                     latMs = static_cast<int32>(ms + 0.5f);
             }
         }
-
         proc.wait();
 
         {
@@ -521,32 +508,35 @@ std::string ClusterUI::FormatUptime(uint32 secs) const
     uint32 h = secs / 3600;
     uint32 m = (secs % 3600) / 60;
     uint32 s = secs % 60;
-    if (h > 0) return std::to_string(h) + "h " + std::to_string(m) + "m";
-    if (m > 0) return std::to_string(m) + "m " + std::to_string(s) + "s";
+    if (h > 0) return std::to_string(h) + "h" + std::to_string(m) + "m";
+    if (m > 0) return std::to_string(m) + "m" + std::to_string(s) + "s";
     return std::to_string(s) + "s";
 }
 
 std::string ClusterUI::FormatLatency(int32 ms) const
 {
-    if (ms < 0)  return "  ?";
+    if (ms < 0) return "  ?";
     return std::to_string(ms) + "ms";
 }
 
 std::string ClusterUI::FormatBandwidth(uint32 txBps, uint32 rxBps) const
 {
-    // Format a single byte/sec value as "X.Xu" or "Xu"
     auto fmtBps = [](uint32 bps) -> std::string
     {
-        if (bps >= 1048576)
-            return std::to_string(bps / 1048576) + "M";
-        if (bps >= 1024)
-            return std::to_string(bps / 1024) + "K";
+        if (bps >= 1048576) return std::to_string(bps / 1048576) + "M";
+        if (bps >= 1024)    return std::to_string(bps / 1024) + "K";
         return std::to_string(bps) + "B";
     };
-
-    if (txBps == 0 && rxBps == 0)
-        return "-";
+    if (txBps == 0 && rxBps == 0) return "-";
     return fmtBps(txBps) + "u " + fmtBps(rxBps) + "d";
+}
+
+std::string ClusterUI::FormatMemory(uint32 mb) const
+{
+    if (mb == 0) return "-";
+    if (mb >= 1024)
+        return std::to_string(mb / 1024) + "." + std::to_string((mb % 1024) * 10 / 1024) + "G";
+    return std::to_string(mb) + "M";
 }
 
 std::string ClusterUI::FormatState(uint8 state) const
@@ -567,10 +557,10 @@ int ClusterUI::StateColorPair(uint8 state) const
 {
     switch (state)
     {
-        case 2:  return COLOR_STARTING;  // Starting
-        case 3:  return COLOR_RUNNING;   // Running
-        case 4:  return COLOR_STARTING;  // Stopping
-        case 5:  return COLOR_CRASHED;   // Crashed
-        default: return COLOR_STOPPED;   // Unknown / Stopped
+        case 2:  return COLOR_STARTING;
+        case 3:  return COLOR_RUNNING;
+        case 4:  return COLOR_STARTING;
+        case 5:  return COLOR_CRASHED;
+        default: return COLOR_STOPPED;
     }
 }

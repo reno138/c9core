@@ -4870,4 +4870,23 @@ ClusterServer.TransportSyncInterval = 60
 ClusterServer.NodeDeadThreshold = 30
 
 #
+#    ClusterServer.MgmtStatusInterval
+#        Description: How often (in seconds) this worldserver publishes a health snapshot to
+#                     the NATS subject cluster.mgmt.status.  The clustermgr process subscribes
+#                     to this subject to display live node state in its TUI and web UI.
+#                     Set to 0 to disable management monitoring publishes.
+#        Default:     5
+
+ClusterServer.MgmtStatusInterval = 5
+
+#
+#    ClusterServer.MgmtPlayersInterval
+#        Description: How often (in seconds) this worldserver publishes all online player
+#                     positions to cluster.mgmt.players.  Consumed by clustermgr's map viewer.
+#                     Set to 0 to disable (recommended for high-population servers).
+#        Default:     3
+
+ClusterServer.MgmtPlayersInterval = 3
+
+#
 ###################################################################################################
