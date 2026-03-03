@@ -21,6 +21,8 @@
 #include "CryptoHash.h"
 #include "CryptoRandom.h"
 #include "DatabaseEnv.h"
+#include "HMAC.h"
+#include "IpAddress.h"
 #include "GameTime.h"
 #include "IPLocation.h"
 #include "Opcodes.h"
@@ -426,6 +428,18 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             LOG_ERROR("network", "WorldSocket::ReadDataHandler(): client {} sent malformed CMSG_PING", GetRemoteIpAddress().to_string());
             return ReadDataHandlerResult::Error;
         }
+        case CMSG_REDIRECTION_AUTH_PROOF:
+        {
+            LogOpcodeText(opcode, sessionGuard);
+            try
+            {
+                HandleRedirectAuthProof(packet);
+                return ReadDataHandlerResult::Ok;
+            }
+            catch (ByteBufferException const&) { }
+            LOG_ERROR("network", "WorldSocket::ReadDataHandler(): client {} sent malformed CMSG_REDIRECTION_AUTH_PROOF", GetRemoteIpAddress().to_string());
+            return ReadDataHandlerResult::Error;
+        }
         case CMSG_AUTH_SESSION:
         {
             LogOpcodeText(opcode, sessionGuard);
@@ -544,25 +558,6 @@ void WorldSocket::HandleAuthSession(WorldPacket & recvPacket)
     authSession->AddonInfo.resize(recvPacket.size() - recvPacket.rpos());
     recvPacket.read(authSession->AddonInfo.contents(), authSession->AddonInfo.size()); // .contents will throw if empty, thats what we want
 
-    // In cluster mode the proxy appends the real client IP as a null-terminated
-    // string after the addon data.  Extract it so we can override the socket peer
-    // address (which is the proxy's IP) for all subsequent IP-dependent checks.
-    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && recvPacket.rpos() < recvPacket.size())
-    {
-        std::size_t remaining = recvPacket.size() - recvPacket.rpos();
-        std::string forwardedIp;
-        forwardedIp.resize(remaining);
-        recvPacket.read(reinterpret_cast<uint8*>(forwardedIp.data()), remaining);
-        // Strip trailing null terminator(s) if present.
-        while (!forwardedIp.empty() && forwardedIp.back() == '\0')
-            forwardedIp.pop_back();
-        if (!forwardedIp.empty())
-        {
-            _proxyForwardedIp = std::move(forwardedIp);
-            LOG_DEBUG("network", "WorldSocket::HandleAuthSession: Proxy-forwarded client IP: {}", _proxyForwardedIp);
-        }
-    }
-
     // Get the account information from the auth database
     LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_INFO_BY_NAME);
     stmt->SetData(0, int32(realm.Id.Realm));
@@ -585,14 +580,7 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
 
     AccountInfo account(result->Fetch());
 
-    // Determine the address to use for all IP-dependent checks.
-    // In cluster mode the proxy forwarded the real client IP via HandleAuthSession;
-    // use it instead of the socket peer address (which is the proxy's internal IP).
-    std::string address;
-    if (!_proxyForwardedIp.empty())
-        address = _proxyForwardedIp;
-    else
-        address = sConfigMgr->GetOption<bool>("AllowLoggingIPAddressesInDatabase", true, true) ? GetRemoteIpAddress().to_string() : "0.0.0.0";
+    std::string address = sConfigMgr->GetOption<bool>("AllowLoggingIPAddressesInDatabase", true, true) ? GetRemoteIpAddress().to_string() : "0.0.0.0";
 
     LoginDatabasePreparedStatement* stmt = nullptr;
 
@@ -603,7 +591,8 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
     LoginDatabase.Execute(stmt);
     // This also allows to check for possible "hack" attempts on account
 
-    // even if auth credentials are bad, try using the session key we have - client cannot read auth response error without it
+    // Store session key for redirect HMAC computation and ARC4 initialisation.
+    _sessionKey = account.SessionKey;
     _authCrypt.Init(account.SessionKey);
 
     // First reject the connection if packet contains invalid data or realm state doesn't allow logging in
@@ -746,6 +735,84 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
     sWorldSessionMgr->AddSession(_worldSession);
 
     AsyncRead();
+}
+
+void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
+{
+    // Parse destination IP
+    boost::system::error_code ec;
+    auto addr = Acore::Net::make_address_v4(address, ec);
+    if (ec)
+    {
+        LOG_ERROR("network", "WorldSocket::SendRedirectClient: invalid destination address '{}'", address);
+        return;
+    }
+
+    // IP and port in network byte order — the WoW client passes these directly
+    // to the OS connect() call, which expects network byte order.
+    uint32 ipNet   = htonl(addr.to_uint());
+    uint16 portNet = htons(port);
+
+    // HMAC-SHA1 over [ip:4 + port:2] keyed with the account session key.
+    // The destination worldserver verifies the same HMAC from CMSG_REDIRECTION_AUTH_PROOF.
+    uint8 hmacData[6];
+    memcpy(hmacData,     &ipNet,   4);
+    memcpy(hmacData + 4, &portNet, 2);
+    auto hmac = Acore::Crypto::HMAC_SHA1::GetDigestOf(_sessionKey, hmacData, 6);
+
+    WorldPacket data(SMSG_REDIRECT_CLIENT, 4 + 2 + 4 + 20);
+    data << ipNet;          // uint32, network byte order
+    data << portNet;        // uint16, network byte order
+    data << uint32(0);      // unk
+    data.append(hmac.data(), hmac.size());  // uint8[20] HMAC
+
+    LOG_DEBUG("network", "WorldSocket::SendRedirectClient: redirecting {} to {}:{}", GetRemoteIpAddress().to_string(), address, port);
+    SendPacketAndLogOpcode(data);
+}
+
+void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
+{
+    // Sent by the client after connecting to the destination worldserver following
+    // an SMSG_REDIRECT_CLIENT.  By this point CMSG_AUTH_SESSION has already been
+    // processed successfully (_authed == true, _worldSession != nullptr).
+    // We verify the proof to confirm this is a redirect and not a cold login.
+    if (!_authed)
+    {
+        LOG_ERROR("network", "WorldSocket::HandleRedirectAuthProof: client {} sent proof before authenticating",
+            GetRemoteIpAddress().to_string());
+        return;
+    }
+
+    std::array<uint8, 20> proof{};
+    recvPacket.read(proof.data(), 20);
+
+    // Re-derive the expected HMAC using our own GameAddress + WorldServerPort.
+    std::string ownAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
+    uint16      ownPort    = uint16(sWorld->getIntConfig(CONFIG_PORT_WORLD));
+
+    boost::system::error_code ec;
+    auto ownAddr = Acore::Net::make_address_v4(ownAddress, ec);
+    if (ec)
+    {
+        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: ClusterServer.GameAddress '{}' invalid, skipping verification", ownAddress);
+        return;
+    }
+
+    uint32 ipNet   = htonl(ownAddr.to_uint());
+    uint16 portNet = htons(ownPort);
+    uint8  hmacData[6];
+    memcpy(hmacData,     &ipNet,   4);
+    memcpy(hmacData + 4, &portNet, 2);
+    auto expected = Acore::Crypto::HMAC_SHA1::GetDigestOf(_sessionKey, hmacData, 6);
+
+    if (proof != expected)
+    {
+        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: client {} proof mismatch (not a redirect or stale session key)",
+            GetRemoteIpAddress().to_string());
+        return;
+    }
+
+    LOG_DEBUG("network", "WorldSocket::HandleRedirectAuthProof: client {} redirect proof verified", GetRemoteIpAddress().to_string());
 }
 
 void WorldSocket::SendAuthResponseError(uint8 code)

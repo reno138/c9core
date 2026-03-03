@@ -16,6 +16,7 @@
  */
 
 #include "BackendSession.h"
+#include "Config.h"
 #include "IoContext.h"
 #include "ProxySocket.h"
 #include "CryptoHash.h"
@@ -36,7 +37,8 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
 
 BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<ProxySocket> owner,
                                std::string accountName, SessionKey const& sessionKey,
-                               uint32 realmId, uint64 playerGuid)
+                               uint32 realmId, uint64 playerGuid, std::string clientIp,
+                               bool isLoginReroute)
     : _owner(std::move(owner))
     , _socket(static_cast<boost::asio::io_context&>(ioContext))
     , _resolver(static_cast<boost::asio::io_context&>(ioContext))
@@ -45,10 +47,12 @@ BackendSession::BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<
     , _payloadBuffer(0)
     , _isReroute(true)
     , _handshakeState(HandshakeState::WaitChallenge)
+    , _isLoginReroute(isLoginReroute)
     , _accountName(std::move(accountName))
     , _sessionKey(sessionKey)
     , _realmId(realmId)
     , _playerGuid(playerGuid)
+    , _clientIp(std::move(clientIp))
 {
 }
 
@@ -59,6 +63,7 @@ BackendSession::~BackendSession()
 
 void BackendSession::Connect(std::string const& host, uint16 port)
 {
+    LOG_INFO("proxy", "BackendSession: Connecting to {}:{} (isReroute={})", host, port, _isReroute);
     // Arm a 10-second watchdog. If the backend is unreachable the client would
     // otherwise hang for the OS-level TCP timeout (30+ seconds). The timer fires
     // the callback with ec == 0; a successful connect cancels it (ec == operation_aborted).
@@ -109,7 +114,7 @@ void BackendSession::OnConnect(boost::system::error_code const& error)
         return;
     }
 
-    LOG_DEBUG("proxy", "BackendSession: Connected to backend.");
+    LOG_INFO("proxy", "BackendSession: TCP connected to backend (isReroute={})", _isReroute);
 
     // For non-reroute sessions: signal the owner to start reading from the client.
     // This prevents the race where CMSG_AUTH_SESSION arrives before the backend
@@ -141,9 +146,17 @@ void BackendSession::AsyncRead()
 
 void BackendSession::OnRead(boost::system::error_code const& error, std::size_t transferred)
 {
+    // Guard against any callbacks (error or data) that arrive after the proxy has
+    // intentionally closed this backend (e.g. during a reroute). Without this check,
+    // already-queued async_read_some callbacks with transferred > 0 and error == success
+    // would still reach ProcessReadBuffer() and forward stale packets to the client,
+    // causing ARC4 desync on the live backend.
+    if (_closedByProxy)
+        return;
+
     if (error)
     {
-        LOG_DEBUG("proxy", "BackendSession: Read closed: {}", error.message());
+        LOG_DEBUG("proxy", "BackendSession: Read closed unexpectedly: {}", error.message());
         if (auto owner = _owner.lock())
             owner->CloseSocket();
         return;
@@ -259,24 +272,129 @@ bool BackendSession::TryConsumePayload()
 
 void BackendSession::DispatchToClient()
 {
-    // During reroute handshake, intercept auth opcodes — do NOT forward to client.
+    bool const packetLog = sConfigMgr->GetOption<bool>("Proxy.PacketLog", false);
+
+    // During the reroute handshake, intercept specific opcodes and discard all others.
+    // Nothing gets forwarded to the client until the handshake is fully complete.
     if (_isReroute && _handshakeState != HandshakeState::Done)
     {
-        if (_opcode == SMSG_AUTH_CHALLENGE_OPCODE)
+        if (packetLog)
         {
-            HandleAuthChallenge();
-            return;
+            bool handled = (_handshakeState == HandshakeState::WaitChallenge &&
+                                (_opcode == SMSG_AUTH_CHALLENGE_OPCODE || _opcode == SMSG_AUTH_RESPONSE_OPCODE))
+                        || (_handshakeState == HandshakeState::WaitResponse &&
+                                _opcode == SMSG_AUTH_RESPONSE_OPCODE)
+                        || (_handshakeState == HandshakeState::WaitCharEnum &&
+                                _opcode == SMSG_CHAR_ENUM_OPCODE);
+            LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}  [reroute-{}]",
+                      _playerGuid, _opcode, _payloadSize, handled ? "intercept" : "drop");
         }
-        if (_opcode == SMSG_AUTH_RESPONSE_OPCODE)
+
+        switch (_handshakeState)
         {
-            HandleAuthResponse();
-            return;
+            case HandshakeState::WaitChallenge:
+                if (_opcode == SMSG_AUTH_CHALLENGE_OPCODE) { HandleAuthChallenge(); return; }
+                // IP-ban SMSG_AUTH_RESPONSE can arrive before SMSG_AUTH_CHALLENGE.
+                if (_opcode == SMSG_AUTH_RESPONSE_OPCODE) { HandleAuthResponse(); return; }
+                return; // discard unexpected packets
+            case HandshakeState::WaitResponse:
+                if (_opcode == SMSG_AUTH_RESPONSE_OPCODE) { HandleAuthResponse(); return; }
+                return; // discard unexpected packets
+            case HandshakeState::WaitCharEnum:
+                // Discard SMSG_ADDON_INFO, SMSG_CLIENTCACHE_VERSION, SMSG_TUTORIAL_FLAGS, etc.
+                // Wait only for SMSG_CHAR_ENUM which signals _legitCharacters is populated.
+                if (_opcode == SMSG_CHAR_ENUM_OPCODE) { HandleCharEnum(); return; }
+                return; // discard
+            default:
+                return;
         }
     }
 
     auto owner = _owner.lock();
     if (!owner)
         return;
+
+    // After the reroute handshake, drop pre-login S→C packets and wait for
+    // SMSG_LOGIN_VERIFY_WORLD.  When found, rewrite it to SMSG_NEW_WORLD
+    // (identical payload: mapId + x + y + z + orientation) so the client
+    // completes the SMSG_TRANSFER_PENDING loading-screen flow without disconnecting.
+    if (_rerouteLoginPending)
+    {
+        if (_opcode == SMSG_LOGIN_VERIFY_WORLD_OPCODE)
+        {
+            _rerouteLoginPending = false;
+
+            if (_isLoginReroute)
+            {
+                // GAP-1 login reroute: client is in initial login state and expects
+                // SMSG_LOGIN_VERIFY_WORLD directly (not SMSG_NEW_WORLD).  Forward as-is.
+                // No SetDropWorldportAck — the client won't send MSG_MOVE_WORLDPORT_ACK
+                // in the normal login flow.
+                if (packetLog)
+                    LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}  [login-reroute-verify-world]",
+                              _playerGuid, _opcode, _payloadSize);
+
+                owner->SetClientInWorld();
+                owner->QueuePacketForClient(_plainHeader, _headerLen, _payloadBuffer);
+            }
+            else
+            {
+                // In-world cross-node teleport: rewrite SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD
+                // so the client completes the SMSG_TRANSFER_PENDING loading-screen flow.
+                // SMSG_NEW_WORLD (0x03E) and SMSG_LOGIN_VERIFY_WORLD (0x236) share the same
+                // payload layout (mapId + x + y + z + orientation), only the opcode differs.
+                uint8 rewrittenHeader[5];
+                std::memcpy(rewrittenHeader, _plainHeader, _headerLen);
+                uint8 opcLow  = static_cast<uint8>(SMSG_NEW_WORLD_OPCODE & 0xFF);
+                uint8 opcHigh = static_cast<uint8>((SMSG_NEW_WORLD_OPCODE >> 8) & 0xFF);
+                if (_headerLen == 5)
+                {
+                    rewrittenHeader[3] = opcLow;
+                    rewrittenHeader[4] = opcHigh;
+                }
+                else
+                {
+                    rewrittenHeader[2] = opcLow;
+                    rewrittenHeader[3] = opcHigh;
+                }
+
+                if (packetLog)
+                    LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}→0x{:04X}  size {}  [reroute-rewrite]",
+                              _playerGuid, SMSG_LOGIN_VERIFY_WORLD_OPCODE, SMSG_NEW_WORLD_OPCODE, _payloadSize);
+
+                owner->SetClientInWorld();
+                owner->QueuePacketForClient(rewrittenHeader, _headerLen, _payloadBuffer);
+                // Tell ProxySocket to silently drop the client's MSG_MOVE_WORLDPORT_ACK:
+                // the destination node already spawned the player via PLAYER_LOGIN and does
+                // not expect (or need) a worldport ack.
+                owner->SetDropWorldportAck(true);
+            }
+            return;
+        }
+
+        // Pre-login packet — drop it.
+        // For in-world reroutes: client already has character data from initial login.
+        // For login reroutes: node2's pre-login packets (SMSG_ACCOUNT_DATA_TIMES, etc.)
+        //   must be suppressed to prevent ARC4 desync; character data will arrive after
+        //   SMSG_LOGIN_VERIFY_WORLD on the live stream.
+        if (packetLog)
+            LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}  [reroute-prelogin-drop]",
+                      _playerGuid, _opcode, _payloadSize);
+        return;
+    }
+
+    if (packetLog)
+    {
+        uint64 guid = _isReroute ? _playerGuid : owner->GetPlayerGuid();
+        LOG_DEBUG("proxy.packets", "S→C  GUID {:016X}  opcode 0x{:04X}  size {}",
+                  guid, _opcode, _payloadSize);
+    }
+
+    // Track when SMSG_LOGIN_VERIFY_WORLD first reaches the client so subsequent reroutes
+    // know whether the client has entered the world (in-world teleport) or is still in
+    // the initial login state (GAP-1 login reroute).
+    if (_opcode == SMSG_LOGIN_VERIFY_WORLD_OPCODE)
+        owner->SetClientInWorld();
 
     // Pass the plaintext header bytes and payload to ProxySocket.
     // ProxySocket will re-encrypt the header for the client direction.
@@ -285,6 +403,7 @@ void BackendSession::DispatchToClient()
 
 void BackendSession::HandleAuthChallenge()
 {
+    LOG_INFO("proxy", "BackendSession: Got SMSG_AUTH_CHALLENGE from backend, sending CMSG_AUTH_SESSION (account='{}')", _accountName);
     // SMSG_AUTH_CHALLENGE payload (72 bytes):
     //   uint32(1) | uint32 serverSeed | uint8[32] unk1 | uint8[32] unk2
     if (_payloadBuffer.GetActiveSize() < 8)
@@ -322,9 +441,11 @@ void BackendSession::HandleAuthChallenge()
     // 6-byte header (size BE + opcode LE) + payload
     // Payload: uint32 build | uint32 serverId | string account\0 | uint32 serverType |
     //          uint8[4] clientSeed | uint32 region | uint32 battlegroup | uint32 realmId |
-    //          uint64 dosResponse | uint8[20] digest | uint32 addonLen(0)
+    //          uint64 dosResponse | uint8[20] digest | uint32 addonLen(0) |
+    //          string realClientIp\0  ← extra suffix read by backends with ProxyServer.Enable=1
+    uint32 ipSuffixLen = static_cast<uint32>(_clientIp.size()) + 1; // +1 for null terminator
     uint32 payloadSize = 4 + 4 + static_cast<uint32>(_accountName.size()) + 1
-                       + 4 + 4 + 4 + 4 + 4 + 8 + 20 + 4;
+                       + 4 + 4 + 4 + 4 + 4 + 8 + 20 + 4 + ipSuffixLen;
     uint16 sizeField = static_cast<uint16>(payloadSize + 4); // +4 for the 4-byte opcode field
 
     std::vector<uint8> msg;
@@ -359,11 +480,20 @@ void BackendSession::HandleAuthChallenge()
     for (int i = 0; i < 8; ++i) msg.push_back(0); // DosResponse (uint64 = 0)
     msg.insert(msg.end(), digest, digest + 20);
     pushU32(0);                  // AddonInfo size (no addons)
+    // Real client IP suffix — read by backends with ProxyServer.Enable=1 to override peer address.
+    msg.insert(msg.end(), _clientIp.begin(), _clientIp.end());
+    msg.push_back(0);            // null terminator
 
-    LOG_DEBUG("proxy", "BackendSession: Sending CMSG_AUTH_SESSION to instance server for '{}'",
-              _accountName);
+    LOG_DEBUG("proxy", "BackendSession: Sending CMSG_AUTH_SESSION to backend for '{}' (realIp={})",
+              _accountName, _clientIp);
 
     SendRaw(msg);
+
+    // The proxy↔worldserver channel runs in plaintext (worldserver skips _authCrypt.Init
+    // when ProxyServer.Enable = 1).  Do NOT call InitCrypt() here — all subsequent
+    // backend packets are unencrypted and BackendSession reads/writes them as-is.
+    // The proxy handles ARC4 with the real client independently via _clientCrypt.
+
     _handshakeState = HandshakeState::WaitResponse;
 }
 
@@ -381,16 +511,66 @@ void BackendSession::HandleAuthResponse()
         return;
     }
 
-    LOG_INFO("proxy", "BackendSession: Instance server auth OK — initializing crypto and loading player");
+    LOG_INFO("proxy", "BackendSession: Instance server auth OK — sending CMSG_CHAR_ENUM");
 
-    // Initialize backend RC4 crypto with the player's session key.
-    InitCrypt(_sessionKey);
+    // Crypto was already initialized in HandleAuthChallenge() so SMSG_AUTH_RESPONSE
+    // could be decrypted.  Do NOT re-init here — that would reset the ARC4 stream
+    // and desync subsequent packet encryption with the worldserver.
+
+    // We must send CMSG_CHAR_ENUM before CMSG_PLAYER_LOGIN so the worldserver
+    // populates _legitCharacters for this account.  Without it, HandlePlayerLoginOpcode
+    // rejects the CMSG_PLAYER_LOGIN with "can't login with that character".
+    _handshakeState = HandshakeState::WaitCharEnum;
+    SendCharEnum();
+}
+
+void BackendSession::SendCharEnum()
+{
+    // CMSG_CHAR_ENUM (0x037): 6-byte header + 0-byte payload.
+    // size field = 4 (opcode only, no payload).
+    constexpr uint16 SIZE_FIELD      = 4;
+    constexpr uint32 CHAR_ENUM_OPCODE = 0x037;
+
+    uint8 header[6];
+    header[0] = static_cast<uint8>(SIZE_FIELD >> 8);
+    header[1] = static_cast<uint8>(SIZE_FIELD & 0xFF);
+    header[2] = static_cast<uint8>(CHAR_ENUM_OPCODE & 0xFF);
+    header[3] = static_cast<uint8>((CHAR_ENUM_OPCODE >> 8) & 0xFF);
+    header[4] = static_cast<uint8>((CHAR_ENUM_OPCODE >> 16) & 0xFF);
+    header[5] = static_cast<uint8>((CHAR_ENUM_OPCODE >> 24) & 0xFF);
+
+    // Encrypt header for the C→S backend direction (inverted: DecryptRecv() encrypts C→S).
+    if (_cryptInitialized)
+        _backendCrypt.DecryptRecv(header, 6);
+
+    std::vector<uint8> packet(header, header + 6);
+
+    LOG_DEBUG("proxy", "BackendSession: Sending synthesized CMSG_CHAR_ENUM to populate _legitCharacters");
+
+    SendRaw(packet);
+}
+
+void BackendSession::HandleCharEnum()
+{
+    LOG_INFO("proxy", "BackendSession: Got SMSG_CHAR_ENUM — sending CMSG_PLAYER_LOGIN (GUID {:016X})",
+             _playerGuid);
     _handshakeState = HandshakeState::Done;
 
-    // Synthesize CMSG_PLAYER_LOGIN so the instance server loads the character.
-    SendPlayerLogin();
+    // For BOTH login reroutes and in-world reroutes, suppress all pre-login S→C packets
+    // from the destination node until SMSG_LOGIN_VERIFY_WORLD arrives.
+    //
+    // In-world reroute (_isLoginReroute=false): drop pre-login packets (client already has
+    //   character data) and rewrite SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD.
+    //
+    // Login reroute (_isLoginReroute=true): same drop, but forward SMSG_LOGIN_VERIFY_WORLD
+    //   as-is — client is in initial login state and expects it directly (not SMSG_NEW_WORLD).
+    //   Pre-login packets from the destination node must NOT reach the client because some
+    //   (e.g. SMSG_AUTH_RESPONSE lookalikes from the node's login sequence) can desync the
+    //   ARC4 stream.  The client obtains character data via the subsequent SMSG_* flood that
+    //   comes AFTER SMSG_LOGIN_VERIFY_WORLD on the normal world stream.
+    _rerouteLoginPending = true;
 
-    // Notify ProxySocket to complete the backend switch.
+    SendPlayerLogin();
     if (auto owner = _owner.lock())
         owner->OnRerouteComplete(shared_from_this());
 }
@@ -472,6 +652,7 @@ void BackendSession::AsyncWrite()
 
 void BackendSession::Close()
 {
+    _closedByProxy = true; // suppress OnRead error-cascade before closing
     if (_socket.is_open())
     {
         boost::system::error_code ec;

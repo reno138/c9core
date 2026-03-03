@@ -4836,4 +4836,23 @@ ClusterServer.LFGMasterNode = 1
 ClusterServer.Maps = ""
 
 #
+#    ClusterServer.TransportSyncInterval
+#        Description: How often (in seconds) this node broadcasts its current transport
+#                     PathProgress values to all other cluster nodes via MSG_TRANSPORT_SYNC.
+#                     Receiving nodes apply a correction if their local position drifts by
+#                     more than 2 seconds from the broadcast value, keeping zeppelin and
+#                     ship positions consistent across the whole cluster.
+#
+#                     On startup, this node also performs a one-shot NATS request-reply to
+#                     "cluster.transport.query" to seed transport positions directly from a
+#                     running peer — eliminating any clock-based jitter entirely for nodes
+#                     that start after the first node is already running.
+#
+#                     Set to 0 to disable the periodic broadcast (not recommended for
+#                     multi-node clusters; the startup peer-query still runs regardless).
+#        Default:     60
+
+ClusterServer.TransportSyncInterval = 60
+
+#
 ###################################################################################################

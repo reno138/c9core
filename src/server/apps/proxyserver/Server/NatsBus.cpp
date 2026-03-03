@@ -55,14 +55,24 @@ void NatsBus::Initialize(std::string const& natsUrl)
         return;
     }
 
+    // Subscribe to instance-address queries from worldnodes (request-reply).
+    s = natsConnection_Subscribe(&_subInstQuery, _nc, "cluster.instance.query", OnInstanceQueryMsg, nullptr);
+    if (s != NATS_OK)
+    {
+        LOG_ERROR("proxy.nats", "NatsBus: Failed to subscribe to cluster.instance.query — {}", natsStatus_GetText(s));
+        Shutdown();
+        return;
+    }
+
     LOG_INFO("proxy.nats", "NatsBus: Connected to NATS at {}", natsUrl);
 }
 
 void NatsBus::Shutdown()
 {
-    if (_subProxy)    { natsSubscription_Destroy(_subProxy);    _subProxy    = nullptr; }
-    if (_subRegister) { natsSubscription_Destroy(_subRegister); _subRegister = nullptr; }
-    if (_nc)          { natsConnection_Destroy(_nc);             _nc          = nullptr; }
+    if (_subInstQuery) { natsSubscription_Destroy(_subInstQuery); _subInstQuery = nullptr; }
+    if (_subProxy)     { natsSubscription_Destroy(_subProxy);     _subProxy     = nullptr; }
+    if (_subRegister)  { natsSubscription_Destroy(_subRegister);  _subRegister  = nullptr; }
+    if (_nc)           { natsConnection_Destroy(_nc);              _nc           = nullptr; }
 }
 
 // ── Publish helpers ───────────────────────────────────────────────────────────
@@ -82,6 +92,48 @@ void NatsBus::PublishBroadcast(uint8 const* data, int len)
     natsStatus s = natsConnection_Publish(_nc, "cluster.broadcast", data, len);
     if (s != NATS_OK)
         LOG_WARN("proxy.nats", "NatsBus: PublishBroadcast failed — {}", natsStatus_GetText(s));
+}
+
+// ── Instance address query request-reply ─────────────────────────────────────
+
+/// Called on the NATS dispatch thread when a worldnode asks "which instance should I use?"
+///
+/// Request payload: empty (no content required).
+/// Reply payload: [addrLen:1][addr:addrLen][port:2]
+///   addrLen = 0 means no instance is available.
+void NatsBus::OnInstanceQueryMsg(natsConnection* nc, natsSubscription* /*sub*/,
+                                  natsMsg* msg, void* /*closure*/)
+{
+    const char* replyTo = natsMsg_GetReply(msg);
+    natsMsg_Destroy(msg);
+
+    if (!replyTo || !replyTo[0])
+        return;
+
+    std::string outAddr;
+    uint16      outPort = 0;
+    bool found = sProxyMgr.GetBestInstanceAddress(outAddr, outPort);
+
+    // Build reply: [addrLen:1][addr:addrLen][port:2]
+    std::vector<uint8> reply;
+    if (found && !outAddr.empty())
+    {
+        uint8 addrLen = static_cast<uint8>(std::min(outAddr.size(), size_t(255)));
+        reply.reserve(1 + addrLen + 2);
+        reply.push_back(addrLen);
+        reply.insert(reply.end(), outAddr.begin(), outAddr.begin() + addrLen);
+        reply.push_back(static_cast<uint8>(outPort & 0xFF));
+        reply.push_back(static_cast<uint8>(outPort >> 8));
+    }
+    else
+    {
+        reply.push_back(0); // addrLen = 0 signals "no instance available"
+    }
+
+    natsStatus s = natsConnection_Publish(nc, replyTo,
+                                          reply.data(), static_cast<int>(reply.size()));
+    if (s != NATS_OK)
+        LOG_WARN("proxy.nats", "NatsBus: OnInstanceQueryMsg reply failed — {}", natsStatus_GetText(s));
 }
 
 // ── Registration request-reply ────────────────────────────────────────────────
@@ -404,6 +456,24 @@ void NatsBus::OnClusterProxyMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
             if (rem < 2 + pl) break;
             std::vector<uint8> payload(p + 2, p + 2 + pl);
             sProxyMgr.BroadcastArenaResult(nodeId, pl, payload);
+            break;
+        }
+        // ── MSG_NODE_STATUS (0x19) — 10s player count + NATS bandwidth ──────────
+        case ClusterMsg::NODE_STATUS:
+        {
+            if (rem < 12) break;
+            uint32 playerCount, natsBytesTx, natsBytesRx;
+            std::memcpy(&playerCount, p,     4);
+            std::memcpy(&natsBytesTx, p + 4, 4);
+            std::memcpy(&natsBytesRx, p + 8, 4);
+            sProxyMgr.HandleNodeStatus(nodeId, playerCount, natsBytesTx, natsBytesRx);
+            break;
+        }
+        // ── MSG_NODE_REFRESH (0x1A) — 5min full port/map re-registration ────────
+        case ClusterMsg::NODE_REFRESH:
+        {
+            if (rem < 5) break;
+            sProxyMgr.HandleNodeRefresh(nodeId, p, rem);
             break;
         }
         default:

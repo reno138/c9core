@@ -13,42 +13,24 @@
 ###################################################################################################
 
 ###################################################################################################
-# PROXY CONNECTION
+# STARTUP
 #
-#    ProxyAddress
-#        Description: IP address or hostname of the proxy server.
-#        Default:     "127.0.0.1"
+#    NodeMgr.StartupDelay
+#        Description: Seconds to wait before launching the worldserver after nodemgr starts.
+#                     A small delay (3s) allows NATS and other cluster services to be ready first
+#                     when multiple nodes start simultaneously.
+#        Default:     3
 
-ProxyAddress = "127.0.0.1"
-
-#
-#    ProxyNodeMgrPort
-#        Description: Port the proxy listens on for nodemgr connections (must match proxyserver.conf NodeMgrPort).
-#        Default:     8091
-
-ProxyNodeMgrPort = 8091
+NodeMgr.StartupDelay = 3
 
 #
-#    Management.SharedSecret
-#        Description: Pre-shared secret for channel encryption (must match proxyserver.conf and clustermgr.conf).
-#        Default:     "change-me"
+#    NodeMgr.MaxRestarts
+#        Description: Maximum number of consecutive crash restarts before nodemgr gives up and exits.
+#                     Set to 0 for unlimited restarts.
+#                     After giving up, restart nodemgr manually to try again.
+#        Default:     10
 
-Management.SharedSecret = "change-me"
-
-#
-#    NodeId
-#        Description: The cluster node ID this nodemgr manages (1-based, must match proxy's WorldServer.Node.N config).
-#                     If the configured ID is already occupied the proxy will assign the next free slot.
-#        Default:     1
-
-NodeId = 1
-
-#
-#    WorldServerPort
-#        Description: The game port the managed worldserver listens on (must match proxy's WorldServer.Node.N.Port).
-#        Default:     8086
-
-WorldServerPort = 8086
+NodeMgr.MaxRestarts = 10
 
 #
 ###################################################################################################

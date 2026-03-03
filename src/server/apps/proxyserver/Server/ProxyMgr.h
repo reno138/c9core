@@ -95,6 +95,8 @@ struct NodeStatus
     std::string address;
     uint16    port{ 0 };
     uint32    latencyMs{ 0 };   ///< Control-channel RTT in ms (0 = not measured yet)
+    uint32    natsBytesTxPer10s{ 0 }; ///< NATS control bytes TX per 10s (reported by node)
+    uint32    natsBytesRxPer10s{ 0 }; ///< NATS control bytes RX per 10s (reported by node)
 };
 
 /**
@@ -162,6 +164,14 @@ public:
 
     /// Send MSG_NODE_STOP to the nodemgr for a given node.
     void StopNode(uint8 nodeId);
+
+    /// Handle a periodic 10s status report from a worldserver node.
+    /// Updates player count and NATS bandwidth stats in the NodeStatus table.
+    void HandleNodeStatus(uint8 nodeId, uint32 playerCount, uint32 natsBytesTx, uint32 natsBytesRx);
+
+    /// Handle a periodic 5-minute full refresh from a worldserver node.
+    /// Re-parses registration payload (port + maps) and updates routing without reassigning nodeId.
+    void HandleNodeRefresh(uint8 nodeId, uint8 const* payload, std::size_t len);
 
     // ── Management subscribers (clustermgr) ────────────────────────────────────
 
@@ -235,8 +245,14 @@ public:
     void OnBgQueueLeave(uint64 guid, uint32 bgTypeId);
     /// Called when the instance node confirms a BG instance was created.
     void OnBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId);
-    /// Return the node ID of the registered instance server (serverType==1), or 0 if none.
-    uint8 GetInstanceNodeId();
+    /// Return the node ID of the least-recently-used instance server, or 0 if none registered.
+    /// Uses round-robin across all registered instance nodes for even load distribution.
+    uint8 GetBestInstanceNodeId();
+    /// Return the game address and port for the best (least-recently-used) instance node.
+    /// @param outAddr  Filled with the node's game IP string.
+    /// @param outPort  Filled with the node's game port.
+    /// @return true if a suitable instance node was found and outAddr/outPort were set.
+    bool  GetBestInstanceAddress(std::string& outAddr, uint16& outPort);
 
 private:
     ProxyMgr() = default;
@@ -289,6 +305,9 @@ private:
     // ── Group directory ────────────────────────────────────────────────────────
     std::mutex _groupMutex;
     std::unordered_map<uint64, std::vector<ProxyGroupMember>> _groupMembers;
+
+    // ── Instance server selection (round-robin across all registered instance nodes) ─
+    uint32 _instanceRoundRobin{ 0 };   ///< Protected by _nodeMutex
 
     // ── LFG master routing ────────────────────────────────────────────────────
     uint8 _lfgMasterNodeId{ 1 };

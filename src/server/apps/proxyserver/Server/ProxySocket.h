@@ -83,8 +83,9 @@ private:
     void ResumeAfterAuth();
 
     /// Opcode constants (avoid game library dependency).
-    static constexpr uint32 CMSG_AUTH_SESSION_OPCODE  = 0x1ED;
-    static constexpr uint32 CMSG_PLAYER_LOGIN_OPCODE  = 0x03D;
+    static constexpr uint32 CMSG_AUTH_SESSION_OPCODE    = 0x1ED;
+    static constexpr uint32 CMSG_PLAYER_LOGIN_OPCODE    = 0x03D;
+    static constexpr uint32 MSG_MOVE_WORLDPORT_ACK_OPCODE = 0x0DC;
 
     /// Client-side AuthCrypt (proxy acts as server to client).
     AuthCrypt _clientCrypt;
@@ -112,6 +113,16 @@ private:
     /// When true, ReadHandler() pauses client reads (reroute in progress or DB query).
     bool _rerouting{ false };
 
+    /// Set by BackendSession after rewriting SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD.
+    /// The next MSG_MOVE_WORLDPORT_ACK from the client is silently dropped — the
+    /// destination node already spawned the player via PLAYER_LOGIN and doesn't need it.
+    bool _dropWorldportAck{ false };
+
+    /// Set to true the first time SMSG_LOGIN_VERIFY_WORLD is forwarded to the client.
+    /// Used to distinguish GAP-1 login reroutes (client not yet in world) from in-world
+    /// cross-node teleport reroutes (client received SMSG_TRANSFER_PENDING).
+    bool _clientInWorld{ false };
+
     /// Whether we are waiting for the DB auth query to complete.
     bool _waitingForQuery{ false };
 
@@ -120,6 +131,21 @@ private:
 
     /// Account name extracted from CMSG_AUTH_SESSION (needed for DB query).
     std::string _accountName;
+
+public:
+    /// Expose player GUID for opcode logging in BackendSession.
+    uint64 GetPlayerGuid() const { return _playerGuid; }
+
+    /// Called by BackendSession after rewriting SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD
+    /// so we can drop the client's subsequent MSG_MOVE_WORLDPORT_ACK.
+    void SetDropWorldportAck(bool drop) { _dropWorldportAck = drop; }
+
+    /// Called by BackendSession when SMSG_LOGIN_VERIFY_WORLD is forwarded to the client
+    /// (either directly or as a rewrite).  Marks this session as "client has entered world".
+    void SetClientInWorld() { _clientInWorld = true; }
+
+    /// True if the client has already entered the world (received SMSG_LOGIN_VERIFY_WORLD).
+    bool IsClientInWorld() const { return _clientInWorld; }
 };
 
 #endif // ProxySocket_h__

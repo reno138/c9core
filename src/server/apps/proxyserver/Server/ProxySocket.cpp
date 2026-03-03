@@ -160,6 +160,22 @@ bool ProxySocket::ReadDataHandler()
                   | (static_cast<uint32>(header[4]) << 16)
                   | (static_cast<uint32>(header[5]) << 24);
 
+    if (sConfigMgr->GetOption<bool>("Proxy.PacketLog", false))
+        LOG_DEBUG("proxy.packets", "C→S  GUID {:016X}  opcode 0x{:04X}  size {}",
+                  _playerGuid, opcode, CLIENT_HEADER_SIZE + _packetBuffer.GetActiveSize());
+
+    // After a cross-node reroute, the proxy synthesized SMSG_NEW_WORLD for the client.
+    // The client responds with MSG_MOVE_WORLDPORT_ACK which must be dropped — the
+    // destination node already spawned the player via PLAYER_LOGIN and has no handler
+    // waiting for this opcode.
+    if (_dropWorldportAck && opcode == MSG_MOVE_WORLDPORT_ACK_OPCODE)
+    {
+        _dropWorldportAck = false;
+        LOG_DEBUG("proxy", "ProxySocket: Dropping MSG_MOVE_WORLDPORT_ACK for GUID {:016X} (cross-node reroute)",
+                  _playerGuid);
+        return true;
+    }
+
     if (opcode == CMSG_AUTH_SESSION_OPCODE)
     {
         // Intercept: extract account name, query session key, pause reading.
@@ -193,8 +209,10 @@ bool ProxySocket::ReadDataHandler()
     std::memcpy(backendHeader, header, CLIENT_HEADER_SIZE);
 
     // Re-encrypt using inverted backend crypto: DecryptRecv() encrypts C→S toward backend.
-    // This is only valid after crypto is initialized; before that, headers are plaintext.
-    if (_clientCrypt.IsInitialized())
+    // Only applies when the backend ARC4 is initialized (direct-client mode without proxy).
+    // In cluster proxy mode the backend runs plaintext, so we send the decrypted header as-is.
+    // Note: AuthCrypt::DecryptRecv() ASSERTs on IsInitialized(), so the guard is mandatory.
+    if (_clientCrypt.IsInitialized() && _backend->GetCrypt().IsInitialized())
         _backend->GetCrypt().DecryptRecv(backendHeader, CLIENT_HEADER_SIZE);
 
     std::vector<uint8> packet;
@@ -296,8 +314,9 @@ void ProxySocket::HandleAuthSessionCallback(PreparedQueryResult result)
     // Initialize client-side crypto (normal server perspective).
     _clientCrypt.Init(sessionKey);
 
-    // Initialize backend-side crypto (inverted perspective, same key).
-    _backend->InitCrypt(sessionKey);
+    // Backend crypto is intentionally NOT initialized here.  The proxy↔worldserver
+    // channel runs in plaintext (worldserver skips _authCrypt.Init when
+    // ProxyServer.Enable=1), so BackendSession must never encrypt/decrypt.
 
     ResumeAfterAuth();
 }
@@ -335,7 +354,9 @@ void ProxySocket::RerouteToBackend(std::string const& address, uint16 port)
     _pendingBackend = std::make_shared<BackendSession>(
         sProxySocketMgr.GetIoContext(),
         shared_from_this(),
-        _accountName, _sessionKey, _realmId, _playerGuid);
+        _accountName, _sessionKey, _realmId, _playerGuid,
+        GetRemoteIpAddress().to_string(),
+        /*isLoginReroute=*/ !_clientInWorld);
 
     _pendingBackend->Connect(address, port);
 }

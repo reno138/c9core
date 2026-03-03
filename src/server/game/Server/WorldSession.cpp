@@ -1385,6 +1385,12 @@ Warden* WorldSession::GetWarden()
     return &(*_warden);
 }
 
+void WorldSession::SendRedirectClient(std::string const& address, uint16 port)
+{
+    if (m_Socket)
+        m_Socket->SendRedirectClient(address, port);
+}
+
 WorldSession::DosProtection::Policy WorldSession::DosProtection::EvaluateOpcode(WorldPacket const& p, time_t const time) const
 {
     AntiDosOpcodePolicy const* policy = sWorldGlobals->GetAntiDosPolicyForOpcode(p.GetOpcode());

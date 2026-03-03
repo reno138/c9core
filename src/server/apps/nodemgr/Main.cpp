@@ -19,9 +19,12 @@
  * @file nodemgr/Main.cpp
  * @brief nodemgr daemon — manages a single worldserver process.
  *
- * nodemgr connects to the proxy's NodeMgr port (default 8091),
- * registers with its configured node ID, and waits for start/stop commands.
- * It also sends a heartbeat with worldserver status every 5 seconds.
+ * nodemgr starts the worldserver automatically (after an optional startup
+ * delay) and monitors it for crashes.  On crash it restarts with exponential
+ * backoff up to NodeMgr.MaxRestarts consecutive failures before giving up.
+ *
+ * No proxy connection is required.  Cross-node coordination is handled
+ * directly by the worldservers via NATS (see ClusterServer.NatsUrl config).
  */
 
 #include "Banner.h"
@@ -31,9 +34,9 @@
 #include "Log.h"
 #include "NodeMgr.h"
 #include "OpenSSLCrypto.h"
-#include "ProxyLink.h"
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/program_options.hpp>
 #include <boost/version.hpp>
 #include <csignal>
@@ -49,6 +52,7 @@
 
 using namespace boost::program_options;
 namespace fs = std::filesystem;
+using namespace std::chrono_literals;
 
 variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile);
 
@@ -86,16 +90,17 @@ int main(int argc, char** argv)
     std::shared_ptr<void> opensslHandle(nullptr, [](void*) { OpenSSLCrypto::threadsCleanup(); });
 
     // ── Read config ────────────────────────────────────────────────────────────
-    std::string proxyHost  = sConfigMgr->GetOption<std::string>("ProxyAddress", "127.0.0.1");
-    uint16 proxyPort       = static_cast<uint16>(sConfigMgr->GetOption<int32>("ProxyNodeMgrPort", 8091));
-    std::string sharedSecret = sConfigMgr->GetOption<std::string>("Management.SharedSecret", "change-me");
-    uint8 configuredNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("NodeId", 1));
-    uint16 gamePort        = static_cast<uint16>(sConfigMgr->GetOption<int32>("WorldServerPort", 8086));
-
-    std::string worldserverBin  = sConfigMgr->GetOption<std::string>("WorldserverBin", "./worldserver");
+    std::string worldserverBin  = sConfigMgr->GetOption<std::string>("WorldserverBin",    "./worldserver");
     std::string worldserverConf = sConfigMgr->GetOption<std::string>("WorldserverConfig", "./worldserver.conf");
-    std::string worldserverLog  = sConfigMgr->GetOption<std::string>("WorldserverLog", "/tmp/worldserver-node.log");
-    bool        useGdb          = sConfigMgr->GetOption<bool>("NodeMgr.UseGdb", false);
+    std::string worldserverLog  = sConfigMgr->GetOption<std::string>("WorldserverLog",    "/tmp/worldserver-node.log");
+    bool        useGdb          = sConfigMgr->GetOption<bool>("NodeMgr.UseGdb",           false);
+
+    // Seconds to wait before the first worldserver launch (useful when bringing
+    // up multiple nodes simultaneously so NATS is ready first).
+    int startupDelaySecs = sConfigMgr->GetOption<int32>("NodeMgr.StartupDelay", 3);
+
+    // Maximum consecutive crash restarts before giving up (0 = unlimited).
+    int maxRestarts = sConfigMgr->GetOption<int32>("NodeMgr.MaxRestarts", 10);
 
     if (useGdb)
         LOG_INFO("server.nodemgr", "nodemgr: GDB mode ENABLED — crash backtraces will appear in {}", worldserverLog);
@@ -104,31 +109,110 @@ int main(int argc, char** argv)
     NodeMgr nodeMgr;
     nodeMgr.Configure(worldserverBin, worldserverConf, worldserverLog, useGdb);
 
-    LOG_INFO("server.nodemgr", "nodemgr: node_id={} proxy={}:{} worldserver={}",
-             configuredNodeId, proxyHost, proxyPort, worldserverBin);
+    LOG_INFO("server.nodemgr", "nodemgr: worldserver={} startupDelay={}s maxRestarts={}",
+             worldserverBin, startupDelaySecs, maxRestarts);
 
-    // ── Create IO context and ProxyLink ───────────────────────────────────────
+    // ── IO context and timers ─────────────────────────────────────────────────
     boost::asio::io_context ioCtx;
 
-    auto link = std::make_shared<ProxyLink>(ioCtx, nodeMgr);
-    link->Start(proxyHost, proxyPort, sharedSecret, configuredNodeId, gamePort);
+    // Crash-restart state
+    int  consecutiveCrashes = 0;
+    bool giveUp             = false;
+
+    // Steady poll timer — fires every 5s to check worldserver health.
+    auto pollTimer = std::make_shared<boost::asio::steady_timer>(ioCtx);
+
+    // Forward-declare so the lambda can schedule itself recursively.
+    std::function<void()> schedulePoll;
+    schedulePoll = [&]()
+    {
+        pollTimer->expires_after(5s);
+        pollTimer->async_wait([&](boost::system::error_code const& ec)
+        {
+            if (ec) return; // cancelled (shutdown)
+
+            nodeMgr.Poll();
+
+            NodeMgr::State state = nodeMgr.GetState();
+
+            if (state == NodeMgr::State::Crashed)
+            {
+                ++consecutiveCrashes;
+                int backoffSecs = std::min(1 << std::min(consecutiveCrashes - 1, 6), 60); // 1,2,4,8,16,32,60
+
+                if (maxRestarts > 0 && consecutiveCrashes > maxRestarts)
+                {
+                    LOG_ERROR("server.nodemgr",
+                              "nodemgr: worldserver crashed {} times — giving up. Restart nodemgr manually.",
+                              consecutiveCrashes);
+                    giveUp = true;
+                    ioCtx.stop();
+                    return;
+                }
+
+                LOG_WARN("server.nodemgr",
+                         "nodemgr: worldserver crashed (#{}) — restarting in {}s",
+                         consecutiveCrashes, backoffSecs);
+
+                auto restartTimer = std::make_shared<boost::asio::steady_timer>(ioCtx);
+                restartTimer->expires_after(std::chrono::seconds(backoffSecs));
+                restartTimer->async_wait([&nodeMgr, &consecutiveCrashes, restartTimer](boost::system::error_code const& ec2)
+                {
+                    if (!ec2)
+                    {
+                        LOG_INFO("server.nodemgr", "nodemgr: Restarting worldserver (attempt #{})...", consecutiveCrashes);
+                        nodeMgr.Start();
+                    }
+                });
+            }
+            else if (state == NodeMgr::State::Stopped && consecutiveCrashes > 0)
+            {
+                // Clean exit after a crash-restart cycle — treat as clean, reset counter.
+                LOG_INFO("server.nodemgr", "nodemgr: worldserver stopped cleanly — resetting crash counter");
+                consecutiveCrashes = 0;
+            }
+            else if (state == NodeMgr::State::Running)
+            {
+                consecutiveCrashes = 0; // reset after stable run
+            }
+
+            if (!giveUp)
+                schedulePoll();
+        });
+    };
 
     // ── Signal handling ────────────────────────────────────────────────────────
     boost::asio::signal_set signals(ioCtx, SIGINT, SIGTERM);
-    signals.async_wait([&ioCtx, &nodeMgr](boost::system::error_code const& error, int)
+    signals.async_wait([&ioCtx, &nodeMgr, &pollTimer](boost::system::error_code const& error, int)
     {
         if (!error)
         {
             LOG_INFO("server.nodemgr", "nodemgr: Shutting down...");
+            pollTimer->cancel();
             nodeMgr.Stop();
             ioCtx.stop();
         }
     });
 
+    // ── Initial startup ────────────────────────────────────────────────────────
+    auto startTimer = std::make_shared<boost::asio::steady_timer>(ioCtx);
+    startTimer->expires_after(std::chrono::seconds(startupDelaySecs));
+    startTimer->async_wait([&nodeMgr, &schedulePoll, startTimer](boost::system::error_code const& ec)
+    {
+        if (ec) return;
+        LOG_INFO("server.nodemgr", "nodemgr: Starting worldserver...");
+        nodeMgr.Start();
+        schedulePoll();
+    });
+
     LOG_INFO("server.nodemgr", "nodemgr: Running. Ctrl-C to stop.");
     ioCtx.run();
 
-    LOG_INFO("server.nodemgr", "nodemgr: Stopped.");
+    if (giveUp)
+        LOG_ERROR("server.nodemgr", "nodemgr: Exited due to too many crashes.");
+    else
+        LOG_INFO("server.nodemgr", "nodemgr: Stopped.");
+
     return 0;
 }
 

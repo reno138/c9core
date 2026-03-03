@@ -517,7 +517,7 @@ void ArenaTeam::NotifyStatsChanged()
 
     // Relay updated stats to all other cluster nodes so their in-memory ArenaTeam objects
     // reflect the new rating without requiring a relog.
-    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false) && sProxyClient.IsConnected())
+    if (sProxyClient.IsConnected())
         sProxyClient.SendArenaResult(TeamId, Stats.Rating, Stats.WeekGames, Stats.WeekWins,
                                      Stats.SeasonGames, Stats.SeasonWins, Stats.Rank);
 }

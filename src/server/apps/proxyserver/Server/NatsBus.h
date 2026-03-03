@@ -68,8 +68,9 @@ private:
     ~NatsBus() = default;
 
     natsConnection*   _nc{nullptr};
-    natsSubscription* _subProxy{nullptr};    ///< cluster.proxy subscriber
-    natsSubscription* _subRegister{nullptr}; ///< cluster.register subscriber (request-reply)
+    natsSubscription* _subProxy{nullptr};     ///< cluster.proxy subscriber
+    natsSubscription* _subRegister{nullptr};  ///< cluster.register subscriber (request-reply)
+    natsSubscription* _subInstQuery{nullptr}; ///< cluster.instance.query subscriber (request-reply)
 
     /// Dispatcher for all ongoing control messages (cluster.proxy).
     static void OnClusterProxyMsg(natsConnection* nc, natsSubscription* sub,
@@ -78,6 +79,11 @@ private:
     /// Dispatcher for node registration requests (cluster.register).
     static void OnRegisterMsg(natsConnection* nc, natsSubscription* sub,
                               natsMsg* msg, void* closure);
+
+    /// Dispatcher for "which instance server should I use?" queries (cluster.instance.query).
+    /// Replies with [addrLen:1][addr:addrLen][port:2] for the best available instance node.
+    static void OnInstanceQueryMsg(natsConnection* nc, natsSubscription* sub,
+                                   natsMsg* msg, void* closure);
 };
 
 #define sNatsBus NatsBus::Instance()

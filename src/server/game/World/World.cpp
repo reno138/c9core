@@ -1135,6 +1135,9 @@ void World::Update(uint32 diff)
         // moved here from HandleCharEnumOpcode
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_DEL_EXPIRED_BANS);
         CharacterDatabase.Execute(stmt);
+
+        // Cluster: send 10s heartbeat + 5min refresh to proxy when due.
+        sProxyClient.Update();
     }
 
     ///- Update Who List Cache

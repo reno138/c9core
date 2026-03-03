@@ -1838,16 +1838,25 @@ namespace lfg
         if (Difficulty(dungeon->difficulty) == DUNGEON_DIFFICULTY_HEROIC)
             grp->AddLfgHeroicFlag();
 
-        // Reroute remote cluster players (on other nodes) to the instance server.
+        // Reroute remote cluster players (on other nodes) to the best available instance server.
         if (sProxyClient.IsConnected())
         {
-            std::string instanceAddr = sConfigMgr->GetOption<std::string>("InstanceServer.Address", "127.0.0.1");
-            uint16 instancePort = static_cast<uint16>(sConfigMgr->GetOption<int32>("InstanceServer.Port", 8087));
+            // Ask the proxy dynamically for the best (least-recently-used) instance node.
+            // Fall back to static config if the proxy query fails (e.g. during startup).
+            std::string instanceAddr;
+            uint16 instancePort = 0;
+            if (!sProxyClient.QueryBestInstanceAddress(instanceAddr, instancePort))
+            {
+                instanceAddr = sConfigMgr->GetOption<std::string>("InstanceServer.Address", "127.0.0.1");
+                instancePort = static_cast<uint16>(sConfigMgr->GetOption<int32>("InstanceServer.Port", 8087));
+                LOG_WARN("lfg", "LFGMgr::MakeNewGroup: Proxy instance query failed; using config fallback {}:{}",
+                         instanceAddr, instancePort);
+            }
 
             for (ObjectGuid const& pguid : playersToTeleport)
             {
                 if (ObjectAccessor::FindPlayer(pguid))
-                    continue; // already handled above
+                    continue; // already handled above (local player)
 
                 // Not a local player — route them via cluster reroute.
                 SetState(pguid, LFG_STATE_DUNGEON);

@@ -57,9 +57,16 @@ public:
     BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<ProxySocket> owner);
 
     /// Reroute constructor: proxy handles the auth handshake autonomously, then relays.
+    /// @param clientIp       Real client IP address; appended as null-terminated string after
+    ///                       addon data in CMSG_AUTH_SESSION so the backend sees the correct IP.
+    /// @param isLoginReroute True when the client is still in the initial-login state (GAP-1).
+    ///                       False when the client is in-world and received SMSG_TRANSFER_PENDING.
+    ///                       Controls whether pre-login packets are dropped and whether
+    ///                       SMSG_LOGIN_VERIFY_WORLD is rewritten to SMSG_NEW_WORLD.
     BackendSession(Acore::Asio::IoContext& ioContext, std::weak_ptr<ProxySocket> owner,
                    std::string accountName, SessionKey const& sessionKey,
-                   uint32 realmId, uint64 playerGuid);
+                   uint32 realmId, uint64 playerGuid, std::string clientIp,
+                   bool isLoginReroute = false);
 
     ~BackendSession();
 
@@ -93,7 +100,9 @@ private:
 
     /// Reroute handshake helpers (only called when _isReroute == true).
     void HandleAuthChallenge(); ///< Intercept SMSG_AUTH_CHALLENGE, reply with CMSG_AUTH_SESSION.
-    void HandleAuthResponse();  ///< Intercept SMSG_AUTH_RESPONSE, init crypto, notify ProxySocket.
+    void HandleAuthResponse();  ///< Intercept SMSG_AUTH_RESPONSE, init crypto, send CMSG_CHAR_ENUM.
+    void HandleCharEnum();      ///< Intercept SMSG_CHAR_ENUM, send CMSG_PLAYER_LOGIN, complete reroute.
+    void SendCharEnum();        ///< Synthesize and send CMSG_CHAR_ENUM to populate _legitCharacters.
     void SendPlayerLogin();     ///< Synthesize and send CMSG_PLAYER_LOGIN to instance server.
 
     std::weak_ptr<ProxySocket> _owner;
@@ -107,20 +116,39 @@ private:
 
     /// Reroute mode: proxy handles auth handshake autonomously.
     bool _isReroute{ false };
-    enum class HandshakeState { WaitChallenge, WaitResponse, Done };
+    enum class HandshakeState { WaitChallenge, WaitResponse, WaitCharEnum, Done };
     HandshakeState _handshakeState{ HandshakeState::Done };
+
+    /// After the reroute handshake completes (in-world teleport mode only): drop all
+    /// pre-login S→C packets until SMSG_LOGIN_VERIFY_WORLD, then rewrite it to
+    /// SMSG_NEW_WORLD so the client completes its SMSG_TRANSFER_PENDING flow cleanly.
+    /// Not used for login reroutes (_isLoginReroute=true) — those forward everything as-is.
+    bool _rerouteLoginPending{ false };
+
+    /// True when the reroute was triggered during initial login (GAP-1).
+    /// The client is in "waiting for SMSG_LOGIN_VERIFY_WORLD" state and has not yet
+    /// entered the world.  All login packets must be forwarded normally; no rewrite needed.
+    bool _isLoginReroute{ false };
 
     /// Reroute data (valid when _isReroute == true).
     std::string _accountName;
     SessionKey  _sessionKey;
     uint32      _realmId{ 0 };
     uint64      _playerGuid{ 0 };
+    std::string _clientIp;   ///< Real client IP — appended to CMSG_AUTH_SESSION for ProxyServer.Enable backends.
 
     /// Opcode constants used for reroute handshake interception.
-    static constexpr uint16 SMSG_AUTH_CHALLENGE_OPCODE = 0x1EC;
-    static constexpr uint16 SMSG_AUTH_RESPONSE_OPCODE  = 0x1EE;
-    static constexpr uint32 WOTLK_CLIENT_BUILD         = 12340;
-    static constexpr uint8  AUTH_OK_CODE               = 0x0C;
+    static constexpr uint16 SMSG_AUTH_CHALLENGE_OPCODE     = 0x1EC;
+    static constexpr uint16 SMSG_AUTH_RESPONSE_OPCODE      = 0x1EE;
+    static constexpr uint16 SMSG_CHAR_ENUM_OPCODE          = 0x03B;
+    static constexpr uint16 SMSG_LOGIN_VERIFY_WORLD_OPCODE = 0x236;
+    static constexpr uint16 SMSG_NEW_WORLD_OPCODE          = 0x03E;
+    static constexpr uint32 WOTLK_CLIENT_BUILD             = 12340;
+    static constexpr uint8  AUTH_OK_CODE                   = 0x0C;
+
+    /// Set by Close() when the proxy intentionally shuts down this session (e.g. reroute).
+    /// Prevents the async_read error callback from cascading a CloseSocket() to the client.
+    bool _closedByProxy{ false };
 
     static constexpr std::size_t READ_SIZE = 4096;
     MessageBuffer _readBuffer;

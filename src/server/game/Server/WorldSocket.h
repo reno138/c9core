@@ -88,6 +88,11 @@ public:
     bool IsLoggingPackets() const { return _loggingPackets; }
     void SetPacketLogging(bool state) { _loggingPackets = state; }
 
+    /// Send SMSG_REDIRECT_CLIENT to route this client to another worldserver.
+    /// Computes HMAC-SHA1(sessionKey, destIp+destPort) and sends the redirect packet.
+    /// Called from WorldSession::SendRedirectClient after SaveToDB.
+    void SendRedirectClient(std::string const& address, uint16 port);
+
 protected:
     void OnClose() override;
     SocketReadCallbackResult ReadHandler() final;
@@ -114,6 +119,7 @@ private:
     void HandleSendAuthSession();
     void HandleAuthSession(WorldPacket& recvPacket);
     void HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> authSession, PreparedQueryResult result);
+    void HandleRedirectAuthProof(WorldPacket& recvPacket);
     void LoadSessionPermissionsCallback(PreparedQueryResult result);
     void SendAuthResponseError(uint8 code);
 
@@ -121,6 +127,7 @@ private:
 
     std::array<uint8, 4> _authSeed;
     AuthCrypt _authCrypt;
+    SessionKey _sessionKey{};   ///< Stored after CMSG_AUTH_SESSION for SendRedirectClient / HandleRedirectAuthProof
 
     TimePoint _LastPingTime;
     uint32 _OverSpeedPings;
@@ -136,11 +143,6 @@ private:
 
     QueryCallbackProcessor _queryProcessor;
     std::string _ipCountry;
-
-    /// In cluster mode the proxy appends the real client IP to CMSG_AUTH_SESSION.
-    /// We store it here and use it to override the socket's peer address (proxy IP)
-    /// for all IP-dependent checks: last_ip logging, IP-lock, country-lock, script hooks.
-    std::string _proxyForwardedIp;
 
     bool _loggingPackets;
 };

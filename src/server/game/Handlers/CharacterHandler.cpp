@@ -766,6 +766,21 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
                 return;
             }
 
+            // Cluster GAP-1: the offline session's player may be on a non-local map.
+            // Do NOT call HandlePlayerLoginToCharInWorld — it sends SMSG_LOGIN_VERIFY_WORLD
+            // before verifying map locality, sending the client to the wrong node.
+            // Instead, redirect the client directly to the owning node.
+            if (sProxyClient.IsConnected()
+                && !sClusterMgr.IsMapLocal(p->GetMapId()))
+            {
+                uint32 const mapId = p->GetMapId();
+                sess->KickPlayer("GAP-1: offline session on non-local map, redirecting to correct node");
+                auto destNode = sClusterMgr.GetNodeForMap(mapId);
+                if (destNode)
+                    SendRedirectClient(destNode->address, destNode->port);
+                return;
+            }
+
             sess->SetPlayer(nullptr);
             SetPlayer(p);
             p->SetSession(this);
@@ -806,19 +821,21 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     }
 
     // Cluster: if the player's saved map is owned by a different node, redirect
-    // the client to that node before sending any login packets.  The proxy
-    // receives MSG_REROUTE_TO_MAP and switches the client's connection.  When
-    // the client reconnects to the correct node, HandlePlayerLoginFromDB runs
+    // the client directly to the owning node via SMSG_REDIRECT_CLIENT.
+    // When the client reconnects to the correct node, HandlePlayerLoginFromDB runs
     // again with IsMapLocal() == true and proceeds normally.
-    if (sConfigMgr->GetOption<bool>("ProxyServer.Enable", false)
-        && sProxyClient.IsConnected()
+    if (sProxyClient.IsConnected()
         && !sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
     {
         uint32 const mapId = pCurrChar->GetMapId();
+        // LoadFromDB applied auras; remove them before deleting to satisfy Unit::~Unit assertion.
+        pCurrChar->RemoveAllAuras();
         SetPlayer(nullptr);         // LoadFromDB set _player; clear it before delete
         delete pCurrChar;
         m_playerLoading = false;
-        sProxyClient.SendRerouteToMap(playerGuid.GetRawValue(), mapId);
+        auto destNode = sClusterMgr.GetNodeForMap(mapId);
+        if (destNode)
+            SendRedirectClient(destNode->address, destNode->port);
         return;
     }
 

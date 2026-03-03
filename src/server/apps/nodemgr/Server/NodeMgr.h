@@ -27,8 +27,9 @@
  * @brief Manages the lifecycle of a single worldserver child process.
  *
  * NodeMgr is responsible for spawning, monitoring, and stopping the
- * worldserver binary. It is owned by Main.cpp and called from ProxyLink
- * when the proxy sends MSG_NODE_START or MSG_NODE_STOP.
+ * worldserver binary. It is owned by Main.cpp and started automatically
+ * after NodeMgr.StartupDelay seconds.  Crash detection and restart backoff
+ * are handled by the poll loop in Main.cpp.
  */
 class NodeMgr
 {

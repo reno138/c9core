@@ -22,6 +22,7 @@
 #include "ObjectGuid.h"
 #include "Spline.h"
 #include <G3D/Quat.h>
+#include <unordered_map>
 
 struct KeyFrame;
 struct GameObjectTemplate;
@@ -158,6 +159,12 @@ private:
     TransportInstanceMap _instanceTransports;
 
     TransportAnimationContainer _transportAnimations;
+
+    /// Peer-queried PathProgress values keyed by transport guid_low.
+    /// Populated by SpawnContinentTransports() before the spawn loop via
+    /// ProxyClient::QueryTransportSync().  Consumed by CreateTransport() to seed
+    /// each transport's initial position so all cluster nodes agree from tick 1.
+    std::unordered_map<uint32, uint32> _spawnSyncData;
 
     void PreloadGridsFromQuery(std::string const& query, uint32& count);
 };

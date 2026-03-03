@@ -19,7 +19,9 @@
 #define ProxyClient_h__
 
 #include "Define.h"
+#include <atomic>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Forward-declare nats.c opaque types so consumers of ProxyClient.h don't need
@@ -38,15 +40,16 @@ class WorldPacket;
  * @brief Worldserver-side NATS client for the cluster control channel.
  *
  * On startup (when ProxyServer.Enable = 1), the worldserver connects to NATS,
- * sends a registration request on "cluster.register", and receives back its
- * assigned node ID.  After that, all control messages flow via NATS subjects:
+ * reads its nodeId from ClusterServer.NodeId config, subscribes to its own
+ * cluster.node.{N} subject plus cluster.broadcast, and publishes a cluster.announce
+ * message so peer nodes can discover it.  All inter-node game messages flow via:
  *
- *   cluster.proxy        — worldserver → proxy  (all outgoing control messages)
- *   cluster.node.{N}     — proxy → this worldserver (targeted delivery)
- *   cluster.broadcast    — proxy → ALL worldservers (fanout)
+ *   cluster.broadcast    — fanout to ALL worldservers (player online/offline, group, chat…)
+ *   cluster.node.{N}     — targeted delivery to specific node (packet deliver, LFG relay…)
+ *   cluster.announce     — startup broadcast for peer node discovery + routing table
  *
- * The public SendXxx() / HandleXxx() API is identical to the old TCP version —
- * only the transport internals have changed.
+ * Cross-node player rerouting (cross-map travel) is handled by
+ * WorldSession::SendRedirectClient (SMSG_REDIRECT_CLIENT) rather than the proxy.
  */
 class ProxyClient
 {
@@ -145,6 +148,29 @@ public:
     void SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames, uint16 weekWins,
                          uint16 seasonGames, uint16 seasonWins, uint32 rank);
 
+    /// Query the proxy for the best available instance server address.
+    /// Uses NATS request-reply to cluster.instance.query.
+    /// @param outAddr  Filled with the instance server IP on success.
+    /// @param outPort  Filled with the instance server game port on success.
+    /// @return true if an instance server is available; false if none or disconnected.
+    bool QueryBestInstanceAddress(std::string& outAddr, uint16& outPort);
+
+    /// Periodic housekeeping — call from World::Update() every world tick.
+    /// Sends MSG_NODE_STATUS every 10s, MSG_NODE_REFRESH every 5min, and
+    /// MSG_TRANSPORT_SYNC at the configured ClusterServer.TransportSyncInterval.
+    void Update();
+
+    /// Broadcast all live MotionTransport PathProgress values to peer nodes via
+    /// MSG_TRANSPORT_SYNC.  Peer nodes apply a correction if their local position
+    /// drifts by more than 2 seconds from the received value.
+    void SendTransportSync();
+
+    /// Query a running peer node for its current transport PathProgress values via
+    /// NATS request-reply on cluster.transport.query.  Returns a map of
+    /// {guid_low → PathProgress} suitable for seeding CreateTransport() on this
+    /// node's first startup.  Returns an empty map if no peer responds within 500 ms.
+    std::unordered_map<uint32, uint32> QueryTransportSync();
+
     /// LFG sub-message types carried inside LFG_RELAY payload.
     static constexpr uint8 LFG_INNER_JOIN             = 0x01; ///< guid+roles+dungeons
     static constexpr uint8 LFG_INNER_LEAVE            = 0x02; ///< guid
@@ -168,9 +194,26 @@ private:
     ProxyClient() = default;
     ~ProxyClient() = default;
 
-    // ── NATS publish helper ───────────────────────────────────────────────────
-    /// Prepend [nodeId][msgType] header and publish to "cluster.proxy".
-    void PublishToProxy(uint8 msgType, uint8 const* payload, int payloadLen);
+    // ── NATS publish helpers ──────────────────────────────────────────────────
+
+    /// Publish [msgType:1][payload] directly to cluster.node.{targetNodeId}.
+    void PublishToNode(uint8 targetNodeId, uint8 msgType, uint8 const* payload, int payloadLen);
+
+    /// Publish [msgType:1][payload] to cluster.broadcast (all nodes).
+    void PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadLen);
+
+    /// Build and publish a cluster.announce payload with this node's identity.
+    void PublishAnnounce();
+
+    /// NATS callback for cluster.announce messages — registers peer nodes.
+    static void OnAnnounceMsg(natsConnection* nc, natsSubscription* sub,
+                               natsMsg* msg, void* closure);
+
+    /// Send MSG_NODE_STATUS (player count + NATS bandwidth) as a broadcast.
+    void SendNodeStatus();
+
+    /// Send MSG_NODE_REFRESH (full port/map re-registration) to the proxy.
+    void SendNodeRefresh();
 
     // ── Incoming message handlers (called from NATS dispatch thread via QueueCallback) ──
     void HandleRemotePlayerOnline(std::vector<uint8> const& payload);
@@ -186,6 +229,19 @@ private:
     void HandleIncomingArenaResult(std::vector<uint8> const& payload);
     void HandleBgCreateInst(std::vector<uint8> const& payload);
     void HandleBgReady(std::vector<uint8> const& payload);
+
+    // ── BG coordinator — only active on ClusterServer.BgCoordinatorNode ──────
+    void HandleBgQueueJoin(std::vector<uint8> const& payload);
+    void HandleBgQueueLeave(std::vector<uint8> const& payload);
+    void HandleBgInstCreated(std::vector<uint8> const& payload);
+
+    /// Apply transport PathProgress corrections received in MSG_TRANSPORT_SYNC.
+    void HandleTransportSync(std::vector<uint8> const& payload);
+
+    /// NATS callback for cluster.transport.query request-reply.
+    /// Runs on the NATS dispatch thread; replies with current PathProgress data.
+    static void OnTransportQueryMsg(natsConnection* nc, natsSubscription* sub,
+                                     natsMsg* msg, void* closure);
 
     /// NATS callback — fires on NATS dispatch thread for cluster.node.{N} and cluster.broadcast.
     static void OnNatsMsg(natsConnection* nc, natsSubscription* sub,
@@ -218,20 +274,62 @@ private:
     static constexpr uint8 MSG_CLUSTER_ARENA_RESULT    = 0x16;
     static constexpr uint8 MSG_CLUSTER_BG_INST_CREATED = 0x17;
     static constexpr uint8 MSG_CLUSTER_BG_READY        = 0x18;
+    static constexpr uint8 MSG_NODE_STATUS             = 0x19;
+    static constexpr uint8 MSG_NODE_REFRESH            = 0x1A;
+    /// Periodic broadcast of all live transport PathProgress values to peer nodes.
+    /// Payload: [count:2][guid_low:4][path_progress:4]...
+    static constexpr uint8 MSG_TRANSPORT_SYNC          = 0x1B;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
-    natsSubscription* _subNode{nullptr};       ///< cluster.node.{_nodeId}
-    natsSubscription* _subBroadcast{nullptr};  ///< cluster.broadcast
+    natsSubscription* _subNode{nullptr};           ///< cluster.node.{_nodeId}
+    natsSubscription* _subBroadcast{nullptr};      ///< cluster.broadcast
+    natsSubscription* _subAnnounce{nullptr};       ///< cluster.announce (peer discovery)
+    natsSubscription* _subTransportQuery{nullptr}; ///< cluster.transport.query (req-reply)
 
     // ── Node identity ─────────────────────────────────────────────────────────
-    uint8       _nodeId{ 0 };    ///< Assigned by proxy after NATS registration request-reply.
+    uint8       _nodeId{ 0 };    ///< Config-derived node ID (ClusterServer.NodeId).
     uint8       _serverType{ 0 };
     uint16      _gamePort{ 0 };
     std::string _gameAddress;    ///< Own LAN IP (sent in registration so proxy can match it)
     std::string _natsUrl;
 
     bool _connected{ false };
+
+    // ── Periodic update timers ────────────────────────────────────────────────
+    uint32 _lastHeartbeatMs{ 0 };      ///< getMSTime() at last MSG_NODE_STATUS send
+    uint32 _lastRefreshMs{ 0 };        ///< getMSTime() at last MSG_NODE_REFRESH send
+    uint32 _lastTransportSyncMs{ 0 };  ///< getMSTime() at last MSG_TRANSPORT_SYNC broadcast
+    uint32 _transportSyncIntervalMs{ 60000 }; ///< broadcast interval (from config, ms)
+
+    // ── NATS bandwidth counters (reset after each MSG_NODE_STATUS) ────────────
+    std::atomic<uint32> _natsBytesTx{ 0 }; ///< bytes published via NATS since last heartbeat
+    std::atomic<uint32> _natsBytesRx{ 0 }; ///< bytes received via NATS since last heartbeat
+
+    // ── BG coordinator state (world-thread-only; no mutex needed) ─────────────
+    struct BgQueueEntry
+    {
+        uint64 guid{ 0 };
+        uint8  nodeId{ 0 };
+        uint8  teamId{ 0 };
+    };
+    struct BgMatchState
+    {
+        std::vector<BgQueueEntry> alliance;
+        std::vector<BgQueueEntry> horde;
+        uint8  minPlayersPerTeam{ 1 };
+    };
+    struct PendingBgMatch
+    {
+        uint32 bgTypeId{ 0 };
+        uint8  bracketId{ 0 };
+        std::vector<BgQueueEntry> alliance;
+        std::vector<BgQueueEntry> horde;
+    };
+    /// _bgQueues[bgTypeId][bracketId] → queue state.  Only used on coordinator node.
+    std::unordered_map<uint32, std::unordered_map<uint8, BgMatchState>> _bgQueues;
+    std::unordered_map<uint32, PendingBgMatch> _pendingBgMatches;
+    uint32 _nextBgMatchId{ 1 };
 };
 
 #define sProxyClient ProxyClient::Instance()

@@ -23,6 +23,66 @@
 #include <cstring>
 #include <sstream>
 
+// ── Peer node routing table ───────────────────────────────────────────────────
+
+void ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+
+    uint8 nodeId = info.nodeId;
+
+    // Remove old map→node entries for this nodeId (in case of re-announce).
+    for (auto it = _mapToNode.begin(); it != _mapToNode.end(); )
+    {
+        if (it->second == nodeId)
+            it = _mapToNode.erase(it);
+        else
+            ++it;
+    }
+
+    // Register new map→node entries.
+    for (uint32 mapId : info.maps)
+        _mapToNode[mapId] = nodeId;
+
+    LOG_INFO("server.worldserver",
+             "ClusterMgr: RegisterRemoteNode nodeId={} addr={}:{} type={} maps={}",
+             nodeId, info.address, info.port, info.type, info.maps.size());
+
+    _nodes[nodeId] = std::move(info);
+}
+
+std::optional<ClusterNodeInfo> ClusterMgr::GetNodeInfo(uint8 nodeId) const
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    auto it = _nodes.find(nodeId);
+    if (it == _nodes.end())
+        return std::nullopt;
+    return it->second;
+}
+
+std::optional<ClusterNodeInfo> ClusterMgr::GetNodeForMap(uint32 mapId) const
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    auto mit = _mapToNode.find(mapId);
+    if (mit == _mapToNode.end())
+        return std::nullopt;
+    auto nit = _nodes.find(mit->second);
+    if (nit == _nodes.end())
+        return std::nullopt;
+    return nit->second;
+}
+
+uint8 ClusterMgr::GetInstanceNodeId() const
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    for (auto const& [id, info] : _nodes)
+        if (info.type == 1)
+            return id;
+    return 0;
+}
+
+// ── Local map set ─────────────────────────────────────────────────────────────
+
 void ClusterMgr::LoadLocalMaps()
 {
     std::lock_guard<std::mutex> lock(_localMapsMutex);

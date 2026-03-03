@@ -20,11 +20,29 @@
 
 #include "Define.h"
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+/**
+ * @brief Network identity and map ownership of a peer cluster node.
+ *
+ * Populated from cluster.announce broadcasts on NATS startup.
+ * Used by ProxyClient to route targeted messages directly to the correct
+ * node without involving the proxy, and by WorldSession::SendRedirectClient
+ * to obtain the destination IP:port for cross-node player redirection.
+ */
+struct ClusterNodeInfo
+{
+    uint8       nodeId{ 0 };
+    std::string address;            ///< LAN IP (e.g. "192.0.2.71")
+    uint16      port{ 0 };          ///< WoW game port (typically 8085)
+    uint8       type{ 0 };          ///< 0 = regular worldserver, 1 = instance server
+    std::unordered_set<uint32> maps; ///< mapIds served by this node
+};
 
 /**
  * @brief Cached information about a player on a different worldserver node.
@@ -85,6 +103,21 @@ public:
 
     /// True if any remote players are tracked (cluster is active).
     bool HasRemotePlayers() const;
+
+    // ── Peer node routing table ───────────────────────────────────────────────
+
+    /// Register or update a peer node (called from ProxyClient on NATS announce).
+    void RegisterRemoteNode(ClusterNodeInfo info);
+
+    /// Get routing info for a specific node by ID.
+    std::optional<ClusterNodeInfo> GetNodeInfo(uint8 nodeId) const;
+
+    /// Get routing info for whichever node owns the given mapId.
+    /// Returns nullopt if no peer has claimed that map (or it's local).
+    std::optional<ClusterNodeInfo> GetNodeForMap(uint32 mapId) const;
+
+    /// Return the nodeId of the registered instance server (type == 1), or 0 if none.
+    uint8 GetInstanceNodeId() const;
 
     // ── Local map set (zone-based routing) ───────────────────────────────────
 
@@ -177,6 +210,11 @@ private:
     mutable std::shared_mutex _mutex;
     std::unordered_map<uint64, ClusterPlayerInfo> _byGuid;
     std::unordered_map<std::string, uint64>       _byName; ///< lowercase name → guid
+
+    // ── Peer node routing table ────────────────────────────────────────────
+    mutable std::mutex _nodeMutex;
+    std::unordered_map<uint8, ClusterNodeInfo> _nodes;      ///< nodeId → info
+    std::unordered_map<uint32, uint8>          _mapToNode;  ///< mapId → nodeId
 
     // ── Local map set ──────────────────────────────────────────────────────
     mutable std::mutex _localMapsMutex;
