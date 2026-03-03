@@ -478,6 +478,9 @@ void MotionTransport::InitializeToTime(uint32 timer)
     if (GetKeyFrames().size() <= 1 || !_transportInfo->pathTime)
         return;
 
+    // Normalise: caller may pass a raw epoch-ms timestamp; reduce to path period.
+    timer %= _transportInfo->pathTime;
+
     // Reset iterators to the beginning (mirrors CreateMoTrans initial state).
     _currentFrame = _transportInfo->keyFrames.begin();
     _nextFrame     = _currentFrame;
