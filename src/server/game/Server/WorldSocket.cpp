@@ -440,6 +440,11 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             LOG_ERROR("network", "WorldSocket::ReadDataHandler(): client {} sent malformed CMSG_REDIRECTION_AUTH_PROOF", GetRemoteIpAddress().to_string());
             return ReadDataHandlerResult::Error;
         }
+        case CMSG_SUSPEND_COMMS_ACK:
+            // Client acknowledges SMSG_SUSPEND_COMMS; we don't need to wait for it
+            // (SMSG_REDIRECT_CLIENT already sent, DelayedCloseSocket in flight).
+            packet.rfinish();
+            return ReadDataHandlerResult::Ok;
         case CMSG_AUTH_SESSION:
         {
             LogOpcodeText(opcode, sessionGuard);
@@ -760,14 +765,24 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
     memcpy(hmacData + 4, &portNet, 2);
     auto hmac = Acore::Crypto::HMAC_SHA1::GetDigestOf(_sessionKey, hmacData, 6);
 
+    // Send SMSG_SUSPEND_COMMS before redirect — required by WoW 3.3.5a client.
+    // Without this handshake the client refuses the redirect and sends CMSG_REDIRECTION_FAILED
+    // without attempting any TCP connection to the destination.
+    {
+        WorldPacket suspendData(SMSG_SUSPEND_COMMS, 4);
+        suspendData << uint32(0);   // sequence counter (arbitrary)
+        SendPacketAndLogOpcode(suspendData);
+    }
+
     WorldPacket data(SMSG_REDIRECT_CLIENT, 4 + 2 + 4 + 20);
     data << ipNet;          // uint32, network byte order
     data << portNet;        // uint16, network byte order
     data << uint32(0);      // unk
     data.append(hmac.data(), hmac.size());  // uint8[20] HMAC
 
-    LOG_DEBUG("network", "WorldSocket::SendRedirectClient: redirecting {} to {}:{}", GetRemoteIpAddress().to_string(), address, port);
+    LOG_INFO("server.worldserver", "WorldSocket::SendRedirectClient: redirecting {} to {}:{}", GetRemoteIpAddress().to_string(), address, port);
     SendPacketAndLogOpcode(data);
+    DelayedCloseSocket();
 }
 
 void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
@@ -777,6 +792,8 @@ void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
     // PendingRedirect keyed by client IP (sent via MSG_CLUSTER_REDIRECT_PREP before the redirect).
     std::string clientIp = GetRemoteIpAddress().to_string();
 
+    LOG_INFO("server.worldserver", "WorldSocket::HandleRedirectAuthProof: client {} arrived", clientIp);
+
     std::array<uint8, 20> proof{};
     recvPacket.read(proof.data(), 20);
 
@@ -784,7 +801,7 @@ void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
     ProxyClient::PendingRedirect pending;
     if (!sProxyClient.ClaimPendingRedirect(clientIp, pending))
     {
-        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: no pending redirect for client {} — disconnecting", clientIp);
+        LOG_INFO("server.worldserver", "WorldSocket::HandleRedirectAuthProof: no pending redirect for client {} — disconnecting", clientIp);
         DelayedCloseSocket();
         return;
     }

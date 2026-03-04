@@ -242,11 +242,15 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
 
     const uint8* d = reinterpret_cast<const uint8*>(natsMsg_GetData(msg));
     int n          = natsMsg_GetDataLength(msg);
-    natsMsg_Destroy(msg);
+    // NOTE: do NOT call natsMsg_Destroy here — d is an interior pointer into msg.
+    // Destroy AFTER all parsing is done.
 
     // Minimum: nodeId(1)+serverType(1)+gamePort(2)+addrLen(1)+addr(1)+mapCount(2) = 8 bytes
     if (n < 8)
+    {
+        natsMsg_Destroy(msg);
         return;
+    }
 
     uint8  nodeId     = d[0];
     uint8  serverType = d[1];
@@ -254,7 +258,10 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
     uint8  addrLen    = d[4];
 
     if (n < 5 + addrLen + 2)
+    {
+        natsMsg_Destroy(msg);
         return;
+    }
 
     std::string address(reinterpret_cast<char const*>(d + 5), addrLen);
     int off = 5 + addrLen;
@@ -267,7 +274,10 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         mapCount = 128;
 
     if (n < off + mapCount * 4)
+    {
+        natsMsg_Destroy(msg);
         return;
+    }
 
     ClusterNodeInfo info;
     info.nodeId  = nodeId;
@@ -280,6 +290,9 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         std::memcpy(&mapId, d + off + i * 4, 4);
         info.maps.insert(mapId);
     }
+
+    // All data copied — safe to release the NATS message now.
+    natsMsg_Destroy(msg);
 
     // Skip our own announce.
     if (nodeId == self->_nodeId)
@@ -674,6 +687,7 @@ void ProxyClient::OnTransportQueryMsg(natsConnection* nc, natsSubscription* /*su
         natsConnection_Publish(nc, replySubj,
                                reply.data(), static_cast<int>(reply.size()));
     }
+    natsMsg_Destroy(msg);
 }
 
 std::unordered_map<uint32, uint32> ProxyClient::QueryTransportSync()
@@ -1803,9 +1817,9 @@ void ProxyClient::SendRedirectPrep(uint32 accountId, std::string const& username
 
     PublishToNode(destNodeId, MSG_CLUSTER_REDIRECT_PREP, payload.data(), static_cast<int>(payload.size()));
 
-    LOG_DEBUG("server.worldserver",
-              "ProxyClient: SendRedirectPrep accountId={} username={} clientIp={} → node {}",
-              accountId, username, clientIp, destNodeId);
+    LOG_INFO("server.worldserver",
+             "ProxyClient: SendRedirectPrep accountId={} username={} clientIp={} → node {}",
+             accountId, username, clientIp, destNodeId);
 }
 
 void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
@@ -1843,9 +1857,9 @@ void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
         _pendingRedirects[clientIp] = std::move(pr);
     }
 
-    LOG_DEBUG("server.worldserver",
-              "ProxyClient: HandleRedirectPrep stored pending redirect accountId={} username={} clientIp={}",
-              accountId, username, clientIp);
+    LOG_INFO("server.worldserver",
+             "ProxyClient: HandleRedirectPrep stored pending redirect accountId={} username={} clientIp={}",
+             accountId, username, clientIp);
 }
 
 bool ProxyClient::ClaimPendingRedirect(std::string const& clientIp, PendingRedirect& out)

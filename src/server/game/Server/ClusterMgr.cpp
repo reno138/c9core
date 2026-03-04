@@ -365,6 +365,26 @@ void ClusterMgr::QueueCrossNodeInviteResult(uint64 inviteeGuid, uint8 result)
 std::vector<ClusterMgr::CrossNodeInviteResult> ClusterMgr::DrainInviteResults()
 {
     std::lock_guard lock(_inviteMutex);
+
+    // Sanity check: a corrupted vector (e.g. from NATS UAF writing garbage into
+    // adjacent BSS memory) would have an invalid start pointer.  Calling swap()
+    // or the destructor on such a vector would call free() on the bad pointer
+    // and crash.  Detect and recover by zeroing the internals before swap.
+    auto const startAddr = reinterpret_cast<uintptr_t>(_inviteResults.data());
+    constexpr std::size_t kMaxSaneSize = 10000;
+    if (!_inviteResults.empty() &&
+        (startAddr < 4096 || _inviteResults.size() > kMaxSaneSize))
+    {
+        LOG_ERROR("server.worldserver",
+                  "ClusterMgr::DrainInviteResults: _inviteResults corrupted "
+                  "(data={:#x} size={}) — resetting",
+                  startAddr, _inviteResults.size());
+        // Zero the three internal pointers so the "destructor" on the now-cleared
+        // vector becomes a no-op (free(nullptr) is safe).
+        std::memset(&_inviteResults, 0, sizeof(_inviteResults));
+        return {};
+    }
+
     std::vector<CrossNodeInviteResult> out;
     out.swap(_inviteResults);
     return out;
