@@ -1609,7 +1609,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
                 if (destNode)
                 {
-                    GetSession()->SendRedirectClient(destNode->address, destNode->port);
+                    GetSession()->SendRedirectClient(destNode->address, destNode->port, destNode->nodeId);
                 }
                 else
                 {

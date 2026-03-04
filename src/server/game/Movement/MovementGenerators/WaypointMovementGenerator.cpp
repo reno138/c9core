@@ -435,7 +435,7 @@ void FlightPathMovementGenerator::DoFinalize(Player* player)
     if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(player->GetMapId()))
     {
         if (auto nodeInfo = sClusterMgr.GetNodeForMap(player->GetMapId()))
-            player->GetSession()->SendRedirectClient(nodeInfo->address, nodeInfo->port);
+            player->GetSession()->SendRedirectClient(nodeInfo->address, nodeInfo->port, nodeInfo->nodeId);
     }
 }
 

@@ -777,7 +777,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
                 sess->KickPlayer("GAP-1: offline session on non-local map, redirecting to correct node");
                 auto destNode = sClusterMgr.GetNodeForMap(mapId);
                 if (destNode)
-                    SendRedirectClient(destNode->address, destNode->port);
+                    SendRedirectClient(destNode->address, destNode->port, destNode->nodeId);
                 return;
             }
 
@@ -835,7 +835,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         m_playerLoading = false;
         auto destNode = sClusterMgr.GetNodeForMap(mapId);
         if (destNode)
-            SendRedirectClient(destNode->address, destNode->port);
+            SendRedirectClient(destNode->address, destNode->port, destNode->nodeId);
         return;
     }
 

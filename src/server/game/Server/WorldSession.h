@@ -441,6 +441,7 @@ public:
     AccountTypes GetSecurity() const { return _security; }
     bool CanSkipQueue() const { return _skipQueue; }
     uint32 GetAccountId() const { return _accountId; }
+    std::string const& GetAccountName() const { return _accountName; }
     Player* GetPlayer() const { return _player; }
     std::string const& GetPlayerName() const;
     std::string GetPlayerInfo() const;
@@ -463,7 +464,7 @@ public:
     /// Redirect the connected client to another worldserver via SMSG_REDIRECT_CLIENT.
     /// Should be called after SaveToDB so the player's state is persisted on the
     /// current node before the client reconnects to the destination node.
-    void SendRedirectClient(std::string const& address, uint16 port);
+    void SendRedirectClient(std::string const& address, uint16 port, uint8 destNodeId = 0);
 
     /// Session in auth.queue currently
     void SetInQueue(bool state) { m_inQueue = state; }

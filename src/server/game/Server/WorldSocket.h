@@ -21,6 +21,7 @@
 #include "AuthCrypt.h"
 #include "Common.h"
 #include "MPSCQueue.h"
+#include "ProxyClient.h"
 #include "Socket.h"
 #include "Util.h"
 #include "WorldPacket.h"
@@ -93,6 +94,10 @@ public:
     /// Called from WorldSession::SendRedirectClient after SaveToDB.
     void SendRedirectClient(std::string const& address, uint16 port);
 
+    /// Expose the session key so WorldSession can forward it to the destination
+    /// node via sProxyClient.SendRedirectPrep() before SMSG_REDIRECT_CLIENT.
+    SessionKey const& GetSessionKey() const { return _sessionKey; }
+
 protected:
     void OnClose() override;
     SocketReadCallbackResult ReadHandler() final;
@@ -120,6 +125,7 @@ private:
     void HandleAuthSession(WorldPacket& recvPacket);
     void HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> authSession, PreparedQueryResult result);
     void HandleRedirectAuthProof(WorldPacket& recvPacket);
+    void HandleRedirectAuthCallback(ProxyClient::PendingRedirect pending, PreparedQueryResult result);
     void LoadSessionPermissionsCallback(PreparedQueryResult result);
     void SendAuthResponseError(uint8 code);
 

@@ -434,7 +434,7 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             try
             {
                 HandleRedirectAuthProof(packet);
-                return ReadDataHandlerResult::Ok;
+                return ReadDataHandlerResult::WaitingForQuery;
             }
             catch (ByteBufferException const&) { }
             LOG_ERROR("network", "WorldSocket::ReadDataHandler(): client {} sent malformed CMSG_REDIRECTION_AUTH_PROOF", GetRemoteIpAddress().to_string());
@@ -772,21 +772,24 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
 
 void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
 {
-    // Sent by the client after connecting to the destination worldserver following
-    // an SMSG_REDIRECT_CLIENT.  By this point CMSG_AUTH_SESSION has already been
-    // processed successfully (_authed == true, _worldSession != nullptr).
-    // We verify the proof to confirm this is a redirect and not a cold login.
-    if (!_authed)
-    {
-        LOG_ERROR("network", "WorldSocket::HandleRedirectAuthProof: client {} sent proof before authenticating",
-            GetRemoteIpAddress().to_string());
-        return;
-    }
+    // Sent by the client after connecting to this worldserver following SMSG_REDIRECT_CLIENT.
+    // On the destination node, _authed is false — we authenticate via the pre-registered
+    // PendingRedirect keyed by client IP (sent via MSG_CLUSTER_REDIRECT_PREP before the redirect).
+    std::string clientIp = GetRemoteIpAddress().to_string();
 
     std::array<uint8, 20> proof{};
     recvPacket.read(proof.data(), 20);
 
-    // Re-derive the expected HMAC using our own GameAddress + WorldServerPort.
+    // Look up the pending redirect for this client IP.
+    ProxyClient::PendingRedirect pending;
+    if (!sProxyClient.ClaimPendingRedirect(clientIp, pending))
+    {
+        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: no pending redirect for client {} — disconnecting", clientIp);
+        DelayedCloseSocket();
+        return;
+    }
+
+    // Verify the HMAC: HMAC_SHA1(sessionKey, [ownIpNet:4 + ownPortNet:2])
     std::string ownAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
     uint16      ownPort    = uint16(sWorld->getIntConfig(CONFIG_PORT_WORLD));
 
@@ -794,7 +797,8 @@ void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
     auto ownAddr = Acore::Net::make_address_v4(ownAddress, ec);
     if (ec)
     {
-        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: ClusterServer.GameAddress '{}' invalid, skipping verification", ownAddress);
+        LOG_ERROR("network", "WorldSocket::HandleRedirectAuthProof: ClusterServer.GameAddress '{}' invalid", ownAddress);
+        DelayedCloseSocket();
         return;
     }
 
@@ -803,16 +807,83 @@ void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
     uint8  hmacData[6];
     memcpy(hmacData,     &ipNet,   4);
     memcpy(hmacData + 4, &portNet, 2);
-    auto expected = Acore::Crypto::HMAC_SHA1::GetDigestOf(_sessionKey, hmacData, 6);
+    auto expected = Acore::Crypto::HMAC_SHA1::GetDigestOf(pending.sessionKey, hmacData, 6);
 
     if (proof != expected)
     {
-        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: client {} proof mismatch (not a redirect or stale session key)",
-            GetRemoteIpAddress().to_string());
+        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: client {} HMAC mismatch — disconnecting", clientIp);
+        DelayedCloseSocket();
         return;
     }
 
-    LOG_DEBUG("network", "WorldSocket::HandleRedirectAuthProof: client {} redirect proof verified", GetRemoteIpAddress().to_string());
+    // HMAC verified — initialise crypto with the session key.
+    _sessionKey = pending.sessionKey;
+    _authCrypt.Init(_sessionKey);
+
+    LOG_DEBUG("network", "WorldSocket::HandleRedirectAuthProof: client {} redirect verified for account {} '{}'",
+              clientIp, pending.accountId, pending.username);
+
+    // Fetch full account info from the auth DB to create a WorldSession.
+    // Reuse the same query as HandleAuthSession (LOGIN_SEL_ACCOUNT_INFO_BY_NAME).
+    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_INFO_BY_NAME);
+    stmt->SetData(0, realm.Id.Realm);
+    stmt->SetData(1, pending.username);
+    _queryProcessor.AddCallback(LoginDatabase.AsyncQuery(stmt).WithPreparedCallback(
+        std::bind(&WorldSocket::HandleRedirectAuthCallback, this, std::move(pending), std::placeholders::_1)));
+}
+
+void WorldSocket::HandleRedirectAuthCallback(ProxyClient::PendingRedirect pending, PreparedQueryResult result)
+{
+    if (!result)
+    {
+        LOG_ERROR("network", "WorldSocket::HandleRedirectAuthCallback: account '{}' not found in DB — disconnecting", pending.username);
+        SendAuthResponseError(AUTH_UNKNOWN_ACCOUNT);
+        DelayedCloseSocket();
+        return;
+    }
+
+    AccountInfo account(result->Fetch());
+
+    if (sWorld->IsClosed())
+    {
+        SendAuthResponseError(AUTH_REJECT);
+        DelayedCloseSocket();
+        return;
+    }
+
+    if (account.IsBanned)
+    {
+        SendAuthResponseError(AUTH_BANNED);
+        LOG_INFO("network", "WorldSocket::HandleRedirectAuthCallback: account '{}' is banned — disconnecting", pending.username);
+        DelayedCloseSocket();
+        return;
+    }
+
+    AccountTypes allowedAccountType = sWorld->GetPlayerSecurityLimit();
+    if (allowedAccountType > SEC_PLAYER && account.Security < allowedAccountType)
+    {
+        SendAuthResponseError(AUTH_UNAVAILABLE);
+        DelayedCloseSocket();
+        return;
+    }
+
+    _authed = true;
+
+    _worldSession = new WorldSession(account.Id, std::string(pending.username), account.Flags,
+        shared_from_this(), account.Security, account.Expansion, account.MuteTime,
+        account.Locale, account.Recruiter, account.IsRectuiter,
+        account.Security ? true : false, account.TotalTime);
+
+    // No addon info for redirected sessions (client does not resend addon data).
+
+    bool wardenActive = sWorld->getBoolConfig(CONFIG_WARDEN_ENABLED);
+    if (wardenActive)
+        _worldSession->InitWarden(_sessionKey, account.OS);
+
+    sWorldSessionMgr->AddSession(_worldSession);
+
+    LOG_DEBUG("network", "WorldSocket::HandleRedirectAuthCallback: redirect auth complete for account {} '{}'",
+              account.Id, pending.username);
 }
 
 void WorldSocket::SendAuthResponseError(uint8 code)

@@ -18,8 +18,11 @@
 #ifndef ProxyClient_h__
 #define ProxyClient_h__
 
+#include "AuthDefines.h"
 #include "Define.h"
 #include <atomic>
+#include <chrono>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -119,6 +122,27 @@ public:
     /// Notify the proxy that new mail arrived for recipientGuid so the proxy can
     /// route SMSG_RECEIVED_MAIL to whichever node hosts the recipient's session.
     void SendMailNotify(uint64 recipientGuid);
+
+    /// Pre-register a pending client redirect on @p destNodeId before sending
+    /// SMSG_REDIRECT_CLIENT.  The destination node stores the session key keyed
+    /// by @p clientIp so HandleRedirectAuthProof can authenticate the incoming
+    /// CMSG_REDIRECTION_AUTH_PROOF without a database round-trip to the source.
+    void SendRedirectPrep(uint32 accountId, std::string const& username,
+                          SessionKey const& sessionKey, std::string const& clientIp,
+                          uint8 destNodeId);
+
+    /// Called from WorldSocket::HandleRedirectAuthProof (I/O thread) to retrieve
+    /// and consume the pre-registered redirect context for @p clientIp.
+    /// Returns true and populates @p out on success; returns false if not found
+    /// (e.g. pre-notification never arrived or already consumed).
+    struct PendingRedirect
+    {
+        uint32      accountId;
+        std::string username;
+        SessionKey  sessionKey;
+        std::chrono::steady_clock::time_point expiry; ///< 30s TTL
+    };
+    bool ClaimPendingRedirect(std::string const& clientIp, PendingRedirect& out);
 
     // ── BG queue relay (non-instance nodes ↔ proxy) ───────────────────────────
 
@@ -265,6 +289,9 @@ private:
     /// Apply transport PathProgress corrections received in MSG_TRANSPORT_SYNC.
     void HandleTransportSync(std::vector<uint8> const& payload);
 
+    /// Store a pending redirect received via MSG_CLUSTER_REDIRECT_PREP.
+    void HandleRedirectPrep(std::vector<uint8> const& payload);
+
     /// NATS callback for cluster.transport.query request-reply.
     /// Runs on the NATS dispatch thread; replies with current PathProgress data.
     static void OnTransportQueryMsg(natsConnection* nc, natsSubscription* sub,
@@ -315,6 +342,11 @@ private:
     /// Published to cluster.mgmt.players every MgmtPlayersInterval seconds.
     /// Payload documented in SendMgmtPlayers().  Consumed by clustermgr.
     static constexpr uint8 MSG_MGMT_PLAYERS            = 0x1E;
+    /// Sent from source node to destination node BEFORE SMSG_REDIRECT_CLIENT.
+    /// Pre-registers the pending redirect so the destination can authenticate the
+    /// incoming CMSG_REDIRECTION_AUTH_PROOF without a round-trip to the source.
+    /// Payload: [accountId:4][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
+    static constexpr uint8 MSG_CLUSTER_REDIRECT_PREP   = 0x1F;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
@@ -350,6 +382,11 @@ private:
 
     // ── Cluster instability counter ───────────────────────────────────────────
     uint16 _nodeCrashCount{ 0 };       ///< Incremented each time we detect a peer node death
+
+    // ── Pending cross-node redirects (keyed by client IP) ────────────────────
+    // Populated by HandleRedirectPrep; consumed by ClaimPendingRedirect (I/O thread).
+    std::mutex _pendingRedirectsMutex;
+    std::unordered_map<std::string, PendingRedirect> _pendingRedirects;
 
     // ── Dynamic BG coordinator tracking ──────────────────────────────────────
     uint8  _bgCoordNodeId{ 0 };        ///< Currently elected BG coordinator node (from config, updated on failover)

@@ -318,7 +318,16 @@ void ProxyClient::OnNatsMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
     self->_natsBytesRx.fetch_add(static_cast<uint32>(n), std::memory_order_relaxed);
     natsMsg_Destroy(msg);
 
-    // Marshal to world thread.
+    // MSG_CLUSTER_REDIRECT_PREP must be processed immediately on the NATS thread
+    // (not via QueueCallback) so the PendingRedirect entry exists by the time the
+    // client's CMSG_REDIRECTION_AUTH_PROOF arrives on the I/O thread.
+    if (msgType == MSG_CLUSTER_REDIRECT_PREP)
+    {
+        self->HandleRedirectPrep(payload);
+        return;
+    }
+
+    // Marshal all other messages to world thread.
     sWorld->QueueCallback([self, msgType, pl = std::move(payload)]() mutable
     {
         self->Dispatch(msgType, std::move(pl));
@@ -1760,6 +1769,101 @@ void ProxyClient::SendMailNotify(uint64 recipientGuid)
     uint8 payload[8];
     std::memcpy(payload, &recipientGuid, 8);
     PublishToNode(info->nodeId, MSG_CLUSTER_NOTIFY_MAIL, payload, 8);
+}
+
+// ── Cross-node redirect pre-notification ─────────────────────────────────────
+
+void ProxyClient::SendRedirectPrep(uint32 accountId, std::string const& username,
+                                   SessionKey const& sessionKey, std::string const& clientIp,
+                                   uint8 destNodeId)
+{
+    if (!_connected || _nodeId == 0 || destNodeId == 0)
+        return;
+
+    // Payload: [accountId:4][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
+    uint8 uLen = static_cast<uint8>(std::min(username.size(), std::size_t(255)));
+    uint8 ipLen = static_cast<uint8>(std::min(clientIp.size(), std::size_t(255)));
+
+    std::vector<uint8> payload;
+    payload.reserve(4 + 40 + 1 + uLen + 1 + ipLen);
+
+    // accountId
+    payload.push_back(static_cast<uint8>(accountId & 0xFF));
+    payload.push_back(static_cast<uint8>((accountId >> 8) & 0xFF));
+    payload.push_back(static_cast<uint8>((accountId >> 16) & 0xFF));
+    payload.push_back(static_cast<uint8>((accountId >> 24) & 0xFF));
+    // sessionKey (40 bytes)
+    payload.insert(payload.end(), sessionKey.begin(), sessionKey.end());
+    // username
+    payload.push_back(uLen);
+    payload.insert(payload.end(), username.begin(), username.begin() + uLen);
+    // clientIp
+    payload.push_back(ipLen);
+    payload.insert(payload.end(), clientIp.begin(), clientIp.begin() + ipLen);
+
+    PublishToNode(destNodeId, MSG_CLUSTER_REDIRECT_PREP, payload.data(), static_cast<int>(payload.size()));
+
+    LOG_DEBUG("server.worldserver",
+              "ProxyClient: SendRedirectPrep accountId={} username={} clientIp={} → node {}",
+              accountId, username, clientIp, destNodeId);
+}
+
+void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
+{
+    // Payload: [accountId:4][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
+    std::size_t offset = 0;
+    if (payload.size() < 4 + 40 + 1 + 1)
+    {
+        LOG_WARN("server.worldserver", "ProxyClient: HandleRedirectPrep — truncated payload ({})", payload.size());
+        return;
+    }
+
+    uint32 accountId = 0;
+    std::memcpy(&accountId, payload.data() + offset, 4); offset += 4;
+
+    SessionKey sessionKey;
+    std::memcpy(sessionKey.data(), payload.data() + offset, 40); offset += 40;
+
+    uint8 uLen = payload[offset++];
+    if (offset + uLen + 1 > payload.size()) return;
+    std::string username(reinterpret_cast<char const*>(payload.data() + offset), uLen); offset += uLen;
+
+    uint8 ipLen = payload[offset++];
+    if (offset + ipLen > payload.size()) return;
+    std::string clientIp(reinterpret_cast<char const*>(payload.data() + offset), ipLen);
+
+    PendingRedirect pr;
+    pr.accountId  = accountId;
+    pr.username   = username;
+    pr.sessionKey = sessionKey;
+    pr.expiry     = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+
+    {
+        std::lock_guard<std::mutex> lock(_pendingRedirectsMutex);
+        _pendingRedirects[clientIp] = std::move(pr);
+    }
+
+    LOG_DEBUG("server.worldserver",
+              "ProxyClient: HandleRedirectPrep stored pending redirect accountId={} username={} clientIp={}",
+              accountId, username, clientIp);
+}
+
+bool ProxyClient::ClaimPendingRedirect(std::string const& clientIp, PendingRedirect& out)
+{
+    std::lock_guard<std::mutex> lock(_pendingRedirectsMutex);
+    auto it = _pendingRedirects.find(clientIp);
+    if (it == _pendingRedirects.end())
+        return false;
+
+    if (std::chrono::steady_clock::now() > it->second.expiry)
+    {
+        _pendingRedirects.erase(it);
+        return false;
+    }
+
+    out = std::move(it->second);
+    _pendingRedirects.erase(it);
+    return true;
 }
 
 // ── Incoming: cross-node mail notification ────────────────────────────────────
