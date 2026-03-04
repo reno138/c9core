@@ -758,12 +758,18 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
     uint32 ipNet   = htonl(addr.to_uint());
     uint16 portNet = htons(port);
 
-    // HMAC-SHA1 over [ip:4 + port:2] keyed with the account session key.
-    // The destination worldserver verifies the same HMAC from CMSG_REDIRECTION_AUTH_PROOF.
+    // SHA1(sessionKey[40] || ip[4] || port[2]) — plain concatenation, NOT HMAC.
+    // The WoW 3.3.5a client verifies this hash before deciding to attempt the TCP
+    // connection to the destination node.  Using HMAC here causes the client to
+    // silently drop the redirect and never connect.
     uint8 hmacData[6];
     memcpy(hmacData,     &ipNet,   4);
     memcpy(hmacData + 4, &portNet, 2);
-    auto hmac = Acore::Crypto::HMAC_SHA1::GetDigestOf(_sessionKey, hmacData, 6);
+    Acore::Crypto::SHA1 sha1;
+    sha1.UpdateData(_sessionKey);
+    sha1.UpdateData(hmacData, 6);
+    sha1.Finalize();
+    auto hmac = sha1.GetDigest();
 
     // Send SMSG_SUSPEND_COMMS before redirect — required by WoW 3.3.5a client.
     // Without this handshake the client refuses the redirect and sends CMSG_REDIRECTION_FAILED
@@ -806,7 +812,8 @@ void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
         return;
     }
 
-    // Verify the HMAC: HMAC_SHA1(sessionKey, [ownIpNet:4 + ownPortNet:2])
+    // Verify SHA1(sessionKey[40] || ownIpNet[4] || ownPortNet[2]) — must match what
+    // SendRedirectClient on node1 embedded in SMSG_REDIRECT_CLIENT.
     std::string ownAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
     uint16      ownPort    = uint16(sWorld->getIntConfig(CONFIG_PORT_WORLD));
 
@@ -824,11 +831,15 @@ void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
     uint8  hmacData[6];
     memcpy(hmacData,     &ipNet,   4);
     memcpy(hmacData + 4, &portNet, 2);
-    auto expected = Acore::Crypto::HMAC_SHA1::GetDigestOf(pending.sessionKey, hmacData, 6);
+    Acore::Crypto::SHA1 sha1verify;
+    sha1verify.UpdateData(pending.sessionKey);
+    sha1verify.UpdateData(hmacData, 6);
+    sha1verify.Finalize();
+    auto expected = sha1verify.GetDigest();
 
     if (proof != expected)
     {
-        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: client {} HMAC mismatch — disconnecting", clientIp);
+        LOG_WARN("network", "WorldSocket::HandleRedirectAuthProof: client {} hash mismatch — disconnecting", clientIp);
         DelayedCloseSocket();
         return;
     }
