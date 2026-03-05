@@ -66,13 +66,44 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
         return;
     }
 
+    // Read transport sync broadcast interval (seconds) from config.
+    int32 const syncIntervalSec = sConfigMgr->GetOption<int32>(
+        "ClusterServer.TransportSyncInterval", 60);
+    _transportSyncIntervalMs = (syncIntervalSec > 0)
+        ? static_cast<uint32>(syncIntervalSec) * 1000u
+        : 0u;
+
+    // Initialize BG coordinator to the configured node (may change on failover).
+    _bgCoordNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
+
+    if (!ConnectNATS())
+    {
+        LOG_WARN("server.worldserver",
+                 "ProxyClient: Initial NATS connect failed — will retry every 10s in Update()");
+        return;
+    }
+
+    // Announce ourselves to peer nodes; Update() will retry every 10s until acknowledged.
+    PublishAnnounce();
+    _lastAnnounceRetryMs = getMSTime();
+
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Connected to NATS as node {} (serverType={}, gamePort={} addr={}) "
+             "transport_sync_interval={}s",
+             _nodeId, serverType, gamePort, gameAddress, syncIntervalSec);
+}
+
+/// Connect to NATS and subscribe to all required subjects.
+/// Returns true on success.  On failure cleans up and returns false.
+bool ProxyClient::ConnectNATS()
+{
     // Connect to NATS.
-    natsStatus s = natsConnection_ConnectTo(&_nc, natsUrl.c_str());
+    natsStatus s = natsConnection_ConnectTo(&_nc, _natsUrl.c_str());
     if (s != NATS_OK)
     {
         LOG_ERROR("server.worldserver", "ProxyClient: Failed to connect to NATS at {} — {}",
-                  natsUrl, natsStatus_GetText(s));
-        return;
+                  _natsUrl, natsStatus_GetText(s));
+        return false;
     }
 
     // Subscribe to messages directed at this node.
@@ -84,7 +115,7 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
                   nodeSub, natsStatus_GetText(s));
         natsConnection_Destroy(_nc);
         _nc = nullptr;
-        return;
+        return false;
     }
 
     // Subscribe to broadcast fanout (all nodes).
@@ -97,7 +128,7 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
         _subNode = nullptr;
         natsConnection_Destroy(_nc);
         _nc = nullptr;
-        return;
+        return false;
     }
 
     // Subscribe to peer discovery announcements.
@@ -112,7 +143,7 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
         _subNode = nullptr;
         natsConnection_Destroy(_nc);
         _nc = nullptr;
-        return;
+        return false;
     }
 
     // Subscribe to transport sync queries (new nodes query us on startup to seed
@@ -128,25 +159,8 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
                  natsStatus_GetText(s));
     }
 
-    // Read transport sync broadcast interval (seconds) from config.
-    int32 const syncIntervalSec = sConfigMgr->GetOption<int32>(
-        "ClusterServer.TransportSyncInterval", 60);
-    _transportSyncIntervalMs = (syncIntervalSec > 0)
-        ? static_cast<uint32>(syncIntervalSec) * 1000u
-        : 0u;
-
-    // Initialize BG coordinator to the configured node (may change on failover).
-    _bgCoordNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
-
     _connected = true;
-
-    // Announce ourselves to peer nodes.
-    PublishAnnounce();
-
-    LOG_INFO("server.worldserver",
-             "ProxyClient: Connected to NATS as node {} (serverType={}, gamePort={} addr={}) "
-             "transport_sync_interval={}s",
-             _nodeId, serverType, gamePort, gameAddress, syncIntervalSec);
+    return true;
 }
 
 // ── NATS publish helpers ──────────────────────────────────────────────────────
@@ -307,6 +321,15 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         if (wasRevived)
             sProxyClient.RestoreBgCoordIfNeeded(announceNodeId);
     });
+
+    // Acknowledge receipt so the announcing node stops its 10-second retry loop.
+    // This runs on the NATS dispatch thread — safe to publish directly.
+    if (self->_nc && self->_connected)
+    {
+        std::string ackSubject = "cluster.node." + std::to_string(nodeId);
+        uint8 ackBuf[2] = { ProxyClient::MSG_ANNOUNCE_ACK, self->_nodeId };
+        natsConnection_Publish(self->_nc, ackSubject.c_str(), ackBuf, 2);
+    }
 }
 
 // ── Incoming NATS message dispatcher ─────────────────────────────────────────
@@ -494,6 +517,9 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
         case MSG_PONG:
             // Silently discard — pong is only consumed by the sender; peers ignore it.
             break;
+        case MSG_ANNOUNCE_ACK:
+            HandleAnnounceAck(payload);
+            break;
         default:
             LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming msgType 0x{:02X}", msgType);
             break;
@@ -598,13 +624,38 @@ bool ProxyClient::QueryBestInstanceAddress(std::string& outAddr, uint16& outPort
 
 void ProxyClient::Update()
 {
-    if (!_connected)
-        return;
-
-    constexpr uint32 HEARTBEAT_INTERVAL_MS = 10 * 1000;        //  10 seconds
-    constexpr uint32 REFRESH_INTERVAL_MS   = 5 * 60 * 1000;    //   5 minutes
+    constexpr uint32 NATS_RETRY_INTERVAL_MS     = 10 * 1000;    //  10 seconds
+    constexpr uint32 ANNOUNCE_RETRY_INTERVAL_MS = 10 * 1000;    //  10 seconds
+    constexpr uint32 HEARTBEAT_INTERVAL_MS      = 10 * 1000;    //  10 seconds
+    constexpr uint32 REFRESH_INTERVAL_MS        = 5 * 60 * 1000; //  5 minutes
 
     uint32 now = getMSTime();
+
+    if (!_connected)
+    {
+        // Retry NATS connection every 10 seconds.
+        if (now - _lastNatsRetryMs >= NATS_RETRY_INTERVAL_MS)
+        {
+            _lastNatsRetryMs = now;
+            if (ConnectNATS())
+            {
+                LOG_INFO("server.worldserver",
+                         "ProxyClient: Reconnected to NATS as node {}", _nodeId);
+                PublishAnnounce();
+                _lastAnnounceRetryMs = now;
+            }
+        }
+        return;
+    }
+
+    // Re-announce every 10 seconds until at least one peer sends MSG_ANNOUNCE_ACK.
+    if (!_clusterRegistered && now - _lastAnnounceRetryMs >= ANNOUNCE_RETRY_INTERVAL_MS)
+    {
+        _lastAnnounceRetryMs = now;
+        PublishAnnounce();
+        LOG_INFO("server.worldserver",
+                 "ProxyClient: Re-announcing to cluster (awaiting peer acknowledgement)");
+    }
 
     if (now - _lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS)
     {
@@ -1860,6 +1911,22 @@ void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
     LOG_INFO("server.worldserver",
              "ProxyClient: HandleRedirectPrep stored pending redirect accountId={} username={} clientIp={}",
              accountId, username, clientIp);
+}
+
+void ProxyClient::HandleAnnounceAck(std::vector<uint8> const& payload)
+{
+    if (payload.size() < 1)
+        return;
+
+    uint8 senderNodeId = payload[0];
+
+    if (_clusterRegistered)
+        return; // Already acknowledged — ignore redundant ACKs.
+
+    _clusterRegistered = true;
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Cluster registration acknowledged by node {} — node {} is fully registered",
+             senderNodeId, _nodeId);
 }
 
 bool ProxyClient::ClaimPendingRedirect(std::string const& clientIp, PendingRedirect& out)

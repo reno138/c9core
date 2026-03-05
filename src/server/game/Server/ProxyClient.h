@@ -242,6 +242,11 @@ private:
     /// Build and publish a cluster.announce payload with this node's identity.
     void PublishAnnounce();
 
+    /// Connect to NATS and subscribe to all required subjects.
+    /// Returns true on success; false if connection or any required subscription fails.
+    /// Can be called again after a failed Initialize() to retry the connection.
+    bool ConnectNATS();
+
     /// Publish raw bytes to an arbitrary NATS subject (no msgType prefix).
     void PublishRaw(std::string const& subject, uint8 const* data, int len);
 
@@ -291,6 +296,10 @@ private:
 
     /// Store a pending redirect received via MSG_CLUSTER_REDIRECT_PREP.
     void HandleRedirectPrep(std::vector<uint8> const& payload);
+
+    /// Handle MSG_ANNOUNCE_ACK from a peer confirming our cluster.announce was received.
+    /// Sets _clusterRegistered = true, stopping the 10-second re-announce retry.
+    void HandleAnnounceAck(std::vector<uint8> const& payload);
 
     /// NATS callback for cluster.transport.query request-reply.
     /// Runs on the NATS dispatch thread; replies with current PathProgress data.
@@ -347,6 +356,11 @@ private:
     /// incoming CMSG_REDIRECTION_AUTH_PROOF without a round-trip to the source.
     /// Payload: [accountId:4][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
     static constexpr uint8 MSG_CLUSTER_REDIRECT_PREP   = 0x1F;
+    /// Sent from any peer back to a node that published cluster.announce, confirming
+    /// that the registration was received.  Triggers _clusterRegistered = true on the
+    /// announcing node, stopping the 10-second re-announce retry.
+    /// Payload: [senderNodeId:1]
+    static constexpr uint8 MSG_ANNOUNCE_ACK            = 0x20;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
@@ -363,15 +377,18 @@ private:
     std::string _natsUrl;
 
     bool _connected{ false };
+    bool _clusterRegistered{ false };  ///< true after at least one peer sends MSG_ANNOUNCE_ACK
 
     // ── Periodic update timers ────────────────────────────────────────────────
-    uint32 _lastHeartbeatMs{ 0 };      ///< getMSTime() at last MSG_NODE_STATUS send
-    uint32 _lastRefreshMs{ 0 };        ///< getMSTime() at last MSG_NODE_REFRESH send
-    uint32 _lastTransportSyncMs{ 0 };  ///< getMSTime() at last MSG_TRANSPORT_SYNC broadcast
+    uint32 _lastHeartbeatMs{ 0 };        ///< getMSTime() at last MSG_NODE_STATUS send
+    uint32 _lastRefreshMs{ 0 };          ///< getMSTime() at last MSG_NODE_REFRESH send
+    uint32 _lastTransportSyncMs{ 0 };    ///< getMSTime() at last MSG_TRANSPORT_SYNC broadcast
     uint32 _transportSyncIntervalMs{ 60000 }; ///< broadcast interval (from config, ms)
-    uint32 _lastDeadCheckMs{ 0 };      ///< getMSTime() at last dead-node check
-    uint32 _lastMgmtStatusMs{ 0 };     ///< getMSTime() at last cluster.mgmt.status publish
-    uint32 _lastMgmtPlayersMs{ 0 };    ///< getMSTime() at last cluster.mgmt.players publish
+    uint32 _lastDeadCheckMs{ 0 };        ///< getMSTime() at last dead-node check
+    uint32 _lastMgmtStatusMs{ 0 };       ///< getMSTime() at last cluster.mgmt.status publish
+    uint32 _lastMgmtPlayersMs{ 0 };      ///< getMSTime() at last cluster.mgmt.players publish
+    uint32 _lastNatsRetryMs{ 0 };        ///< getMSTime() at last NATS reconnect attempt
+    uint32 _lastAnnounceRetryMs{ 0 };    ///< getMSTime() at last cluster.announce retry
 
     // ── Startup time (for uptime reporting) ───────────────────────────────────
     uint32 _startupTimeMs{ 0 };        ///< getMSTime() at Initialize()
