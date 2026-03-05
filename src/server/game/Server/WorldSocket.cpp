@@ -445,6 +445,12 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             // (SMSG_REDIRECT_CLIENT already sent, DelayedCloseSocket in flight).
             packet.rfinish();
             return ReadDataHandlerResult::Ok;
+        case CMSG_REDIRECTION_FAILED:
+            // Client explicitly rejected SMSG_REDIRECT_CLIENT (hash mismatch or can't connect).
+            LOG_WARN("network", "WorldSocket::ReadDataHandler: client {} sent CMSG_REDIRECTION_FAILED — redirect rejected client-side",
+                     GetRemoteIpAddress().to_string());
+            packet.rfinish();
+            return ReadDataHandlerResult::Ok;
         case CMSG_AUTH_SESSION:
         {
             LogOpcodeText(opcode, sessionGuard);
@@ -788,6 +794,15 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
 
     LOG_INFO("server.worldserver", "WorldSocket::SendRedirectClient: redirecting {} to {}:{}", GetRemoteIpAddress().to_string(), address, port);
     SendPacketAndLogOpcode(data);
+
+    // SMSG_FORCE_SEND_QUEUED_PACKETS signals the client to flush its pending outgoing
+    // queue and execute the redirect.  Without this the client may remain suspended
+    // waiting for the signal and never attempt the TCP connection to the dest node.
+    {
+        WorldPacket forceFlush(SMSG_FORCE_SEND_QUEUED_PACKETS, 0);
+        SendPacketAndLogOpcode(forceFlush);
+    }
+
     DelayedCloseSocket();
 }
 
