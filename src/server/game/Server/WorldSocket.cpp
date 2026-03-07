@@ -765,18 +765,14 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
     uint32 ipNet   = htonl(addr.to_uint());
     uint16 portNet = htons(port);
 
-    // SHA1(sessionKey[40] || ip[4] || port[2]) — plain concatenation, NOT HMAC.
-    // The WoW 3.3.5a client verifies this hash before deciding to attempt the TCP
-    // connection to the destination node.  Using HMAC here causes the client to
-    // silently drop the redirect and never connect.
+    // HMAC-SHA1(key=sessionKey, msg=ip[4]||port[2])
+    // Binary analysis of WoW.exe (fcn.004668a0 + fcn.00465780) confirms the client
+    // computes full HMAC-SHA1 (inner pad XOR key → SHA1 → outer pad XOR key → SHA1),
+    // NOT plain SHA1 concatenation.
     uint8 hmacData[6];
     memcpy(hmacData,     &ipNet,   4);
     memcpy(hmacData + 4, &portNet, 2);
-    Acore::Crypto::SHA1 sha1;
-    sha1.UpdateData(_sessionKey);
-    sha1.UpdateData(hmacData, 6);
-    sha1.Finalize();
-    auto hmac = sha1.GetDigest();
+    auto hmac = Acore::Crypto::HMAC_SHA1::GetDigestOf(_sessionKey, hmacData, 6);
 
     // NOTE: Do NOT send SMSG_SUSPEND_COMMS before SMSG_REDIRECT_CLIENT.
     // Binary analysis of WoW.exe confirms the redirect handler checks [this+0x538]==0
@@ -786,7 +782,7 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
     data << ipNet;          // uint32, network byte order
     data << portNet;        // uint16, network byte order
     data << uint32(0);      // unk
-    data.append(hmac.data(), hmac.size());  // uint8[20] HMAC
+    data.append(hmac.data(), hmac.size());  // uint8[20] HMAC-SHA1
 
     LOG_INFO("server.worldserver", "WorldSocket::SendRedirectClient: redirecting {} to {}:{}", GetRemoteIpAddress().to_string(), address, port);
     SendPacketAndLogOpcode(data);
@@ -836,11 +832,7 @@ void WorldSocket::HandleRedirectAuthProof(WorldPacket& recvPacket)
     uint8  hmacData[6];
     memcpy(hmacData,     &ipNet,   4);
     memcpy(hmacData + 4, &portNet, 2);
-    Acore::Crypto::SHA1 sha1verify;
-    sha1verify.UpdateData(pending.sessionKey);
-    sha1verify.UpdateData(hmacData, 6);
-    sha1verify.Finalize();
-    auto expected = sha1verify.GetDigest();
+    auto expected = Acore::Crypto::HMAC_SHA1::GetDigestOf(pending.sessionKey, hmacData, 6);
 
     if (proof != expected)
     {
