@@ -1838,7 +1838,7 @@ void ProxyClient::SendMailNotify(uint64 recipientGuid)
 
 // ── Cross-node redirect pre-notification ─────────────────────────────────────
 
-void ProxyClient::SendRedirectPrep(uint32 accountId, std::string const& username,
+void ProxyClient::SendRedirectPrep(uint32 accountId, uint64 charGuid, std::string const& username,
                                    SessionKey const& sessionKey, std::string const& clientIp,
                                    uint8 destNodeId)
 {
@@ -1850,13 +1850,16 @@ void ProxyClient::SendRedirectPrep(uint32 accountId, std::string const& username
     uint8 ipLen = static_cast<uint8>(std::min(clientIp.size(), std::size_t(255)));
 
     std::vector<uint8> payload;
-    payload.reserve(4 + 40 + 1 + uLen + 1 + ipLen);
+    payload.reserve(4 + 8 + 40 + 1 + uLen + 1 + ipLen);
 
     // accountId
     payload.push_back(static_cast<uint8>(accountId & 0xFF));
     payload.push_back(static_cast<uint8>((accountId >> 8) & 0xFF));
     payload.push_back(static_cast<uint8>((accountId >> 16) & 0xFF));
     payload.push_back(static_cast<uint8>((accountId >> 24) & 0xFF));
+    // charGuid (8 bytes, little-endian)
+    for (int i = 0; i < 8; ++i)
+        payload.push_back(static_cast<uint8>((charGuid >> (i * 8)) & 0xFF));
     // sessionKey (40 bytes)
     payload.insert(payload.end(), sessionKey.begin(), sessionKey.end());
     // username
@@ -1875,9 +1878,9 @@ void ProxyClient::SendRedirectPrep(uint32 accountId, std::string const& username
 
 void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
 {
-    // Payload: [accountId:4][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
+    // Payload: [accountId:4][charGuid:8][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
     std::size_t offset = 0;
-    if (payload.size() < 4 + 40 + 1 + 1)
+    if (payload.size() < 4 + 8 + 40 + 1 + 1)
     {
         LOG_WARN("server.worldserver", "ProxyClient: HandleRedirectPrep — truncated payload ({})", payload.size());
         return;
@@ -1885,6 +1888,9 @@ void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
 
     uint32 accountId = 0;
     std::memcpy(&accountId, payload.data() + offset, 4); offset += 4;
+
+    uint64 charGuid = 0;
+    std::memcpy(&charGuid, payload.data() + offset, 8); offset += 8;
 
     SessionKey sessionKey;
     std::memcpy(sessionKey.data(), payload.data() + offset, 40); offset += 40;
@@ -1899,6 +1905,7 @@ void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
 
     PendingRedirect pr;
     pr.accountId  = accountId;
+    pr.charGuid   = charGuid;
     pr.username   = username;
     pr.sessionKey = sessionKey;
     pr.expiry     = std::chrono::steady_clock::now() + std::chrono::seconds(30);

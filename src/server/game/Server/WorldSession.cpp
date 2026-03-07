@@ -1394,7 +1394,8 @@ void WorldSession::SendRedirectClient(std::string const& address, uint16 port, u
     // the incoming CMSG_REDIRECTION_AUTH_PROOF without contacting the source.
     if (destNodeId != 0 && sProxyClient.IsConnected())
     {
-        sProxyClient.SendRedirectPrep(GetAccountId(), GetAccountName(),
+        uint64 charGuid = _player ? _player->GetGUID().GetRawValue() : 0;
+        sProxyClient.SendRedirectPrep(GetAccountId(), charGuid, GetAccountName(),
             m_Socket->GetSessionKey(), GetRemoteAddress(), destNodeId);
     }
 

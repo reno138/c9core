@@ -1219,6 +1219,10 @@ private:
         return _legitCharacters.find(guid) != _legitCharacters.end();
     }
 
+public:
+    void AddLegitCharacter(ObjectGuid guid) { _legitCharacters.insert(guid); }
+private:
+
     // this stores the GUIDs of the characters who can login
     // characters who failed on Player::BuildEnumData shouldn't login
     GuidSet _legitCharacters;

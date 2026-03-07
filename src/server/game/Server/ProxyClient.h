@@ -127,7 +127,7 @@ public:
     /// SMSG_REDIRECT_CLIENT.  The destination node stores the session key keyed
     /// by @p clientIp so HandleRedirectAuthProof can authenticate the incoming
     /// CMSG_REDIRECTION_AUTH_PROOF without a database round-trip to the source.
-    void SendRedirectPrep(uint32 accountId, std::string const& username,
+    void SendRedirectPrep(uint32 accountId, uint64 charGuid, std::string const& username,
                           SessionKey const& sessionKey, std::string const& clientIp,
                           uint8 destNodeId);
 
@@ -138,6 +138,7 @@ public:
     struct PendingRedirect
     {
         uint32      accountId;
+        uint64      charGuid;   ///< Raw ObjectGuid value of the redirected character.
         std::string username;
         SessionKey  sessionKey;
         std::chrono::steady_clock::time_point expiry; ///< 30s TTL

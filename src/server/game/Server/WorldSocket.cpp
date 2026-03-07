@@ -441,13 +441,14 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
             return ReadDataHandlerResult::Error;
         }
         case CMSG_SUSPEND_COMMS_ACK:
+            LOG_INFO("server.worldserver", "WorldSocket::ReadDataHandler: client {} sent CMSG_SUSPEND_COMMS_ACK", GetRemoteIpAddress().to_string());
             // Client acknowledges SMSG_SUSPEND_COMMS; we don't need to wait for it
             // (SMSG_REDIRECT_CLIENT already sent, DelayedCloseSocket in flight).
             packet.rfinish();
             return ReadDataHandlerResult::Ok;
         case CMSG_REDIRECTION_FAILED:
             // Client explicitly rejected SMSG_REDIRECT_CLIENT (hash mismatch or can't connect).
-            LOG_WARN("network", "WorldSocket::ReadDataHandler: client {} sent CMSG_REDIRECTION_FAILED — redirect rejected client-side",
+            LOG_WARN("server.worldserver", "WorldSocket::ReadDataHandler: client {} sent CMSG_REDIRECTION_FAILED — redirect rejected client-side",
                      GetRemoteIpAddress().to_string());
             packet.rfinish();
             return ReadDataHandlerResult::Ok;
@@ -777,15 +778,10 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
     sha1.Finalize();
     auto hmac = sha1.GetDigest();
 
-    // Send SMSG_SUSPEND_COMMS before redirect — required by WoW 3.3.5a client.
-    // Without this handshake the client refuses the redirect and sends CMSG_REDIRECTION_FAILED
-    // without attempting any TCP connection to the destination.
-    {
-        WorldPacket suspendData(SMSG_SUSPEND_COMMS, 4);
-        suspendData << uint32(0);   // sequence counter (arbitrary)
-        SendPacketAndLogOpcode(suspendData);
-    }
-
+    // NOTE: Do NOT send SMSG_SUSPEND_COMMS before SMSG_REDIRECT_CLIENT.
+    // Binary analysis of WoW.exe confirms the redirect handler checks [this+0x538]==0
+    // before proceeding. SMSG_SUSPEND_COMMS sets that byte to non-zero, causing the
+    // redirect handler to immediately fail and queue CMSG_REDIRECTION_FAILED instead.
     WorldPacket data(SMSG_REDIRECT_CLIENT, 4 + 2 + 4 + 20);
     data << ipNet;          // uint32, network byte order
     data << portNet;        // uint16, network byte order
@@ -795,14 +791,8 @@ void WorldSocket::SendRedirectClient(std::string const& address, uint16 port)
     LOG_INFO("server.worldserver", "WorldSocket::SendRedirectClient: redirecting {} to {}:{}", GetRemoteIpAddress().to_string(), address, port);
     SendPacketAndLogOpcode(data);
 
-    // SMSG_FORCE_SEND_QUEUED_PACKETS signals the client to flush its pending outgoing
-    // queue and execute the redirect.  Without this the client may remain suspended
-    // waiting for the signal and never attempt the TCP connection to the dest node.
-    {
-        WorldPacket forceFlush(SMSG_FORCE_SEND_QUEUED_PACKETS, 0);
-        SendPacketAndLogOpcode(forceFlush);
-    }
-
+    // Close the source-node socket after the redirect packet is flushed.
+    // The client opens a fresh connection to the destination node; this socket is done.
     DelayedCloseSocket();
 }
 
@@ -923,10 +913,21 @@ void WorldSocket::HandleRedirectAuthCallback(ProxyClient::PendingRedirect pendin
     if (wardenActive)
         _worldSession->InitWarden(_sessionKey, account.OS);
 
+    // Populate _legitCharacters so HandlePlayerLoginOpcode allows the redirected character.
+    // On a normal login this is populated by SMSG_CHAR_ENUM; on redirect there is no
+    // char-enum phase, so we inject the GUID we forwarded via MSG_CLUSTER_REDIRECT_PREP.
+    if (pending.charGuid != 0)
+        _worldSession->AddLegitCharacter(ObjectGuid(pending.charGuid));
+
     sWorldSessionMgr->AddSession(_worldSession);
 
     LOG_DEBUG("network", "WorldSocket::HandleRedirectAuthCallback: redirect auth complete for account {} '{}'",
               account.Id, pending.username);
+
+    // Resume reading so the now-authenticated session can receive CMSG_PLAYER_LOGIN
+    // and subsequent game packets. The normal auth path (HandleAuthSessionCallback)
+    // does the same at the equivalent point.
+    AsyncRead();
 }
 
 void WorldSocket::SendAuthResponseError(uint8 code)
