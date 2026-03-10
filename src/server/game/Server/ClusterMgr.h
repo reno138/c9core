@@ -32,7 +32,7 @@
  *
  * Populated from cluster.announce broadcasts on NATS startup.
  * Used by ProxyClient to route targeted messages directly to the correct
- * node without involving the proxy, and by WorldSession::SendRedirectClient
+ * node without involving the proxy, and by ProxyClient::SendReroute
  * to obtain the destination IP:port for cross-node player redirection.
  */
 struct ClusterNodeInfo

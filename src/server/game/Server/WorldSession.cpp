@@ -1385,22 +1385,6 @@ Warden* WorldSession::GetWarden()
     return &(*_warden);
 }
 
-void WorldSession::SendRedirectClient(std::string const& address, uint16 port, uint8 destNodeId)
-{
-    if (!m_Socket)
-        return;
-
-    // Pre-notify the destination node with our session key so it can authenticate
-    // the incoming CMSG_REDIRECTION_AUTH_PROOF without contacting the source.
-    if (destNodeId != 0 && sProxyClient.IsConnected())
-    {
-        uint64 charGuid = _player ? _player->GetGUID().GetRawValue() : 0;
-        sProxyClient.SendRedirectPrep(GetAccountId(), charGuid, GetAccountName(),
-            m_Socket->GetSessionKey(), GetRemoteAddress(), destNodeId);
-    }
-
-    m_Socket->SendRedirectClient(address, port);
-}
 
 WorldSession::DosProtection::Policy WorldSession::DosProtection::EvaluateOpcode(WorldPacket const& p, time_t const time) const
 {

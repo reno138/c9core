@@ -86,6 +86,10 @@ public:
     void Close();
     bool IsOpen() const;
 
+    /// Synthesize and send CMSG_PLAYER_LOGIN to the backend.
+    /// Public so ProxySocket can call it after MSG_MOVE_WORLDPORT_ACK translation.
+    void SendPlayerLogin();
+
 private:
     void AsyncRead();
     void AsyncWrite();
@@ -101,9 +105,8 @@ private:
     /// Reroute handshake helpers (only called when _isReroute == true).
     void HandleAuthChallenge(); ///< Intercept SMSG_AUTH_CHALLENGE, reply with CMSG_AUTH_SESSION.
     void HandleAuthResponse();  ///< Intercept SMSG_AUTH_RESPONSE, init crypto, send CMSG_CHAR_ENUM.
-    void HandleCharEnum();      ///< Intercept SMSG_CHAR_ENUM, send CMSG_PLAYER_LOGIN, complete reroute.
+    void HandleCharEnum();      ///< Intercept SMSG_CHAR_ENUM, complete reroute handshake.
     void SendCharEnum();        ///< Synthesize and send CMSG_CHAR_ENUM to populate _legitCharacters.
-    void SendPlayerLogin();     ///< Synthesize and send CMSG_PLAYER_LOGIN to instance server.
 
     std::weak_ptr<ProxySocket> _owner;
     boost::asio::ip::tcp::socket _socket;

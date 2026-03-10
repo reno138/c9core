@@ -777,7 +777,7 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
                 sess->KickPlayer("GAP-1: offline session on non-local map, redirecting to correct node");
                 auto destNode = sClusterMgr.GetNodeForMap(mapId);
                 if (destNode)
-                    SendRedirectClient(destNode->address, destNode->port, destNode->nodeId);
+                    sProxyClient.SendReroute(p->GetGUID().GetRawValue(), destNode->address, destNode->port);
                 return;
             }
 
@@ -835,7 +835,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         m_playerLoading = false;
         auto destNode = sClusterMgr.GetNodeForMap(mapId);
         if (destNode)
-            SendRedirectClient(destNode->address, destNode->port, destNode->nodeId);
+            sProxyClient.SendReroute(pCurrChar->GetGUID().GetRawValue(), destNode->address, destNode->port);
         return;
     }
 
@@ -934,6 +934,11 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     }
 
     pCurrChar->SendInitialPacketsAfterAddToMap();
+
+    // Cross-node teleport arrival: clear SemaphoreTeleportFar that the source node set.
+    // The player is now in the world on this node.
+    if (pCurrChar->IsBeingTeleportedFar())
+        pCurrChar->SetSemaphoreTeleportFar(0);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_ONLINE);
     stmt->SetData(0, pCurrChar->GetGUID().GetCounter());

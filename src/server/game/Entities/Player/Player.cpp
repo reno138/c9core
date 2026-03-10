@@ -1577,24 +1577,17 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             // if the player is saved before worldportack (at logout for example)
             // this will be used instead of the current location in SaveToDB
 
-            // Cross-node teleport: send SMSG_REDIRECT_CLIENT so the client reconnects
-            // directly to the destination worldserver.  The loading screen is already
-            // showing (transport crossing always shows one), making the reconnect invisible.
+            // Cross-node teleport: ask the proxy to reroute this client to the destination
+            // worldserver node.  The proxy sends SMSG_TRANSFER_PENDING + SMSG_NEW_WORLD to the
+            // client (native WoW map-transfer flow), then switches the backend connection.
             if (!GetSession()->PlayerLogout()
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // Save to DB with m_transport still attached (if on a transport) so
-                // _SaveCharacter writes transguid + relative deck offsets.  The
-                // destination node's LoadFromDB finds the same transport (all nodes
-                // keep the full transport set) and re-boards the player at their exact
-                // deck position via CalculatePassengerPosition.  The saved world
-                // position (teleportStore_dest) acts as a dock fallback if the transport
-                // lookup fails on the destination node.
-                SetSemaphoreTeleportNear(GameTime::GetGameTime().count());
-                SaveToDB(false, false);
-                SetSemaphoreTeleportNear(0);
+                // SemaphoreTeleportFar must be set BEFORE SaveToDB so the destination
+                // node's HandlePlayerLoginFromDB finds it in the DB and can clear it.
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
+                SaveToDB(false, false);
 
                 // Detach from transport AFTER saving so this node cleans up cleanly.
                 if (m_transport)
@@ -1605,16 +1598,23 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
                 }
 
-                // Redirect this client to the correct node via SMSG_REDIRECT_CLIENT.
+                // Tell the proxy to reroute this player's TCP connection to the destination node.
+                // mapId/x/y/z/ori enable native SMSG_NEW_WORLD from the proxy.
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
                 if (destNode)
                 {
-                    GetSession()->SendRedirectClient(destNode->address, destNode->port, destNode->nodeId);
+                    sProxyClient.SendReroute(GetGUID().GetRawValue(),
+                                             destNode->address, destNode->port,
+                                             mapid,
+                                             teleportStore_dest.m_positionX,
+                                             teleportStore_dest.m_positionY,
+                                             teleportStore_dest.m_positionZ,
+                                             teleportStore_dest.m_orientation);
                 }
                 else
                 {
                     LOG_WARN("server.worldserver",
-                             "Player::TeleportTo: no node info for map {} — cannot redirect player {}",
+                             "Player::TeleportTo: no node info for map {} -- cannot reroute player {}",
                              mapid, GetGUID().ToString());
                 }
 

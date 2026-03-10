@@ -89,13 +89,7 @@ public:
     bool IsLoggingPackets() const { return _loggingPackets; }
     void SetPacketLogging(bool state) { _loggingPackets = state; }
 
-    /// Send SMSG_REDIRECT_CLIENT to route this client to another worldserver.
-    /// Computes HMAC-SHA1(sessionKey, destIp+destPort) and sends the redirect packet.
-    /// Called from WorldSession::SendRedirectClient after SaveToDB.
-    void SendRedirectClient(std::string const& address, uint16 port);
-
-    /// Expose the session key so WorldSession can forward it to the destination
-    /// node via sProxyClient.SendRedirectPrep() before SMSG_REDIRECT_CLIENT.
+    /// Expose the session key for ARC4 initialization.
     SessionKey const& GetSessionKey() const { return _sessionKey; }
 
 protected:
@@ -124,8 +118,6 @@ private:
     void HandleSendAuthSession();
     void HandleAuthSession(WorldPacket& recvPacket);
     void HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> authSession, PreparedQueryResult result);
-    void HandleRedirectAuthProof(WorldPacket& recvPacket);
-    void HandleRedirectAuthCallback(ProxyClient::PendingRedirect pending, PreparedQueryResult result);
     void LoadSessionPermissionsCallback(PreparedQueryResult result);
     void SendAuthResponseError(uint8 code);
 
@@ -133,7 +125,7 @@ private:
 
     std::array<uint8, 4> _authSeed;
     AuthCrypt _authCrypt;
-    SessionKey _sessionKey{};   ///< Stored after CMSG_AUTH_SESSION for SendRedirectClient / HandleRedirectAuthProof
+    SessionKey _sessionKey{};   ///< Stored after CMSG_AUTH_SESSION for ARC4 initialization
 
     TimePoint _LastPingTime;
     uint32 _OverSpeedPings;

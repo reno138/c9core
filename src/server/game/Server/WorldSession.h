@@ -461,10 +461,6 @@ public:
     void InitWarden(SessionKey const&, std::string const& os);
     Warden* GetWarden();
 
-    /// Redirect the connected client to another worldserver via SMSG_REDIRECT_CLIENT.
-    /// Should be called after SaveToDB so the player's state is persisted on the
-    /// current node before the client reconnects to the destination node.
-    void SendRedirectClient(std::string const& address, uint16 port, uint8 destNodeId = 0);
 
     /// Session in auth.queue currently
     void SetInQueue(bool state) { m_inQueue = state; }

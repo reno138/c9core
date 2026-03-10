@@ -51,8 +51,9 @@ class WorldPacket;
  *   cluster.node.{N}     — targeted delivery to specific node (packet deliver, LFG relay…)
  *   cluster.announce     — startup broadcast for peer node discovery + routing table
  *
- * Cross-node player rerouting (cross-map travel) is handled by
- * WorldSession::SendRedirectClient (SMSG_REDIRECT_CLIENT) rather than the proxy.
+ * Cross-node player rerouting (cross-map travel) is handled by the proxy via
+ * ProxyClient::SendReroute, which sends SMSG_TRANSFER_PENDING + SMSG_NEW_WORLD
+ * to the client through the native WoW map-transfer flow.
  */
 class ProxyClient
 {
@@ -81,7 +82,9 @@ public:
     // ── Outgoing messages ─────────────────────────────────────────────────────
 
     /// Ask the proxy to reroute a player to the given backend.
-    void SendReroute(uint64 playerGuid, std::string const& address, uint16 port);
+    /// mapId/x/y/z/ori enable native SMSG_NEW_WORLD from the proxy (zeros = login reroute).
+    void SendReroute(uint64 playerGuid, std::string const& address, uint16 port,
+                     uint32 mapId = 0, float x = 0.f, float y = 0.f, float z = 0.f, float ori = 0.f);
 
     /// Announce that a player just logged in (broadcasts to all other nodes).
     void AnnounceOnline(Player const* player);
@@ -123,27 +126,6 @@ public:
     /// route SMSG_RECEIVED_MAIL to whichever node hosts the recipient's session.
     void SendMailNotify(uint64 recipientGuid);
 
-    /// Pre-register a pending client redirect on @p destNodeId before sending
-    /// SMSG_REDIRECT_CLIENT.  The destination node stores the session key keyed
-    /// by @p clientIp so HandleRedirectAuthProof can authenticate the incoming
-    /// CMSG_REDIRECTION_AUTH_PROOF without a database round-trip to the source.
-    void SendRedirectPrep(uint32 accountId, uint64 charGuid, std::string const& username,
-                          SessionKey const& sessionKey, std::string const& clientIp,
-                          uint8 destNodeId);
-
-    /// Called from WorldSocket::HandleRedirectAuthProof (I/O thread) to retrieve
-    /// and consume the pre-registered redirect context for @p clientIp.
-    /// Returns true and populates @p out on success; returns false if not found
-    /// (e.g. pre-notification never arrived or already consumed).
-    struct PendingRedirect
-    {
-        uint32      accountId;
-        uint64      charGuid;   ///< Raw ObjectGuid value of the redirected character.
-        std::string username;
-        SessionKey  sessionKey;
-        std::chrono::steady_clock::time_point expiry; ///< 30s TTL
-    };
-    bool ClaimPendingRedirect(std::string const& clientIp, PendingRedirect& out);
 
     // ── BG queue relay (non-instance nodes ↔ proxy) ───────────────────────────
 
@@ -295,8 +277,6 @@ private:
     /// Apply transport PathProgress corrections received in MSG_TRANSPORT_SYNC.
     void HandleTransportSync(std::vector<uint8> const& payload);
 
-    /// Store a pending redirect received via MSG_CLUSTER_REDIRECT_PREP.
-    void HandleRedirectPrep(std::vector<uint8> const& payload);
 
     /// Handle MSG_ANNOUNCE_ACK from a peer confirming our cluster.announce was received.
     /// Sets _clusterRegistered = true, stopping the 10-second re-announce retry.
@@ -352,11 +332,6 @@ private:
     /// Published to cluster.mgmt.players every MgmtPlayersInterval seconds.
     /// Payload documented in SendMgmtPlayers().  Consumed by clustermgr.
     static constexpr uint8 MSG_MGMT_PLAYERS            = 0x1E;
-    /// Sent from source node to destination node BEFORE SMSG_REDIRECT_CLIENT.
-    /// Pre-registers the pending redirect so the destination can authenticate the
-    /// incoming CMSG_REDIRECTION_AUTH_PROOF without a round-trip to the source.
-    /// Payload: [accountId:4][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
-    static constexpr uint8 MSG_CLUSTER_REDIRECT_PREP   = 0x1F;
     /// Sent from any peer back to a node that published cluster.announce, confirming
     /// that the registration was received.  Triggers _clusterRegistered = true on the
     /// announcing node, stopping the 10-second re-announce retry.
@@ -400,11 +375,6 @@ private:
 
     // ── Cluster instability counter ───────────────────────────────────────────
     uint16 _nodeCrashCount{ 0 };       ///< Incremented each time we detect a peer node death
-
-    // ── Pending cross-node redirects (keyed by client IP) ────────────────────
-    // Populated by HandleRedirectPrep; consumed by ClaimPendingRedirect (I/O thread).
-    std::mutex _pendingRedirectsMutex;
-    std::unordered_map<std::string, PendingRedirect> _pendingRedirects;
 
     // ── Dynamic BG coordinator tracking ──────────────────────────────────────
     uint8  _bgCoordNodeId{ 0 };        ///< Currently elected BG coordinator node (from config, updated on failover)

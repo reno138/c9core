@@ -241,14 +241,26 @@ void NatsBus::OnClusterProxyMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         // ── MSG_REROUTE_PLAYER (0x02) ─────────────────────────────────────────
         case ClusterMsg::REROUTE_PLAYER:
         {
-            // guid(8) + addrLen(1) + addr[addrLen] + port(2)
+            // guid(8) + addrLen(1) + addr[addrLen] + port(2) + map(4) + x(4) + y(4) + z(4) + ori(4)
             if (rem < 11) break;
             uint64 guid;    std::memcpy(&guid, p, 8);
             uint8  addrLen = p[8];
             if (rem < 9 + addrLen + 2) break;
             std::string addr(reinterpret_cast<const char*>(p + 9), addrLen);
-            uint16 port;    std::memcpy(&port, p + 9 + addrLen, 2);
-            sProxyMgr.ReroutePlayer(guid, addr, port);
+            int addrEnd = 9 + addrLen;
+            uint16 port;    std::memcpy(&port, p + addrEnd, 2);
+            // Optional map/position fields (added for native SMSG_NEW_WORLD reroute).
+            uint32 mapId = 0;
+            float  rx = 0.f, ry = 0.f, rz = 0.f, rori = 0.f;
+            if (rem >= addrEnd + 2 + 20)
+            {
+                std::memcpy(&mapId, p + addrEnd + 2,      4);
+                std::memcpy(&rx,    p + addrEnd + 2 + 4,  4);
+                std::memcpy(&ry,    p + addrEnd + 2 + 8,  4);
+                std::memcpy(&rz,    p + addrEnd + 2 + 12, 4);
+                std::memcpy(&rori,  p + addrEnd + 2 + 16, 4);
+            }
+            sProxyMgr.ReroutePlayer(guid, addr, port, mapId, rx, ry, rz, rori);
             break;
         }
         // ── MSG_CLUSTER_PLAYER_ONLINE (0x03) ─────────────────────────────────

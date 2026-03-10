@@ -354,16 +354,7 @@ void ProxyClient::OnNatsMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
     self->_natsBytesRx.fetch_add(static_cast<uint32>(n), std::memory_order_relaxed);
     natsMsg_Destroy(msg);
 
-    // MSG_CLUSTER_REDIRECT_PREP must be processed immediately on the NATS thread
-    // (not via QueueCallback) so the PendingRedirect entry exists by the time the
-    // client's CMSG_REDIRECTION_AUTH_PROOF arrives on the I/O thread.
-    if (msgType == MSG_CLUSTER_REDIRECT_PREP)
-    {
-        self->HandleRedirectPrep(payload);
-        return;
-    }
-
-    // Marshal all other messages to world thread.
+    // Marshal all messages to world thread.
     sWorld->QueueCallback([self, msgType, pl = std::move(payload)]() mutable
     {
         self->Dispatch(msgType, std::move(pl));
@@ -1189,16 +1180,86 @@ void ProxyClient::SendMgmtPlayers()
 
 // ── Outgoing cluster messages ─────────────────────────────────────────────────
 
-void ProxyClient::SendReroute(uint64 /*playerGuid*/, std::string const& /*address*/, uint16 /*port*/)
+void ProxyClient::SendReroute(uint64 playerGuid, std::string const& address, uint16 port,
+                             uint32 mapId, float x, float y, float z, float ori)
 {
-    // Proxy-based reroute removed — use WorldSession::SendRedirectClient instead.
-    LOG_WARN("server.worldserver", "ProxyClient::SendReroute called but proxy rerouting is disabled");
+    if (!_nc || !_connected)
+        return;
+
+    // Wire format for cluster.proxy MSG_REROUTE_PLAYER:
+    //   [sourceNodeId:1][msgType:1][guid:8][addrLen:1][addr:n][port:2][map:4][x:4][y:4][z:4][ori:4]
+    // map/x/y/z/ori are always included; zeros mean login reroute (no native SMSG_NEW_WORLD needed).
+    uint8  addrLen = static_cast<uint8>(std::min(address.size(), std::size_t(255)));
+    uint16 portLE  = port;
+
+    std::vector<uint8> buf;
+    buf.reserve(2 + 8 + 1 + addrLen + 2 + 4 + 4 + 4 + 4 + 4);
+
+    // [sourceNodeId:1][msgType:1]
+    buf.push_back(_nodeId);
+    buf.push_back(MSG_REROUTE_PLAYER);
+
+    // [guid:8]
+    for (int i = 0; i < 8; ++i)
+        buf.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
+
+    // [addrLen:1][addr:n]
+    buf.push_back(addrLen);
+    buf.insert(buf.end(), address.begin(), address.begin() + addrLen);
+
+    // [port:2]
+    buf.push_back(static_cast<uint8>(portLE & 0xFF));
+    buf.push_back(static_cast<uint8>(portLE >> 8));
+
+    // [map:4]
+    buf.push_back(static_cast<uint8>(mapId & 0xFF));
+    buf.push_back(static_cast<uint8>((mapId >> 8) & 0xFF));
+    buf.push_back(static_cast<uint8>((mapId >> 16) & 0xFF));
+    buf.push_back(static_cast<uint8>((mapId >> 24) & 0xFF));
+
+    // [x:4][y:4][z:4][ori:4] — float little-endian
+    auto pushFloat = [&](float v) {
+        uint32 bits;
+        std::memcpy(&bits, &v, 4);
+        buf.push_back(static_cast<uint8>(bits & 0xFF));
+        buf.push_back(static_cast<uint8>((bits >> 8) & 0xFF));
+        buf.push_back(static_cast<uint8>((bits >> 16) & 0xFF));
+        buf.push_back(static_cast<uint8>((bits >> 24) & 0xFF));
+    };
+    pushFloat(x);
+    pushFloat(y);
+    pushFloat(z);
+    pushFloat(ori);
+
+    natsStatus s = natsConnection_Publish(_nc, "cluster.proxy", buf.data(), static_cast<int>(buf.size()));
+    if (s != NATS_OK)
+        LOG_WARN("server.worldserver", "ProxyClient::SendReroute: publish failed — {}", natsStatus_GetText(s));
+    else
+    {
+        _natsBytesTx.fetch_add(static_cast<uint32>(buf.size()), std::memory_order_relaxed);
+        LOG_INFO("server.worldserver",
+                 "ProxyClient::SendReroute GUID {:016X} → {}:{} map={} pos=({:.1f},{:.1f},{:.1f},{:.2f})",
+                 playerGuid, address, port, mapId, x, y, z, ori);
+    }
 }
 
-void ProxyClient::SendRerouteToMap(uint64 /*playerGuid*/, uint32 /*mapId*/)
+void ProxyClient::SendRerouteToMap(uint64 playerGuid, uint32 mapId)
 {
-    // Proxy-based reroute removed — use WorldSession::SendRedirectClient instead.
-    LOG_WARN("server.worldserver", "ProxyClient::SendRerouteToMap called but proxy rerouting is disabled");
+    if (!_nc || !_connected)
+        return;
+
+    // Payload: [sourceNodeId:1][msgType:1][guid:8][mapId:4]
+    uint8 buf[14];
+    buf[0] = _nodeId;
+    buf[1] = MSG_REROUTE_TO_MAP;
+    std::memcpy(buf + 2, &playerGuid, 8);
+    std::memcpy(buf + 10, &mapId, 4);
+
+    natsStatus s = natsConnection_Publish(_nc, "cluster.proxy", buf, 14);
+    if (s != NATS_OK)
+        LOG_WARN("server.worldserver", "ProxyClient::SendRerouteToMap: publish failed — {}", natsStatus_GetText(s));
+    else
+        LOG_INFO("server.worldserver", "ProxyClient::SendRerouteToMap GUID {:016X} map={}", playerGuid, mapId);
 }
 
 void ProxyClient::AnnounceOnline(Player const* player)
@@ -1625,14 +1686,9 @@ void ProxyClient::HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> con
 
             LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_MATCH_NOTIFY guid {:016X} → {}:{}", guid, addr, port);
 
-            // Redirect the local player to the instance server via SMSG_REDIRECT_CLIENT.
-            sWorld->QueueCallback([guid, addr, port]()
-            {
-                Player* player = ObjectAccessor::FindConnectedPlayer(ObjectGuid(guid));
-                if (!player || !player->GetSession())
-                    return;
-                player->GetSession()->SendRedirectClient(addr, port);
-            });
+            // Reroute the local player to the instance server via the proxy.
+            // No position params — the instance server will handle initial placement.
+            sProxyClient.SendReroute(guid, addr, port);
             break;
         }
 
@@ -1836,89 +1892,6 @@ void ProxyClient::SendMailNotify(uint64 recipientGuid)
     PublishToNode(info->nodeId, MSG_CLUSTER_NOTIFY_MAIL, payload, 8);
 }
 
-// ── Cross-node redirect pre-notification ─────────────────────────────────────
-
-void ProxyClient::SendRedirectPrep(uint32 accountId, uint64 charGuid, std::string const& username,
-                                   SessionKey const& sessionKey, std::string const& clientIp,
-                                   uint8 destNodeId)
-{
-    if (!_connected || _nodeId == 0 || destNodeId == 0)
-        return;
-
-    // Payload: [accountId:4][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
-    uint8 uLen = static_cast<uint8>(std::min(username.size(), std::size_t(255)));
-    uint8 ipLen = static_cast<uint8>(std::min(clientIp.size(), std::size_t(255)));
-
-    std::vector<uint8> payload;
-    payload.reserve(4 + 8 + 40 + 1 + uLen + 1 + ipLen);
-
-    // accountId
-    payload.push_back(static_cast<uint8>(accountId & 0xFF));
-    payload.push_back(static_cast<uint8>((accountId >> 8) & 0xFF));
-    payload.push_back(static_cast<uint8>((accountId >> 16) & 0xFF));
-    payload.push_back(static_cast<uint8>((accountId >> 24) & 0xFF));
-    // charGuid (8 bytes, little-endian)
-    for (int i = 0; i < 8; ++i)
-        payload.push_back(static_cast<uint8>((charGuid >> (i * 8)) & 0xFF));
-    // sessionKey (40 bytes)
-    payload.insert(payload.end(), sessionKey.begin(), sessionKey.end());
-    // username
-    payload.push_back(uLen);
-    payload.insert(payload.end(), username.begin(), username.begin() + uLen);
-    // clientIp
-    payload.push_back(ipLen);
-    payload.insert(payload.end(), clientIp.begin(), clientIp.begin() + ipLen);
-
-    PublishToNode(destNodeId, MSG_CLUSTER_REDIRECT_PREP, payload.data(), static_cast<int>(payload.size()));
-
-    LOG_INFO("server.worldserver",
-             "ProxyClient: SendRedirectPrep accountId={} username={} clientIp={} → node {}",
-             accountId, username, clientIp, destNodeId);
-}
-
-void ProxyClient::HandleRedirectPrep(std::vector<uint8> const& payload)
-{
-    // Payload: [accountId:4][charGuid:8][sessionKey:40][usernameLen:1][username:var][clientIpLen:1][clientIp:var]
-    std::size_t offset = 0;
-    if (payload.size() < 4 + 8 + 40 + 1 + 1)
-    {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleRedirectPrep — truncated payload ({})", payload.size());
-        return;
-    }
-
-    uint32 accountId = 0;
-    std::memcpy(&accountId, payload.data() + offset, 4); offset += 4;
-
-    uint64 charGuid = 0;
-    std::memcpy(&charGuid, payload.data() + offset, 8); offset += 8;
-
-    SessionKey sessionKey;
-    std::memcpy(sessionKey.data(), payload.data() + offset, 40); offset += 40;
-
-    uint8 uLen = payload[offset++];
-    if (offset + uLen + 1 > payload.size()) return;
-    std::string username(reinterpret_cast<char const*>(payload.data() + offset), uLen); offset += uLen;
-
-    uint8 ipLen = payload[offset++];
-    if (offset + ipLen > payload.size()) return;
-    std::string clientIp(reinterpret_cast<char const*>(payload.data() + offset), ipLen);
-
-    PendingRedirect pr;
-    pr.accountId  = accountId;
-    pr.charGuid   = charGuid;
-    pr.username   = username;
-    pr.sessionKey = sessionKey;
-    pr.expiry     = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-
-    {
-        std::lock_guard<std::mutex> lock(_pendingRedirectsMutex);
-        _pendingRedirects[clientIp] = std::move(pr);
-    }
-
-    LOG_INFO("server.worldserver",
-             "ProxyClient: HandleRedirectPrep stored pending redirect accountId={} username={} clientIp={}",
-             accountId, username, clientIp);
-}
 
 void ProxyClient::HandleAnnounceAck(std::vector<uint8> const& payload)
 {
@@ -1936,23 +1909,6 @@ void ProxyClient::HandleAnnounceAck(std::vector<uint8> const& payload)
              senderNodeId, _nodeId);
 }
 
-bool ProxyClient::ClaimPendingRedirect(std::string const& clientIp, PendingRedirect& out)
-{
-    std::lock_guard<std::mutex> lock(_pendingRedirectsMutex);
-    auto it = _pendingRedirects.find(clientIp);
-    if (it == _pendingRedirects.end())
-        return false;
-
-    if (std::chrono::steady_clock::now() > it->second.expiry)
-    {
-        _pendingRedirects.erase(it);
-        return false;
-    }
-
-    out = std::move(it->second);
-    _pendingRedirects.erase(it);
-    return true;
-}
 
 // ── Incoming: cross-node mail notification ────────────────────────────────────
 

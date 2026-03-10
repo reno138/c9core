@@ -69,7 +69,9 @@ public:
     void OnRerouteComplete(std::shared_ptr<BackendSession> newBackend);
 
     /// Initiate a backend switch to the given address:port (called by ProxyMgr).
-    void RerouteToBackend(std::string const& address, uint16 port);
+    /// mapId/x/y/z/ori: when non-zero, send SMSG_NEW_WORLD to client (native in-world reroute).
+    void RerouteToBackend(std::string const& address, uint16 port,
+                          uint32 mapId = 0, float x = 0.f, float y = 0.f, float z = 0.f, float ori = 0.f);
 
 protected:
     SocketReadCallbackResult ReadHandler() final;
@@ -113,10 +115,10 @@ private:
     /// When true, ReadHandler() pauses client reads (reroute in progress or DB query).
     bool _rerouting{ false };
 
-    /// Set by BackendSession after rewriting SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD.
-    /// The next MSG_MOVE_WORLDPORT_ACK from the client is silently dropped — the
-    /// destination node already spawned the player via PLAYER_LOGIN and doesn't need it.
-    bool _dropWorldportAck{ false };
+    /// Set after native cross-node reroute (proxy sent SMSG_NEW_WORLD to client).
+    /// The next MSG_MOVE_WORLDPORT_ACK from the client is translated to CMSG_PLAYER_LOGIN
+    /// and forwarded to the new backend — matching VB.NET On_MSG_MOVE_WORLDPORT_ACK.
+    bool _translateWorldportAck{ false };
 
     /// Set to true the first time SMSG_LOGIN_VERIFY_WORLD is forwarded to the client.
     /// Used to distinguish GAP-1 login reroutes (client not yet in world) from in-world
@@ -136,9 +138,9 @@ public:
     /// Expose player GUID for opcode logging in BackendSession.
     uint64 GetPlayerGuid() const { return _playerGuid; }
 
-    /// Called by BackendSession after rewriting SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD
-    /// so we can drop the client's subsequent MSG_MOVE_WORLDPORT_ACK.
-    void SetDropWorldportAck(bool drop) { _dropWorldportAck = drop; }
+    /// Called after native reroute (SMSG_NEW_WORLD sent to client) to arm the
+    /// MSG_MOVE_WORLDPORT_ACK → CMSG_PLAYER_LOGIN translation in ReadDataHandler.
+    void SetTranslateWorldportAck(bool translate) { _translateWorldportAck = translate; }
 
     /// Called by BackendSession when SMSG_LOGIN_VERIFY_WORLD is forwarded to the client
     /// (either directly or as a rewrite).  Marks this session as "client has entered world".

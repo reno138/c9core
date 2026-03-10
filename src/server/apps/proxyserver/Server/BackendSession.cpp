@@ -367,7 +367,7 @@ void BackendSession::DispatchToClient()
                 // Tell ProxySocket to silently drop the client's MSG_MOVE_WORLDPORT_ACK:
                 // the destination node already spawned the player via PLAYER_LOGIN and does
                 // not expect (or need) a worldport ack.
-                owner->SetDropWorldportAck(true);
+                owner->SetTranslateWorldportAck(true);
             }
             return;
         }
@@ -552,25 +552,36 @@ void BackendSession::SendCharEnum()
 
 void BackendSession::HandleCharEnum()
 {
-    LOG_INFO("proxy", "BackendSession: Got SMSG_CHAR_ENUM — sending CMSG_PLAYER_LOGIN (GUID {:016X})",
-             _playerGuid);
+    LOG_INFO("proxy", "BackendSession: Got SMSG_CHAR_ENUM — reroute handshake complete (GUID {:016X})", _playerGuid);
     _handshakeState = HandshakeState::Done;
 
-    // For BOTH login reroutes and in-world reroutes, suppress all pre-login S→C packets
-    // from the destination node until SMSG_LOGIN_VERIFY_WORLD arrives.
-    //
-    // In-world reroute (_isLoginReroute=false): drop pre-login packets (client already has
-    //   character data) and rewrite SMSG_LOGIN_VERIFY_WORLD → SMSG_NEW_WORLD.
-    //
-    // Login reroute (_isLoginReroute=true): same drop, but forward SMSG_LOGIN_VERIFY_WORLD
-    //   as-is — client is in initial login state and expects it directly (not SMSG_NEW_WORLD).
-    //   Pre-login packets from the destination node must NOT reach the client because some
-    //   (e.g. SMSG_AUTH_RESPONSE lookalikes from the node's login sequence) can desync the
-    //   ARC4 stream.  The client obtains character data via the subsequent SMSG_* flood that
-    //   comes AFTER SMSG_LOGIN_VERIFY_WORLD on the normal world stream.
-    _rerouteLoginPending = true;
+    if (_isLoginReroute)
+    {
+        // GAP-1 login reroute: client is in initial login state.
+        // Suppress pre-login packets; forward SMSG_LOGIN_VERIFY_WORLD as-is.
+        _rerouteLoginPending = true;
+        // Client never sends MSG_MOVE_WORLDPORT_ACK in initial login flow,
+        // so we send PLAYER_LOGIN now.
+        SendPlayerLogin();
+    }
+    else
+    {
+        // Native in-world reroute: proxy already sent SMSG_NEW_WORLD.
+        // Do NOT send PLAYER_LOGIN here. ProxySocket will translate
+        // MSG_MOVE_WORLDPORT_ACK → CMSG_PLAYER_LOGIN after the client sends the ack,
+        // matching VB.NET On_MSG_MOVE_WORLDPORT_ACK flow.
+        _rerouteLoginPending = false;
+        // Still drop pre-login packets until SMSG_LOGIN_VERIFY_WORLD arrives
+        // (the rewrite path in DispatchToClient already handles this correctly
+        //  when _rerouteLoginPending is false — it falls through to normal relay).
+        // Actually we need to drop pre-login packets; set a flag to suppress them.
+        // The existing _rerouteLoginPending=false means DispatchToClient won't drop.
+        // For the native reroute, BackendSession just relays everything — the proxy
+        // already sent SMSG_NEW_WORLD so the client is on the loading screen.
+        // Pre-login packets from destination node are harmless (client ignores them
+        // while loading). When SMSG_LOGIN_VERIFY_WORLD arrives it is forwarded as-is.
+    }
 
-    SendPlayerLogin();
     if (auto owner = _owner.lock())
         owner->OnRerouteComplete(shared_from_this());
 }

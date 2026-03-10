@@ -126,7 +126,8 @@ public:
     void RegisterSession(uint64 guid, std::shared_ptr<ProxySocket> socket);
     void UnregisterSession(uint64 guid);
     std::shared_ptr<ProxySocket> GetSession(uint64 guid);
-    void ReroutePlayer(uint64 guid, std::string const& address, uint16 port);
+    void ReroutePlayer(uint64 guid, std::string const& address, uint16 port,
+                       uint32 mapId = 0, float x = 0.f, float y = 0.f, float z = 0.f, float ori = 0.f);
 
     // ── Worldserver node registry ──────────────────────────────────────────────
 

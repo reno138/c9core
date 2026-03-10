@@ -43,6 +43,8 @@
  *    uint8  address_len
  *    char   address[address_len]
  *    uint16 port
+ *    uint32 map_id     (0 = login reroute, no SMSG_NEW_WORLD needed)
+ *    float  x, y, z, ori
  *
  *  MSG_CLUSTER_PLAYER_ONLINE (0x03):
  *    uint64 player_guid

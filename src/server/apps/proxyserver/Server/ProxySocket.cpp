@@ -164,15 +164,18 @@ bool ProxySocket::ReadDataHandler()
         LOG_DEBUG("proxy.packets", "C→S  GUID {:016X}  opcode 0x{:04X}  size {}",
                   _playerGuid, opcode, CLIENT_HEADER_SIZE + _packetBuffer.GetActiveSize());
 
-    // After a cross-node reroute, the proxy synthesized SMSG_NEW_WORLD for the client.
-    // The client responds with MSG_MOVE_WORLDPORT_ACK which must be dropped — the
-    // destination node already spawned the player via PLAYER_LOGIN and has no handler
-    // waiting for this opcode.
-    if (_dropWorldportAck && opcode == MSG_MOVE_WORLDPORT_ACK_OPCODE)
+    // After native cross-node reroute (SMSG_NEW_WORLD sent to client), the client
+    // responds with MSG_MOVE_WORLDPORT_ACK.  Translate it to CMSG_PLAYER_LOGIN and
+    // send to the new backend -- matching VB.NET On_MSG_MOVE_WORLDPORT_ACK.
+    if (_translateWorldportAck && opcode == MSG_MOVE_WORLDPORT_ACK_OPCODE)
     {
-        _dropWorldportAck = false;
-        LOG_DEBUG("proxy", "ProxySocket: Dropping MSG_MOVE_WORLDPORT_ACK for GUID {:016X} (cross-node reroute)",
+        _translateWorldportAck = false;
+        LOG_DEBUG("proxy", "ProxySocket: MSG_MOVE_WORLDPORT_ACK for GUID {:016X} -- sending CMSG_PLAYER_LOGIN",
                   _playerGuid);
+        if (_backend && _backend->IsOpen())
+            _backend->SendPlayerLogin();
+        else
+            LOG_ERROR("proxy", "ProxySocket: No backend for PLAYER_LOGIN after worldport ack, GUID {:016X}", _playerGuid);
         return true;
     }
 
@@ -334,7 +337,8 @@ void ProxySocket::ResumeAfterAuth()
     AsyncRead();
 }
 
-void ProxySocket::RerouteToBackend(std::string const& address, uint16 port)
+void ProxySocket::RerouteToBackend(std::string const& address, uint16 port,
+                                   uint32 mapId, float x, float y, float z, float ori)
 {
     if (_rerouting)
     {
@@ -348,15 +352,71 @@ void ProxySocket::RerouteToBackend(std::string const& address, uint16 port)
         return;
     }
 
-    LOG_INFO("proxy", "ProxySocket: Rerouting GUID {:016X} to {}:{}", _playerGuid, address, port);
+    LOG_INFO("proxy", "ProxySocket: Rerouting GUID {:016X} to {}:{} map={}", _playerGuid, address, port, mapId);
     _rerouting = true;
+
+    bool isLoginReroute = !_clientInWorld || mapId == 0;
+
+    // Native in-world reroute: send SMSG_NEW_WORLD to client now so the loading screen
+    // appears immediately.  Mirrors VB.NET ClientTransfer() → SendNewWorld() flow.
+    if (!isLoginReroute && mapId != 0)
+    {
+        // Build SMSG_NEW_WORLD (0x03E): mapId(4) + x(4) + y(4) + z(4) + ori(4) = 20 bytes payload
+        // Header: size(2 BE) + opcode(2 LE) = 4 bytes total header for small packets.
+        constexpr uint16 SMSG_NEW_WORLD_OPCODE = 0x03E;
+        constexpr uint16 PAYLOAD_SIZE = 20;
+        constexpr uint16 SIZE_FIELD   = 4 + PAYLOAD_SIZE; // includes opcode (2) + payload (20)
+
+        uint8 plainHeader[4];
+        plainHeader[0] = static_cast<uint8>(SIZE_FIELD >> 8);   // big-endian size high
+        plainHeader[1] = static_cast<uint8>(SIZE_FIELD & 0xFF); // big-endian size low
+        plainHeader[2] = static_cast<uint8>(SMSG_NEW_WORLD_OPCODE & 0xFF);
+        plainHeader[3] = static_cast<uint8>((SMSG_NEW_WORLD_OPCODE >> 8) & 0xFF);
+
+        auto floatBytes = [](float v) -> std::array<uint8, 4> {
+            uint32 bits; std::memcpy(&bits, &v, 4);
+            return { static_cast<uint8>(bits & 0xFF),
+                     static_cast<uint8>((bits >> 8) & 0xFF),
+                     static_cast<uint8>((bits >> 16) & 0xFF),
+                     static_cast<uint8>((bits >> 24) & 0xFF) };
+        };
+
+        uint8 payload[20];
+        payload[0] = static_cast<uint8>(mapId & 0xFF);
+        payload[1] = static_cast<uint8>((mapId >> 8) & 0xFF);
+        payload[2] = static_cast<uint8>((mapId >> 16) & 0xFF);
+        payload[3] = static_cast<uint8>((mapId >> 24) & 0xFF);
+        auto bx = floatBytes(x);   std::copy(bx.begin(), bx.end(), payload + 4);
+        auto by = floatBytes(y);   std::copy(by.begin(), by.end(), payload + 8);
+        auto bz = floatBytes(z);   std::copy(bz.begin(), bz.end(), payload + 12);
+        auto bo = floatBytes(ori); std::copy(bo.begin(), bo.end(), payload + 16);
+
+        MessageBuffer payloadBuf(PAYLOAD_SIZE);
+        payloadBuf.Write(payload, PAYLOAD_SIZE);
+        QueuePacketForClient(plainHeader, 4, payloadBuf);
+
+        LOG_DEBUG("proxy", "ProxySocket: Sent SMSG_NEW_WORLD to GUID {:016X} map={} pos=({:.1f},{:.1f},{:.1f},{:.2f})",
+                  _playerGuid, mapId, x, y, z, ori);
+
+        // Arm the worldport ACK → PLAYER_LOGIN translation.
+        _translateWorldportAck = true;
+
+        // Immediately close the old backend — stops the source WorldServer from sending
+        // stale packets to the client while it is on the loading screen.
+        if (_backend)
+        {
+            LOG_DEBUG("proxy", "ProxySocket: Closing source backend for GUID {:016X} (native reroute)", _playerGuid);
+            _backend->Close();
+            _backend = nullptr;
+        }
+    }
 
     _pendingBackend = std::make_shared<BackendSession>(
         sProxySocketMgr.GetIoContext(),
         shared_from_this(),
         _accountName, _sessionKey, _realmId, _playerGuid,
         GetRemoteIpAddress().to_string(),
-        /*isLoginReroute=*/ !_clientInWorld);
+        /*isLoginReroute=*/ isLoginReroute);
 
     _pendingBackend->Connect(address, port);
 }

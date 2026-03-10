@@ -269,7 +269,8 @@ std::shared_ptr<ProxySocket> ProxyMgr::GetSession(uint64 guid)
     return socket;
 }
 
-void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 port)
+void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 port,
+                              uint32 mapId, float x, float y, float z, float ori)
 {
     auto socket = GetSession(guid);
     if (!socket)
@@ -277,14 +278,16 @@ void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 por
         LOG_WARN("proxy", "ProxyMgr: ReroutePlayer — GUID {:016X} not found", guid);
         return;
     }
-    LOG_INFO("proxy", "ProxyMgr: Rerouting GUID {:016X} to {}:{}", guid, address, port);
+    LOG_INFO("proxy", "ProxyMgr: Rerouting GUID {:016X} to {}:{} map={}", guid, address, port, mapId);
     // Post to the io_context thread so RerouteToBackend() is serialized with
     // ReadHandler(). Calling it directly from the NATS dispatch thread races
     // with a mid-loop ReadHandler(): _rerouting is set too late, ReadHandler()
     // returns KeepReading, Boost.ASIO posts async_read A, then OnRerouteComplete()
     // posts async_read B — two concurrent reads corrupt packet framing.
     Acore::Asio::post(sProxySocketMgr.GetIoContext(),
-        [socket, address, port]() mutable { socket->RerouteToBackend(address, port); });
+        [socket, address, port, mapId, x, y, z, ori]() mutable {
+            socket->RerouteToBackend(address, port, mapId, x, y, z, ori);
+        });
 }
 
 // ── Worldserver node registry ─────────────────────────────────────────────────
