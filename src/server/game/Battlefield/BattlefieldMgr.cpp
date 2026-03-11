@@ -16,6 +16,7 @@
  */
 
 #include "BattlefieldMgr.h"
+#include "Config.h"
 #include "Player.h"
 #include "Zones/BattlefieldWG.h"
 
@@ -46,6 +47,14 @@ void BattlefieldMgr::InitBattlefield()
         LOG_INFO("server.loading", " ");
         return;
     }
+    // Instance server nodes don't run continent battlefields — Wintergrasp lives on the worldserver node.
+    if (sConfigMgr->GetOption<bool>("InstanceServer.Enable", false))
+    {
+        LOG_DEBUG("server.loading", "Battlefield: Skipping Wintergrasp init on instance server node.");
+        LOG_INFO("server.loading", " ");
+        return;
+    }
+
     Battlefield* pBf = new BattlefieldWG;
     // respawn, init variables
     if (!pBf->SetupBattlefield())
