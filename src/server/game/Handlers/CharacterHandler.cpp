@@ -828,6 +828,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         && !sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
     {
         uint32 const mapId = pCurrChar->GetMapId();
+        uint64 const charGuid = pCurrChar->GetGUID().GetRawValue(); // save before delete
         // LoadFromDB applied auras; remove them before deleting to satisfy Unit::~Unit assertion.
         pCurrChar->RemoveAllAuras();
         SetPlayer(nullptr);         // LoadFromDB set _player; clear it before delete
@@ -835,7 +836,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         m_playerLoading = false;
         auto destNode = sClusterMgr.GetNodeForMap(mapId);
         if (destNode)
-            sProxyClient.SendReroute(pCurrChar->GetGUID().GetRawValue(), destNode->address, destNode->port);
+            sProxyClient.SendReroute(charGuid, destNode->address, destNode->port);
         return;
     }
 

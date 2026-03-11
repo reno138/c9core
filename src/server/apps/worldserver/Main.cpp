@@ -123,6 +123,7 @@ int main(int argc, char** argv)
 {
     Acore::Impl::CurrentServerProcessHolder::_type = SERVER_PROCESS_WORLDSERVER;
     signal(SIGABRT, &Acore::AbortHandler);
+    signal(SIGPIPE, SIG_IGN);  // prevent SIGPIPE from killing the process on broken backend connections
 
     // Command line parsing
     auto configFile = fs::path(sConfigMgr->GetConfigPath() + std::string(_ACORE_CORE_CONFIG));
