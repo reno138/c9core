@@ -115,6 +115,11 @@ private:
     /// When true, ReadHandler() pauses client reads (reroute in progress or DB query).
     bool _rerouting{ false };
 
+    /// True while an async_read_some is pending on the client socket.
+    /// Prevents OnRerouteComplete() from posting a second overlapping read, which would
+    /// corrupt _readBuffer when two concurrent async_read_some share the same write pointer.
+    bool _asyncReadActive{ false };
+
     /// Set after native cross-node reroute (proxy sent SMSG_NEW_WORLD to client).
     /// The next MSG_MOVE_WORLDPORT_ACK from the client is translated to CMSG_PLAYER_LOGIN
     /// and forwarded to the new backend — matching VB.NET On_MSG_MOVE_WORLDPORT_ACK.

@@ -68,6 +68,9 @@ bool ProxySocket::Update()
 
 SocketReadCallbackResult ProxySocket::ReadHandler()
 {
+    // The pending async_read_some has fired — mark the read slot as free.
+    _asyncReadActive = false;
+
     // Pause client reads while a reroute is in progress.
     if (_rerouting)
         return SocketReadCallbackResult::Stop;
@@ -115,6 +118,9 @@ SocketReadCallbackResult ProxySocket::ReadHandler()
         _headerBuffer.Reset();
     }
 
+    // ReadHandlerInternal will call AsyncRead() after we return KeepReading — mark active now
+    // so OnRerouteComplete() knows not to issue a second concurrent read on the same buffer.
+    _asyncReadActive = true;
     return SocketReadCallbackResult::KeepReading;
 }
 
@@ -342,12 +348,14 @@ void ProxySocket::OnBackendConnected()
 {
     // Backend TCP handshake is established — now safe to read from the client.
     // The backend is ready to receive CMSG_AUTH_SESSION, so no packet will be dropped.
+    _asyncReadActive = true;
     AsyncRead();
 }
 
 void ProxySocket::ResumeAfterAuth()
 {
     // Resume reading from the client — next packets will be encrypted.
+    _asyncReadActive = true;
     AsyncRead();
 }
 
@@ -447,8 +455,16 @@ void ProxySocket::OnRerouteComplete(std::shared_ptr<BackendSession> newBackend)
     _pendingBackend = nullptr;
     _rerouting      = false;
 
-    // Resume reading from the client.
-    AsyncRead();
+    // Resume reading from the client — but only if no read is already pending.
+    // If _asyncReadActive is true, a previously-posted async_read_some is still outstanding.
+    // It will fire soon (with _rerouting now false) and process client data normally.
+    // Posting a second concurrent async_read_some against the same _readBuffer write pointer
+    // corrupts framing: both reads share the same write slot and overwrite each other's data.
+    if (!_asyncReadActive)
+    {
+        _asyncReadActive = true;
+        AsyncRead();
+    }
 }
 
 void ProxySocket::QueuePacketForClient(uint8 const* plainHeader, std::size_t headerLen, MessageBuffer& payload)
