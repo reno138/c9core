@@ -450,5 +450,17 @@ bool ClusterMgr::GetUnitState(uint64 guid, ClusterUnitState& out) const
 std::unordered_set<uint32> ClusterMgr::GetLocalMaps() const
 {
     std::lock_guard<std::mutex> lock(_localMapsMutex);
+
+    // Instance-server mode: enumerate all Instanceable map IDs from DBC so that
+    // PublishAnnounce sends a full list and other nodes can route players here.
+    if (_instanceServerMode)
+    {
+        std::unordered_set<uint32> instanceMaps;
+        for (auto const* mapEntry : sMapStore)
+            if (mapEntry && mapEntry->Instanceable())
+                instanceMaps.insert(mapEntry->MapID);
+        return instanceMaps;
+    }
+
     return _localMaps;  // empty means "all maps local" — caller handles this
 }
