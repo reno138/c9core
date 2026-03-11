@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
-// Used by AzerothCore.rc
+// Used by C9Core.rc
 //
 
 // Next default values for new objects

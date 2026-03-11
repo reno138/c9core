@@ -436,7 +436,7 @@ int main(int argc, char** argv)
 
     // 0 - normal shutdown
     // 1 - shutdown at error
-    // 2 - restart command used, this code can be used by restarter for restart AzerothCore
+    // 2 - restart command used, this code can be used by restarter for restart C9Core
 
     return World::GetExitCode();
 }

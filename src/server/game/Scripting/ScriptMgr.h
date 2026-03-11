@@ -95,7 +95,7 @@ namespace Acore::ChatCommands
     struct ChatCommandBuilder;
 }
 
-// Check out our guide on how to create new hooks in our wiki! https://www.azerothcore.org/wiki/hooks-script
+// See the C9Core scripting guide for hook documentation.
 /*
     TODO: Add more script type classes.
 

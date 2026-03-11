@@ -977,14 +977,14 @@ bool CliHandler::HasSession() const
 
 bool AddonChannelCommandHandler::ParseCommands(std::string_view str)
 {
-    if (memcmp(str.data(), "AzerothCore\t", 12))
+    if (memcmp(str.data(), "C9Core\t", 8))
         return false;
-    char opcode = str[12];
-    if (!opcode) // str[12] is opcode
+    char opcode = str[8];
+    if (!opcode) // str[8] is opcode
         return false;
-    if (!str[13] || !str[14] || !str[15] || !str[16]) // str[13] through str[16] is 4-character command counter
+    if (!str[9] || !str[10] || !str[11] || !str[12]) // str[9] through str[12] is 4-character command counter
         return false;
-    echo = str.substr(13);
+    echo = str.substr(9);
 
     switch (opcode)
     {
@@ -993,10 +993,10 @@ bool AddonChannelCommandHandler::ParseCommands(std::string_view str)
             return true;
         case 'h': // h Issue human-readable command
         case 'i': // i Issue command
-            if (!str[17])
+            if (!str[13])
                 return false;
             humanReadable = (opcode == 'h');
-            if (_ParseCommands(str.substr(17))) // actual command starts at str[17]
+            if (_ParseCommands(str.substr(13))) // actual command starts at str[13]
             {
                 if (!hadAck)
                     SendAck();
@@ -1026,10 +1026,10 @@ void AddonChannelCommandHandler::Send(std::string const& msg)
 void AddonChannelCommandHandler::SendAck() // a Command acknowledged, no body
 {
     ASSERT(echo.size());
-    std::string ack = "AzerothCore\ta";
-    ack.resize(18);
-    memcpy(&ack[13], echo.data(), 4);
-    ack[17] = '\0';
+    std::string ack = "C9Core\ta";
+    ack.resize(14);
+    memcpy(&ack[9], echo.data(), 4);
+    ack[13] = '\0';
     Send(ack);
     hadAck = true;
 }
@@ -1037,20 +1037,20 @@ void AddonChannelCommandHandler::SendAck() // a Command acknowledged, no body
 void AddonChannelCommandHandler::SendOK() // o Command OK, no body
 {
     ASSERT(echo.size());
-    std::string ok = "AzerothCore\to";
-    ok.resize(18);
-    memcpy(&ok[13], echo.data(), 4);
-    ok[17] = '\0';
+    std::string ok = "C9Core\to";
+    ok.resize(14);
+    memcpy(&ok[9], echo.data(), 4);
+    ok[13] = '\0';
     Send(ok);
 }
 
 void AddonChannelCommandHandler::SendFailed() // f Command failed, no body
 {
     ASSERT(echo.size());
-    std::string fail = "AzerothCore\tf";
-    fail.resize(18);
-    memcpy(&fail[13], echo.data(), 4);
-    fail[17] = '\0';
+    std::string fail = "C9Core\tf";
+    fail.resize(14);
+    memcpy(&fail[9], echo.data(), 4);
+    fail[13] = '\0';
     Send(fail);
 }
 
@@ -1061,7 +1061,7 @@ void AddonChannelCommandHandler::SendSysMessage(std::string_view str, bool escap
     if (!hadAck)
         SendAck();
 
-    std::string msg = "AzerothCore\tm";
+    std::string msg = "C9Core\tm";
     msg.append(echo.data(), 4);
     std::string body(str);
     if (escapeCharacters)

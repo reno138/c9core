@@ -229,7 +229,7 @@ bool DBUpdater<T>::Update(DatabaseWorkerPool<T>& pool, std::string_view modulesL
 
     if (!is_directory(sourceDirectory))
     {
-        LOG_ERROR("sql.updates", "DBUpdater: The given source directory {} does not exist, change the path to the directory where your sql directory exists (for example c:\\source\\azerothcore). Shutting down.",
+        LOG_ERROR("sql.updates", "DBUpdater: The given source directory {} does not exist, change the path to the directory where your sql directory exists (for example c:\\source\\c9core). Shutting down.",
                   sourceDirectory.generic_string());
         return false;
     }
@@ -523,7 +523,7 @@ void DBUpdater<T>::ApplyFile(DatabaseWorkerPool<T>& pool, std::string const& hos
         LOG_FATAL("sql.updates", "Applying of file \'{}\' to database \'{}\' failed!" \
             " If you are a user, please pull the latest revision from the repository. "
             "Also make sure you have not applied any of the databases with your sql client. "
-            "You cannot use auto-update system and import sql files from AzerothCore repository with your sql client. "
+            "You cannot use auto-update system and import sql files from C9Core repository with your sql client. "
             "If you are a developer, please fix your sql query.",
             path.generic_string(), pool.GetConnectionInfo()->database);
 
