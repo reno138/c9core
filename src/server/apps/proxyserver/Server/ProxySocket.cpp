@@ -261,7 +261,11 @@ void ProxySocket::HandleAuthSessionIntercepted()
     packet[0] = static_cast<uint8>(newSize >> 8);
     packet[1] = static_cast<uint8>(newSize & 0xFF);
 
-    _backend->SendRaw(packet);
+    // Do NOT send to backend yet — defer until session key is loaded from the DB.
+    // If we sent immediately, the worldserver would initialize ARC4 before we have the
+    // session key, and the encrypted SMSG_AUTH_RESPONSE would arrive before we can
+    // initialize _backendCrypt.  Save the packet; HandleAuthSessionCallback will send it.
+    _pendingAuthSession = std::move(packet);
 
     // Extract account name from payload:
     //   uint32 Build          (offset 0)
@@ -317,9 +321,19 @@ void ProxySocket::HandleAuthSessionCallback(PreparedQueryResult result)
     // Initialize client-side crypto (normal server perspective).
     _clientCrypt.Init(sessionKey);
 
-    // Backend crypto is intentionally NOT initialized here.  The proxy↔worldserver
-    // channel runs in plaintext (worldserver skips _authCrypt.Init when
-    // ProxyServer.Enable=1), so BackendSession must never encrypt/decrypt.
+    // Initialize backend ARC4 BEFORE sending CMSG_AUTH_SESSION.  The worldserver
+    // initializes its _authCrypt immediately after processing CMSG_AUTH_SESSION, so
+    // SMSG_AUTH_RESPONSE and all subsequent S→C packets will be ARC4-encrypted.
+    // BackendSession must have _backendCrypt ready before any backend bytes arrive.
+    if (_backend)
+        _backend->InitCrypt(sessionKey);
+
+    // Now forward CMSG_AUTH_SESSION to the backend (was deferred in HandleAuthSessionIntercepted).
+    if (_backend && !_pendingAuthSession.empty())
+    {
+        _backend->SendRaw(_pendingAuthSession);
+        _pendingAuthSession.clear();
+    }
 
     ResumeAfterAuth();
 }
@@ -355,17 +369,17 @@ void ProxySocket::RerouteToBackend(std::string const& address, uint16 port,
     LOG_INFO("proxy", "ProxySocket: Rerouting GUID {:016X} to {}:{} map={}", _playerGuid, address, port, mapId);
     _rerouting = true;
 
-    bool isLoginReroute = !_clientInWorld || mapId == 0;
+    bool isLoginReroute = !_clientInWorld; // mapId==0 is Eastern Kingdoms, not "no map"
 
     // Native in-world reroute: send SMSG_NEW_WORLD to client now so the loading screen
     // appears immediately.  Mirrors VB.NET ClientTransfer() → SendNewWorld() flow.
-    if (!isLoginReroute && mapId != 0)
+    if (!isLoginReroute)
     {
         // Build SMSG_NEW_WORLD (0x03E): mapId(4) + x(4) + y(4) + z(4) + ori(4) = 20 bytes payload
         // Header: size(2 BE) + opcode(2 LE) = 4 bytes total header for small packets.
         constexpr uint16 SMSG_NEW_WORLD_OPCODE = 0x03E;
         constexpr uint16 PAYLOAD_SIZE = 20;
-        constexpr uint16 SIZE_FIELD   = 4 + PAYLOAD_SIZE; // includes opcode (2) + payload (20)
+        constexpr uint16 SIZE_FIELD   = 2 + PAYLOAD_SIZE; // S→C size field = 2-byte opcode + payload
 
         uint8 plainHeader[4];
         plainHeader[0] = static_cast<uint8>(SIZE_FIELD >> 8);   // big-endian size high

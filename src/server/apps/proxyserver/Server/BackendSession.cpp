@@ -489,10 +489,10 @@ void BackendSession::HandleAuthChallenge()
 
     SendRaw(msg);
 
-    // The proxy↔worldserver channel runs in plaintext (worldserver skips _authCrypt.Init
-    // when ProxyServer.Enable = 1).  Do NOT call InitCrypt() here — all subsequent
-    // backend packets are unencrypted and BackendSession reads/writes them as-is.
-    // The proxy handles ARC4 with the real client independently via _clientCrypt.
+    // The worldserver initializes its _authCrypt immediately after processing CMSG_AUTH_SESSION.
+    // Initialize _backendCrypt now so we can decrypt the encrypted SMSG_AUTH_RESPONSE and
+    // all subsequent S→C packets from the backend.
+    InitCrypt(_sessionKey);
 
     _handshakeState = HandshakeState::WaitResponse;
 }

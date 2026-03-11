@@ -133,6 +133,7 @@ private:
 
     /// Account name extracted from CMSG_AUTH_SESSION (needed for DB query).
     std::string _accountName;
+    std::vector<uint8> _pendingAuthSession; ///< Saved CMSG_AUTH_SESSION bytes — sent after session key is known.
 
 public:
     /// Expose player GUID for opcode logging in BackendSession.
