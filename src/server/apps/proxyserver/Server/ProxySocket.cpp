@@ -202,6 +202,16 @@ bool ProxySocket::ReadDataHandler()
         return true;
     }
 
+    // Guard: while we are waiting for MSG_MOVE_WORLDPORT_ACK, drop all other client
+    // packets.  The new backend has not received CMSG_PLAYER_LOGIN yet, so forwarding
+    // opcodes like CMSG_CANCEL_TRADE would hit "player has not logged in yet" errors.
+    if (_translateWorldportAck)
+    {
+        LOG_DEBUG("proxy", "ProxySocket: Dropping opcode 0x{:04X} while awaiting WORLDPORT_ACK for GUID {:016X}",
+                  opcode, _playerGuid);
+        return true;
+    }
+
     if (opcode == CMSG_AUTH_SESSION_OPCODE)
     {
         // Intercept: extract account name, query session key, pause reading.
