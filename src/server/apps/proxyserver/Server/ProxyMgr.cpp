@@ -431,6 +431,12 @@ void ProxyMgr::HandleNodeRefresh(uint8 nodeId, uint8 const* payload, std::size_t
               nodeId, gamePort, maps.size());
 }
 
+int ProxyMgr::GetRegisteredNodeCount()
+{
+    std::lock_guard<std::mutex> lk(_nodeMutex);
+    return static_cast<int>(_nodeAddresses.empty() ? _registeredNodeIds.size() : _nodeAddresses.size());
+}
+
 void ProxyMgr::UnregisterNode(uint8 nodeId)
 {
     {
@@ -1398,4 +1404,26 @@ void ProxyMgr::OnBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, 
         LOG_INFO("proxy", "ProxyMgr: BG_READY matchId={} instanceId={} → node {} ({} players)",
                  matchId, instanceId, targetNodeId, count);
     }
+}
+
+// ── Pending worldport tracking ────────────────────────────────────────────────
+
+void ProxyMgr::RegisterPendingWorldport(uint32 accountId, PendingWorldport const& info)
+{
+    std::lock_guard<std::mutex> lock(_pendingWorldportMutex);
+    _pendingWorldports[accountId] = info;
+    LOG_INFO("proxy", "ProxyMgr: Registered pending worldport for account {} GUID {:016X} → {}:{} map={}",
+             accountId, info.guid, info.destAddr, info.destPort, info.mapId);
+}
+
+bool ProxyMgr::GetAndClearPendingWorldport(uint32 accountId, PendingWorldport& out)
+{
+    std::lock_guard<std::mutex> lock(_pendingWorldportMutex);
+    auto it = _pendingWorldports.find(accountId);
+    if (it == _pendingWorldports.end())
+        return false;
+    out = std::move(it->second);
+    _pendingWorldports.erase(it);
+    LOG_INFO("proxy", "ProxyMgr: Recovered pending worldport for account {} GUID {:016X}", accountId, out.guid);
+    return true;
 }

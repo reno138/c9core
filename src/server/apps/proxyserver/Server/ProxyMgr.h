@@ -55,6 +55,17 @@ struct PendingBgMatch
     std::vector<BgQueueEntry> horde;
 };
 
+/// Destination information saved when a proxy sends SMSG_NEW_WORLD to a client.
+/// Keyed by account ID — recovered by the new ProxySocket after the client reconnects.
+struct PendingWorldport
+{
+    uint64      guid{ 0 };
+    std::string destAddr;
+    uint16      destPort{ 0 };
+    uint32      mapId{ 0 };
+    float       x{ 0.f }, y{ 0.f }, z{ 0.f }, ori{ 0.f };
+};
+
 class ManagementSocket;
 class NodeMgrSocket;
 class ProxySocket;
@@ -129,6 +140,11 @@ public:
     void ReroutePlayer(uint64 guid, std::string const& address, uint16 port,
                        uint32 mapId = 0, float x = 0.f, float y = 0.f, float z = 0.f, float ori = 0.f);
 
+    /// Save destination so the reconnecting ProxySocket can recover it in HandleAuthSessionCallback.
+    void RegisterPendingWorldport(uint32 accountId, PendingWorldport const& info);
+    /// Retrieve and erase the pending worldport entry (returns false if not found).
+    bool GetAndClearPendingWorldport(uint32 accountId, PendingWorldport& out);
+
     // ── Worldserver node registry ──────────────────────────────────────────────
 
     /// Load per-node address/port from config at startup.
@@ -145,6 +161,9 @@ public:
 
     /// Unregister a worldserver when its control socket closes.
     void UnregisterNode(uint8 nodeId);
+
+    /// Return the number of currently registered (connected) worldserver nodes.
+    int GetRegisteredNodeCount();
 
     /// Register the map IDs a node handles; populates dynamic routing table.
     void RegisterNodeMaps(uint8 nodeId, std::vector<uint32> const& maps);
@@ -325,6 +344,10 @@ private:
     /// matchId → pending match awaiting BG creation confirmation from instance node
     std::unordered_map<uint32, PendingBgMatch> _pendingBgMatches;
     uint32 _nextBgMatchId{ 1 };  ///< Monotonically increasing match identifier
+
+    // ── Pending worldport reconnect tracking ─────────────────────────────────
+    std::mutex _pendingWorldportMutex;
+    std::unordered_map<uint32, PendingWorldport> _pendingWorldports;
 
     // ── Routing strategy ──────────────────────────────────────────────────────
     bool  _useRoundRobin{ true };

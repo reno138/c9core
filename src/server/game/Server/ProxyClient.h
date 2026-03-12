@@ -155,6 +155,9 @@ public:
     void SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames, uint16 weekWins,
                          uint16 seasonGames, uint16 seasonWins, uint32 rank);
 
+    /// Send CLI command output back to the proxy RA server.
+    void SendRAReply(uint32 reqId, std::string const& output);
+
     /// Query the proxy for the best available instance server address.
     /// Uses NATS request-reply to cluster.instance.query.
     /// @param outAddr  Filled with the instance server IP on success.
@@ -282,6 +285,8 @@ private:
     /// Sets _clusterRegistered = true, stopping the 10-second re-announce retry.
     void HandleAnnounceAck(std::vector<uint8> const& payload);
 
+    void HandleRACommand(uint32 reqId, std::string const& cmd);
+
     /// NATS callback for cluster.transport.query request-reply.
     /// Runs on the NATS dispatch thread; replies with current PathProgress data.
     static void OnTransportQueryMsg(natsConnection* nc, natsSubscription* sub,
@@ -337,6 +342,8 @@ private:
     /// announcing node, stopping the 10-second re-announce retry.
     /// Payload: [senderNodeId:1]
     static constexpr uint8 MSG_ANNOUNCE_ACK            = 0x20;
+    static constexpr uint8 MSG_RA_COMMAND          = 0x21; ///< proxy -> all nodes: broadcast CLI command
+    static constexpr uint8 MSG_RA_REPLY            = 0x22; ///< node -> proxy: CLI command output
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};

@@ -511,6 +511,17 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
         case MSG_ANNOUNCE_ACK:
             HandleAnnounceAck(payload);
             break;
+        case MSG_RA_COMMAND:
+        {
+            // reqId(4) + cmdLen(2) + cmd[cmdLen]
+            if (payload.size() < 6) break;
+            uint32 reqId;  std::memcpy(&reqId,  payload.data(),     4);
+            uint16 cmdLen; std::memcpy(&cmdLen, payload.data() + 4, 2);
+            if (payload.size() < 6u + cmdLen) break;
+            std::string cmd(reinterpret_cast<const char*>(payload.data() + 6), cmdLen);
+            HandleRACommand(reqId, cmd);
+            break;
+        }
         default:
             LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming msgType 0x{:02X}", msgType);
             break;
@@ -846,6 +857,53 @@ void ProxyClient::HandleTransportSync(std::vector<uint8> const& payload)
                       guidLow, localProgress, remoteProgress, diff);
         }
     }
+}
+
+// ── RA command execution helpers ──────────────────────────────────────────────
+
+struct RACommandState
+{
+    uint32      reqId;
+    std::string output;
+};
+
+static void RACommandPrint(void* arg, std::string_view text)
+{
+    static_cast<RACommandState*>(arg)->output.append(text);
+}
+
+static void RACommandFinished(void* arg, bool /*success*/)
+{
+    auto* state = static_cast<RACommandState*>(arg);
+    sProxyClient.SendRAReply(state->reqId, state->output);
+    delete state;
+}
+
+void ProxyClient::HandleRACommand(uint32 reqId, std::string const& cmd)
+{
+    auto* state = new RACommandState();
+    state->reqId = reqId;
+    auto* holder = new CliCommandHolder(state, cmd.c_str(), RACommandPrint, RACommandFinished);
+    sWorld->QueueCliCommand(holder);
+}
+
+void ProxyClient::SendRAReply(uint32 reqId, std::string const& output)
+{
+    if (!_connected || !_nc)
+        return;
+    uint16 outLen = static_cast<uint16>(std::min(output.size(), size_t(65535)));
+    std::vector<uint8> data;
+    data.reserve(1 + 1 + 4 + 2 + outLen);
+    data.push_back(_nodeId);
+    data.push_back(MSG_RA_REPLY);
+    data.push_back(static_cast<uint8>(reqId & 0xFF));
+    data.push_back(static_cast<uint8>((reqId >> 8)  & 0xFF));
+    data.push_back(static_cast<uint8>((reqId >> 16) & 0xFF));
+    data.push_back(static_cast<uint8>((reqId >> 24) & 0xFF));
+    data.push_back(static_cast<uint8>(outLen & 0xFF));
+    data.push_back(static_cast<uint8>(outLen >> 8));
+    data.insert(data.end(), output.begin(), output.begin() + outLen);
+    PublishRaw("cluster.proxy", data.data(), static_cast<int>(data.size()));
 }
 
 // ── Node health / failover ────────────────────────────────────────────────────

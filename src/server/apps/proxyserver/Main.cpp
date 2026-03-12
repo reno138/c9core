@@ -40,6 +40,7 @@
 #include "SharedDefines.h"
 #include "ManagementSocketMgr.h"
 #include "NatsBus.h"
+#include "RAServer.h"
 #include "NodeMgrSocketMgr.h"
 #include "ProxyMgr.h"
 #include "ProxySocketMgr.h"
@@ -211,6 +212,12 @@ int main(int argc, char** argv)
     }
     std::shared_ptr<void> mgmtNetHandle(nullptr, [](void*) { sManagementSocketMgr.StopNetwork(); });
 
+    // ── Proxy Remote Access console ──────────────────────────────────────────────────────
+    int32 raPort = sConfigMgr->GetOption<int32>("Proxy.Ra.Port", 3444);
+    if (raPort > 0 && raPort <= 0xFFFF)
+        sRAServer.Start(bindIp, static_cast<uint16>(raPort));
+    std::shared_ptr<void> raHandle(nullptr, [](void*) { sRAServer.Stop(); });
+
     // ── Ping timer (fires every 5 seconds — measures control-channel latency) ────
     std::shared_ptr<boost::asio::steady_timer> pingTimer =
         std::make_shared<boost::asio::steady_timer>(*ioContext);
@@ -246,8 +253,8 @@ int main(int argc, char** argv)
     autoScaleTimer->async_wait(autoScaleHandler);
 
     LOG_INFO("server.proxyserver",
-             "Proxy server listening on {}:{} (client) / {} (NATS control) / {}:{} (nodemgr) / {}:{} (mgmt)",
-             bindIp, port, natsUrl, bindIp, nodeMgrPort, bindIp, mgmtPort);
+             "Proxy server listening on {}:{} (client) / {} (NATS control) / {}:{} (nodemgr) / {}:{} (mgmt) / {}:{} (RA)",
+             bindIp, port, natsUrl, bindIp, nodeMgrPort, bindIp, mgmtPort, bindIp, raPort);
 
     ioContext->run();
 

@@ -17,6 +17,7 @@
 
 #include "NatsBus.h"
 #include "ClusterMessages.h"
+#include "RAServer.h"
 #include "Log.h"
 #include "ProxyMgr.h"
 
@@ -92,6 +93,23 @@ void NatsBus::PublishBroadcast(uint8 const* data, int len)
     natsStatus s = natsConnection_Publish(_nc, "cluster.broadcast", data, len);
     if (s != NATS_OK)
         LOG_WARN("proxy.nats", "NatsBus: PublishBroadcast failed — {}", natsStatus_GetText(s));
+}
+
+void NatsBus::BroadcastRACommand(uint32 reqId, std::string const& cmd)
+{
+    if (!_nc) return;
+    uint16 cmdLen = static_cast<uint16>(std::min(cmd.size(), size_t(65535)));
+    std::vector<uint8> buf;
+    buf.reserve(1 + 4 + 2 + cmdLen);
+    buf.push_back(ClusterMsg::RA_COMMAND);
+    buf.push_back(static_cast<uint8>(reqId & 0xFF));
+    buf.push_back(static_cast<uint8>((reqId >> 8)  & 0xFF));
+    buf.push_back(static_cast<uint8>((reqId >> 16) & 0xFF));
+    buf.push_back(static_cast<uint8>((reqId >> 24) & 0xFF));
+    buf.push_back(static_cast<uint8>(cmdLen & 0xFF));
+    buf.push_back(static_cast<uint8>(cmdLen >> 8));
+    buf.insert(buf.end(), cmd.begin(), cmd.begin() + cmdLen);
+    PublishBroadcast(buf.data(), static_cast<int>(buf.size()));
 }
 
 // ── Instance address query request-reply ─────────────────────────────────────
@@ -486,6 +504,19 @@ void NatsBus::OnClusterProxyMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         {
             if (rem < 5) break;
             sProxyMgr.HandleNodeRefresh(nodeId, p, rem);
+            break;
+        }
+        // ── MSG_RA_REPLY (0x22) ──────────────────────────────────────────────────────────────────────────────
+        case ClusterMsg::RA_REPLY:
+        {
+            // reqId(4) + outputLen(2) + output[outputLen]
+            if (rem < 6) break;
+            uint32 reqId;    std::memcpy(&reqId,  p,     4);
+            uint16 outLen;   std::memcpy(&outLen, p + 4, 2);
+            if (rem < 6 + outLen) break;
+            std::string output(reinterpret_cast<const char*>(p + 6), outLen);
+            int totalNodes = sProxyMgr.GetRegisteredNodeCount();
+            sRAServer.AppendReply(nodeId, reqId, output, totalNodes);
             break;
         }
         default:

@@ -61,6 +61,9 @@ public:
     /// Publish raw bytes to ALL worldnodes (subject: cluster.broadcast).
     void PublishBroadcast(uint8 const* data, int len);
 
+    /// Broadcast an RA command to all worldnodes (MSG_RA_COMMAND).
+    void BroadcastRACommand(uint32 reqId, std::string const& cmd);
+
     bool IsConnected() const { return _nc != nullptr; }
 
 private:

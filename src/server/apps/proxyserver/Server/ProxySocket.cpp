@@ -176,12 +176,29 @@ bool ProxySocket::ReadDataHandler()
     if (_translateWorldportAck && opcode == MSG_MOVE_WORLDPORT_ACK_OPCODE)
     {
         _translateWorldportAck = false;
-        LOG_DEBUG("proxy", "ProxySocket: MSG_MOVE_WORLDPORT_ACK for GUID {:016X} -- sending CMSG_PLAYER_LOGIN",
-                  _playerGuid);
-        if (_backend && _backend->IsOpen())
-            _backend->SendPlayerLogin();
+        if (_hasWpDest)
+        {
+            // Cross-node reconnect: reroute to the correct destination node.
+            // _clientInWorld is false here, so RerouteToBackend uses isLoginReroute=true
+            // (no SMSG_NEW_WORLD sent, BackendSession sends PLAYER_LOGIN after char enum).
+            LOG_INFO("proxy", "ProxySocket: Worldport ACK for GUID {:016X} — rerouting to {}:{} map={}",
+                     _playerGuid, _wpDestAddr, _wpDestPort, _wpMapId);
+            std::string dest = std::move(_wpDestAddr);
+            uint16 port = _wpDestPort;
+            uint32 mapId = _wpMapId;
+            float x = _wpX, y = _wpY, z = _wpZ, ori = _wpOri;
+            _hasWpDest = false;
+            RerouteToBackend(dest, port, mapId, x, y, z, ori);
+        }
         else
-            LOG_ERROR("proxy", "ProxySocket: No backend for PLAYER_LOGIN after worldport ack, GUID {:016X}", _playerGuid);
+        {
+            LOG_DEBUG("proxy", "ProxySocket: MSG_MOVE_WORLDPORT_ACK for GUID {:016X} -- sending CMSG_PLAYER_LOGIN",
+                      _playerGuid);
+            if (_backend && _backend->IsOpen())
+                _backend->SendPlayerLogin();
+            else
+                LOG_ERROR("proxy", "ProxySocket: No backend for PLAYER_LOGIN after worldport ack, GUID {:016X}", _playerGuid);
+        }
         return true;
     }
 
@@ -324,6 +341,25 @@ void ProxySocket::HandleAuthSessionCallback(PreparedQueryResult result)
     _sessionKey = sessionKey;
     _realmId    = sConfigMgr->GetOption<int32>("RealmID", 1);
 
+    // Extract account ID from the query result (field 0).
+    _accountId = fields[0].Get<uint32>();
+
+    // Check for a pending worldport from a cross-node reroute on a previous socket.
+    PendingWorldport wp;
+    if (sProxyMgr.GetAndClearPendingWorldport(_accountId, wp))
+    {
+        _playerGuid = wp.guid;
+        _translateWorldportAck = true;
+        _hasWpDest = true;
+        _wpDestAddr = wp.destAddr;
+        _wpDestPort = wp.destPort;
+        _wpMapId    = wp.mapId;
+        _wpX = wp.x;  _wpY = wp.y;  _wpZ = wp.z;  _wpOri = wp.ori;
+        sProxyMgr.RegisterSession(_playerGuid, shared_from_this());
+        LOG_INFO("proxy", "ProxySocket: Recovered worldport for GUID {:016X} account {} → {}:{} map={}",
+                 _playerGuid, _accountId, _wpDestAddr, _wpDestPort, _wpMapId);
+    }
+
     // Initialize client-side crypto (normal server perspective).
     _clientCrypt.Init(sessionKey);
 
@@ -432,6 +468,10 @@ void ProxySocket::RerouteToBackend(std::string const& address, uint16 port,
             _backend = nullptr;
         }
     }
+
+    // Save destination so the reconnecting ProxySocket can recover.
+    if (!isLoginReroute)
+        sProxyMgr.RegisterPendingWorldport(_accountId, {_playerGuid, address, port, mapId, x, y, z, ori});
 
     _pendingBackend = std::make_shared<BackendSession>(
         sProxySocketMgr.GetIoContext(),

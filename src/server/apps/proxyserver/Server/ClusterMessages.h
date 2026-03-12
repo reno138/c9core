@@ -178,6 +178,8 @@ namespace ClusterMsg
     static constexpr uint8 CLUSTER_BG_READY        = 0x18; ///< proxy → player nodes
     static constexpr uint8 NODE_STATUS             = 0x19; ///< node → proxy: player count + NATS bandwidth (every 10s)
     static constexpr uint8 NODE_REFRESH            = 0x1A; ///< node → proxy: full port/map re-registration (every 5min)
+    static constexpr uint8 RA_COMMAND  = 0x21; ///< proxy → all nodes: broadcast a CLI command for execution
+    static constexpr uint8 RA_REPLY    = 0x22; ///< node → proxy: CLI command output
 }
 
 #endif // ClusterMessages_h__

@@ -140,6 +140,16 @@ private:
     std::string _accountName;
     std::vector<uint8> _pendingAuthSession; ///< Saved CMSG_AUTH_SESSION bytes — sent after session key is known.
 
+    /// Account ID from DB query, used for pending worldport keying
+    uint32 _accountId{ 0 };
+
+    /// Pending worldport destination (set when recovering from cross-node reconnect)
+    std::string _wpDestAddr;
+    uint16      _wpDestPort{ 0 };
+    uint32      _wpMapId{ 0 };
+    float       _wpX{ 0.f }, _wpY{ 0.f }, _wpZ{ 0.f }, _wpOri{ 0.f };
+    bool        _hasWpDest{ false };
+
 public:
     /// Expose player GUID for opcode logging in BackendSession.
     uint64 GetPlayerGuid() const { return _playerGuid; }
