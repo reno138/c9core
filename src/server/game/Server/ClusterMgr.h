@@ -149,6 +149,7 @@ public:
 
     /// Returns true if mapId is handled locally by this node.
     bool IsMapLocal(uint32 mapId) const;
+    bool IsInstanceServerMode() const { return _instanceServerMode; }
     std::unordered_set<uint32> GetLocalMaps() const;
 
     // ── Cross-node group invite state ─────────────────────────────────────────

@@ -25,6 +25,7 @@
 #include "CharacterDatabaseCleaner.h"
 #include "Chat.h"
 #include "Common.h"
+#include "ClusterMgr.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
@@ -5317,11 +5318,23 @@ bool Player::LoadFromDB(ObjectGuid playerGuid, CharacterDatabaseQueryHolder cons
     // if the player is in an instance and it has been reset in the meantime teleport him to the entrance
     if ((instanceId && !sInstanceSaveMgr->GetInstanceSave(instanceId) && !mapEntry->IsBattlegroundOrArena()) || (!instanceId && mapEntry->IsDungeon()))
     {
-        AreaTriggerTeleport const* at = sObjectMgr->GetMapEntranceTrigger(mapId);
-        if (at)
-            Relocate(at->target_X, at->target_Y, at->target_Z, at->target_Orientation);
+        // Cluster: on the instance server with instanceId=0 and a dungeon map, this
+        // is a fresh cross-node instance entry.  The player's DB position is the
+        // destination inside the instance (saved by TeleportTo on the source node).
+        // Don't relocate to the entrance -- it's on a continent map we don't own.
+        // Let CreateMap below allocate a new instance at the saved position.
+        if (sClusterMgr.IsInstanceServerMode() && !instanceId && mapEntry->IsDungeon())
+        {
+            LOG_INFO("entities.player.loading", "Player (guidlow {}) fresh cluster instance entry -- keeping DB position on map {}", guid, mapId);
+        }
         else
-            RelocateToHomebind();
+        {
+            AreaTriggerTeleport const* at = sObjectMgr->GetMapEntranceTrigger(mapId);
+            if (at)
+                Relocate(at->target_X, at->target_Y, at->target_Z, at->target_Orientation);
+            else
+                RelocateToHomebind();
+        }
     }
 
     // NOW player must have valid map

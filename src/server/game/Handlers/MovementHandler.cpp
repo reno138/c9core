@@ -89,26 +89,19 @@ void WorldSession::HandleMoveWorldportAck()
     }
 
     // relocate the player to the teleport destination
-    // ── Cross-node reroute: if this node doesn't own the destination map,
-    //    ask the proxy to redirect the client to the correct node instead of
-    //    trying (and failing) to create the map locally.  Without this guard
-    //    the instance server falls into an infinite reroute loop when a player
-    //    exits an instance to a continent map it doesn't own.
-    if (!sClusterMgr.IsMapLocal(loc.GetMapId()))
-    {
-        LOG_INFO("network.opcode",
-                 "HandleMoveWorldportAck: map {} is not local — rerouting player {} to owning node",
-                 loc.GetMapId(), GetPlayer()->GetGUID().ToString());
-        sProxyClient.SendRerouteToMap(GetPlayer()->GetGUID().GetRawValue(), loc.GetMapId());
-        return;
-    }
-
     Map* newMap = sMapMgr->CreateMap(loc.GetMapId(), GetPlayer());
     // the CanEnter checks are done in TeleporTo but conditions may change
     // while the player is in transit, for example the map may get full
     if (!newMap || newMap->CannotEnter(GetPlayer(), false))
     {
         LOG_ERROR("network.opcode", "Map {} could not be created for player {}, porting player to homebind", loc.GetMapId(), GetPlayer()->GetGUID().ToString());
+        // Cluster: if homebind map is not local, reroute to the owning node
+        // instead of calling TeleportTo which would loop back here.
+        if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(GetPlayer()->m_homebindMapId))
+        {
+            sProxyClient.SendRerouteToMap(GetPlayer()->GetGUID().GetRawValue(), GetPlayer()->m_homebindMapId);
+            return;
+        }
         GetPlayer()->TeleportTo(GetPlayer()->m_homebindMapId, GetPlayer()->m_homebindX, GetPlayer()->m_homebindY, GetPlayer()->m_homebindZ, GetPlayer()->GetOrientation());
         return;
     }
@@ -135,6 +128,12 @@ void WorldSession::HandleMoveWorldportAck()
             GetPlayer()->GetName(), GetPlayer()->GetGUID().ToString(), loc.GetMapId());
         GetPlayer()->ResetMap();
         GetPlayer()->SetMap(oldMap);
+        // Cluster: if homebind map is not local, reroute instead of local teleport
+        if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(GetPlayer()->m_homebindMapId))
+        {
+            sProxyClient.SendRerouteToMap(GetPlayer()->GetGUID().GetRawValue(), GetPlayer()->m_homebindMapId);
+            return;
+        }
         GetPlayer()->TeleportTo(GetPlayer()->m_homebindMapId, GetPlayer()->m_homebindX, GetPlayer()->m_homebindY, GetPlayer()->m_homebindZ, GetPlayer()->GetOrientation());
         return;
     }
