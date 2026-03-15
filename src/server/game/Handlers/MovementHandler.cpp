@@ -95,9 +95,11 @@ void WorldSession::HandleMoveWorldportAck()
     if (!newMap || newMap->CannotEnter(GetPlayer(), false))
     {
         LOG_ERROR("network.opcode", "Map {} could not be created for player {}, porting player to homebind", loc.GetMapId(), GetPlayer()->GetGUID().ToString());
-        // Cluster: if homebind map is not local, reroute to the owning node
-        // instead of calling TeleportTo which would loop back here.
-        if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(GetPlayer()->m_homebindMapId))
+        // Cluster: if homebind map is not local AND no cross-node reroute is already
+        // in progress (SemaphoreTeleportFar), reroute to the owning node.
+        if (sProxyClient.IsConnected()
+            && !GetPlayer()->GetSemaphoreTeleportFar()
+            && !sClusterMgr.IsMapLocal(GetPlayer()->m_homebindMapId))
         {
             sProxyClient.SendRerouteToMap(GetPlayer()->GetGUID().GetRawValue(), GetPlayer()->m_homebindMapId);
             return;
@@ -128,8 +130,11 @@ void WorldSession::HandleMoveWorldportAck()
             GetPlayer()->GetName(), GetPlayer()->GetGUID().ToString(), loc.GetMapId());
         GetPlayer()->ResetMap();
         GetPlayer()->SetMap(oldMap);
-        // Cluster: if homebind map is not local, reroute instead of local teleport
-        if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(GetPlayer()->m_homebindMapId))
+        // Cluster: if homebind map is not local AND no cross-node reroute is already
+        // in progress, reroute to the owning node.
+        if (sProxyClient.IsConnected()
+            && !GetPlayer()->GetSemaphoreTeleportFar()
+            && !sClusterMgr.IsMapLocal(GetPlayer()->m_homebindMapId))
         {
             sProxyClient.SendRerouteToMap(GetPlayer()->GetGUID().GetRawValue(), GetPlayer()->m_homebindMapId);
             return;
