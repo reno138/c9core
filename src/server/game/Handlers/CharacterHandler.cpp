@@ -829,6 +829,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     {
         uint32 const mapId = pCurrChar->GetMapId();
         uint64 const charGuid = pCurrChar->GetGUID().GetRawValue(); // save before delete
+        float const px = pCurrChar->GetPositionX();
+        float const py = pCurrChar->GetPositionY();
+        float const pz = pCurrChar->GetPositionZ();
+        float const po = pCurrChar->GetOrientation();
         // LoadFromDB applied auras; remove them before deleting to satisfy Unit::~Unit assertion.
         pCurrChar->RemoveAllAuras();
         SetPlayer(nullptr);         // LoadFromDB set _player; clear it before delete
@@ -836,7 +840,8 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         m_playerLoading = false;
         auto destNode = sClusterMgr.GetNodeForMap(mapId);
         if (destNode)
-            sProxyClient.SendReroute(charGuid, destNode->address, destNode->port);
+            sProxyClient.SendReroute(charGuid, destNode->address, destNode->port,
+                                     mapId, px, py, pz, po);
         return;
     }
 

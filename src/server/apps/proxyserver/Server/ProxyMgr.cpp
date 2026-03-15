@@ -126,7 +126,7 @@ void ProxyMgr::RerouteToMap(uint64 guid, uint32 mapId)
         auto [nid, addr, port] = ChooseNode();
         LOG_INFO("proxy", "ProxyMgr: RerouteToMap GUID {:016X} map {} — no route, using node {} ({}:{})",
                  guid, mapId, nid, addr, port);
-        ReroutePlayer(guid, addr, port);
+        ReroutePlayer(guid, addr, port, mapId);
         return;
     }
 
@@ -146,7 +146,7 @@ void ProxyMgr::RerouteToMap(uint64 guid, uint32 mapId)
     }
     LOG_INFO("proxy", "ProxyMgr: RerouteToMap GUID {:016X} map {} → node {} ({}:{})",
              guid, mapId, nodeId, addr, port);
-    ReroutePlayer(guid, addr, port);
+    ReroutePlayer(guid, addr, port, mapId);
 }
 
 std::tuple<uint8, std::string, uint16> ProxyMgr::ChooseRoundRobinNode()
