@@ -1584,16 +1584,22 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // SemaphoreTeleportFar must be set BEFORE SaveToDB so the destination
-                // node's HandlePlayerLoginFromDB finds it in the DB and can clear it.
+                // Synchronous position update: write the teleport destination to DB
+                // before sending the reroute.  SaveToDB() can't be used here because
+                // SetSemaphoreTeleportFar makes it bail out (DELAYED_SAVE_PLAYER), and
+                // even without the semaphore it would save the *current* position, not
+                // teleportStore_dest.  A targeted UPDATE is both correct and fast.
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
-                // Synchronous DB save: the destination node loads position from DB
-                // when the reroute arrives. Async save causes a race where the reroute
-                // reaches the destination before the SQL commits, loading stale data.
                 {
-                    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-                    SaveToDB(trans, false, false);
-                    CharacterDatabase.DirectCommitTransaction(trans);
+                    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
+                    stmt->SetData(0, teleportStore_dest.GetPositionX());
+                    stmt->SetData(1, teleportStore_dest.GetPositionY());
+                    stmt->SetData(2, teleportStore_dest.GetPositionZ());
+                    stmt->SetData(3, teleportStore_dest.GetOrientation());
+                    stmt->SetData(4, (uint16)teleportStore_dest.GetMapId());
+                    stmt->SetData(5, (uint32)0);  // zone — will be resolved on load
+                    stmt->SetData(6, GetGUID().GetCounter());
+                    CharacterDatabase.DirectExecute(stmt);
                 }
 
                 // Detach from transport AFTER saving so this node cleans up cleanly.
