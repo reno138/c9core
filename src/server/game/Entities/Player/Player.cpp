@@ -1587,7 +1587,14 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 // SemaphoreTeleportFar must be set BEFORE SaveToDB so the destination
                 // node's HandlePlayerLoginFromDB finds it in the DB and can clear it.
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
-                SaveToDB(false, false);
+                // Synchronous DB save: the destination node loads position from DB
+                // when the reroute arrives. Async save causes a race where the reroute
+                // reaches the destination before the SQL commits, loading stale data.
+                {
+                    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+                    SaveToDB(trans, false, false);
+                    CharacterDatabase.DirectCommitTransaction(trans);
+                }
 
                 // Detach from transport AFTER saving so this node cleans up cleanly.
                 if (m_transport)
