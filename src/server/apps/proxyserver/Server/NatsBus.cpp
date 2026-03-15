@@ -65,6 +65,16 @@ void NatsBus::Initialize(std::string const& natsUrl)
         return;
     }
 
+    // Subscribe to worldserver peer-discovery announcements (cluster.announce).
+    // Worldservers publish their identity here; the proxy registers them and sends
+    // MSG_ANNOUNCE_ACK so they stop their 10-second retry loop.
+    s = natsConnection_Subscribe(&_subAnnounce, _nc, "cluster.announce", OnAnnounceMsg, nullptr);
+    if (s != NATS_OK)
+    {
+        LOG_ERROR("proxy.nats", "NatsBus: Failed to subscribe to cluster.announce — {}", natsStatus_GetText(s));
+        // Non-fatal — cluster.register still works as a fallback.
+    }
+
     LOG_INFO("proxy.nats", "NatsBus: Connected to NATS at {}", natsUrl);
 }
 
@@ -72,6 +82,7 @@ void NatsBus::Shutdown()
 {
     if (_subInstQuery) { natsSubscription_Destroy(_subInstQuery); _subInstQuery = nullptr; }
     if (_subProxy)     { natsSubscription_Destroy(_subProxy);     _subProxy     = nullptr; }
+    if (_subAnnounce)  { natsSubscription_Destroy(_subAnnounce);  _subAnnounce  = nullptr; }
     if (_subRegister)  { natsSubscription_Destroy(_subRegister);  _subRegister  = nullptr; }
     if (_nc)           { natsConnection_Destroy(_nc);              _nc           = nullptr; }
 }
@@ -525,4 +536,83 @@ void NatsBus::OnClusterProxyMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
     }
 
     natsMsg_Destroy(msg);
+}
+
+// ── Worldserver announce handler ──────────────────────────────────────────────
+
+/// Called on the NATS dispatch thread when a worldserver publishes cluster.announce.
+///
+/// Wire format (matches ProxyClient::PublishAnnounce):
+///   [nodeId:1][serverType:1][gamePort:2][addrLen:1][addr:addrLen][mapCount:2][mapIds:4*mapCount]
+///
+/// Registers the node with ProxyMgr and sends MSG_ANNOUNCE_ACK (0x20) on
+/// cluster.node.{nodeId} so the worldserver stops its 10-second retry loop.
+void NatsBus::OnAnnounceMsg(natsConnection* nc, natsSubscription* /*sub*/,
+                             natsMsg* msg, void* /*closure*/)
+{
+    const uint8* d = reinterpret_cast<const uint8*>(natsMsg_GetData(msg));
+    int n          = natsMsg_GetDataLength(msg);
+
+    // Minimum: nodeId(1)+serverType(1)+gamePort(2)+addrLen(1)+addr(1)+mapCount(2) = 8
+    if (n < 8)
+    {
+        natsMsg_Destroy(msg);
+        return;
+    }
+
+    uint8  nodeId     = d[0];
+    uint8  serverType = d[1];
+    uint16 gamePort   = static_cast<uint16>(d[2]) | (static_cast<uint16>(d[3]) << 8);
+    uint8  addrLen    = d[4];
+
+    if (n < 5 + addrLen + 2)
+    {
+        natsMsg_Destroy(msg);
+        return;
+    }
+
+    std::string peerIp(reinterpret_cast<const char*>(d + 5), addrLen);
+    int off = 5 + addrLen;
+
+    uint16 mapCount = static_cast<uint16>(d[off]) | (static_cast<uint16>(d[off + 1]) << 8);
+    off += 2;
+
+    if (mapCount > 128)
+        mapCount = 128;
+
+    if (n < off + mapCount * 4)
+    {
+        natsMsg_Destroy(msg);
+        return;
+    }
+
+    std::vector<uint32> maps;
+    maps.reserve(mapCount);
+    for (uint16 i = 0; i < mapCount; ++i)
+    {
+        uint32 mapId = 0;
+        std::memcpy(&mapId, d + off + i * 4, 4);
+        maps.push_back(mapId);
+    }
+
+    natsMsg_Destroy(msg);
+
+    // Register with ProxyMgr (thread-safe — uses internal mutex).
+    uint8 assignedId = sProxyMgr.RegisterNode(serverType, gamePort, peerIp, maps);
+
+    LOG_INFO("proxy.nats", "NatsBus: OnAnnounceMsg — registered node {} (type={} addr={}:{} maps={})",
+             assignedId, serverType, peerIp, gamePort, mapCount);
+
+    // Send MSG_ANNOUNCE_ACK (0x20) on cluster.node.{nodeId} so the worldserver
+    // stops its 10-second retry loop.  Use nodeId from the announcement, not
+    // assignedId (they should match for static configs, but the worldserver
+    // listens on its own nodeId subject).
+    if (nc)
+    {
+        std::string ackSubject = "cluster.node." + std::to_string(nodeId);
+        uint8 ackBuf[2] = { 0x20, 0 }; // MSG_ANNOUNCE_ACK, proxy nodeId=0
+        natsStatus s = natsConnection_Publish(nc, ackSubject.c_str(), ackBuf, 2);
+        if (s != NATS_OK)
+            LOG_WARN("proxy.nats", "NatsBus: OnAnnounceMsg ACK publish failed — {}", natsStatus_GetText(s));
+    }
 }

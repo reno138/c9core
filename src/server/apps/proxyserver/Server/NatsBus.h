@@ -74,6 +74,7 @@ private:
     natsSubscription* _subProxy{nullptr};     ///< cluster.proxy subscriber
     natsSubscription* _subRegister{nullptr};  ///< cluster.register subscriber (request-reply)
     natsSubscription* _subInstQuery{nullptr}; ///< cluster.instance.query subscriber (request-reply)
+    natsSubscription* _subAnnounce{nullptr};  ///< cluster.announce subscriber (worldserver peer discovery)
 
     /// Dispatcher for all ongoing control messages (cluster.proxy).
     static void OnClusterProxyMsg(natsConnection* nc, natsSubscription* sub,
@@ -87,6 +88,10 @@ private:
     /// Replies with [addrLen:1][addr:addrLen][port:2] for the best available instance node.
     static void OnInstanceQueryMsg(natsConnection* nc, natsSubscription* sub,
                                    natsMsg* msg, void* closure);
+
+    /// Dispatcher for worldserver announce messages (cluster.announce).
+    static void OnAnnounceMsg(natsConnection* nc, natsSubscription* sub,
+                              natsMsg* msg, void* closure);
 };
 
 #define sNatsBus NatsBus::Instance()
