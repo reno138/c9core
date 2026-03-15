@@ -17,6 +17,8 @@
 
 #include "AreaDefines.h"
 #include "ArenaSpectator.h"
+#include "ClusterMgr.h"
+#include "ProxyClient.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
@@ -87,6 +89,20 @@ void WorldSession::HandleMoveWorldportAck()
     }
 
     // relocate the player to the teleport destination
+    // ── Cross-node reroute: if this node doesn't own the destination map,
+    //    ask the proxy to redirect the client to the correct node instead of
+    //    trying (and failing) to create the map locally.  Without this guard
+    //    the instance server falls into an infinite reroute loop when a player
+    //    exits an instance to a continent map it doesn't own.
+    if (!sClusterMgr.IsMapLocal(loc.GetMapId()))
+    {
+        LOG_INFO("network.opcode",
+                 "HandleMoveWorldportAck: map {} is not local — rerouting player {} to owning node",
+                 loc.GetMapId(), GetPlayer()->GetGUID().ToString());
+        sProxyClient.SendRerouteToMap(GetPlayer()->GetGUID().GetRawValue(), loc.GetMapId());
+        return;
+    }
+
     Map* newMap = sMapMgr->CreateMap(loc.GetMapId(), GetPlayer());
     // the CanEnter checks are done in TeleporTo but conditions may change
     // while the player is in transit, for example the map may get full
