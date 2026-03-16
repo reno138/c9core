@@ -567,19 +567,14 @@ void BackendSession::HandleCharEnum()
     else
     {
         // Native in-world reroute: proxy already sent SMSG_NEW_WORLD.
-        // Do NOT send PLAYER_LOGIN here. ProxySocket will translate
-        // MSG_MOVE_WORLDPORT_ACK → CMSG_PLAYER_LOGIN after the client sends the ack,
-        // matching VB.NET On_MSG_MOVE_WORLDPORT_ACK flow.
+        // Wait for the client to send MSG_MOVE_WORLDPORT_ACK (intercepted by ProxySocket
+        // which translates it to CMSG_PLAYER_LOGIN on the destination node).
+        // _rerouteLoginPending=false: all S→C packets from the destination are forwarded
+        // directly — the client is on the loading screen and safely handles pre-login
+        // packets (SMSG_ACCOUNT_DATA_TIMES etc.) as well as SMSG_LOGIN_VERIFY_WORLD
+        // (which positions it at the new location).  No rewrite needed because the client
+        // has already received SMSG_NEW_WORLD from the proxy.
         _rerouteLoginPending = false;
-        // Still drop pre-login packets until SMSG_LOGIN_VERIFY_WORLD arrives
-        // (the rewrite path in DispatchToClient already handles this correctly
-        //  when _rerouteLoginPending is false — it falls through to normal relay).
-        // Actually we need to drop pre-login packets; set a flag to suppress them.
-        // The existing _rerouteLoginPending=false means DispatchToClient won't drop.
-        // For the native reroute, BackendSession just relays everything — the proxy
-        // already sent SMSG_NEW_WORLD so the client is on the loading screen.
-        // Pre-login packets from destination node are harmless (client ignores them
-        // while loading). When SMSG_LOGIN_VERIFY_WORLD arrives it is forwarded as-is.
     }
 
     if (auto owner = _owner.lock())

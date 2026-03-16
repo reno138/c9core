@@ -17,6 +17,7 @@
 
 #include "WaypointMovementGenerator.h"
 #include "ClusterMgr.h"
+#include "DatabaseEnv.h"
 #include "Creature.h"
 #include "CreatureAI.h"
 #include "CreatureGroups.h"
@@ -435,7 +436,27 @@ void FlightPathMovementGenerator::DoFinalize(Player* player)
     if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(player->GetMapId()))
     {
         if (auto nodeInfo = sClusterMgr.GetNodeForMap(player->GetMapId()))
-            sProxyClient.SendReroute(player->GetGUID().GetRawValue(), nodeInfo->address, nodeInfo->port);
+        {
+            float const px = player->GetPositionX();
+            float const py = player->GetPositionY();
+            float const pz = player->GetPositionZ();
+            float const po = player->GetOrientation();
+            uint32 const pm = player->GetMapId();
+            // Save destination position so the receiving node loads the correct map.
+            CharacterDatabasePreparedStatement* stmt =
+                CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
+            stmt->SetData(0, px);
+            stmt->SetData(1, py);
+            stmt->SetData(2, pz);
+            stmt->SetData(3, po);
+            stmt->SetData(4, static_cast<uint16>(pm));
+            stmt->SetData(5, static_cast<uint32>(0));
+            stmt->SetData(6, player->GetGUID().GetCounter());
+            CharacterDatabase.DirectExecute(stmt);
+            sProxyClient.SendReroute(player->GetGUID().GetRawValue(),
+                                     nodeInfo->address, nodeInfo->port,
+                                     pm, px, py, pz, po);
+        }
     }
 }
 

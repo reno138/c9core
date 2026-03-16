@@ -1853,16 +1853,39 @@ namespace lfg
                          instanceAddr, instancePort);
             }
 
+            // Resolve dungeon entrance trigger once for all remote players.
+            AreaTriggerTeleport const* at = sObjectMgr->GetMapEntranceTrigger(dungeon->map);
+            float const entX   = at ? at->target_X           : 0.f;
+            float const entY   = at ? at->target_Y           : 0.f;
+            float const entZ   = at ? at->target_Z           : 0.f;
+            float const entOri = at ? at->target_Orientation : 0.f;
+
             for (ObjectGuid const& pguid : playersToTeleport)
             {
                 if (ObjectAccessor::FindPlayer(pguid))
                     continue; // already handled above (local player)
 
+                // Synchronously update the remote player's DB position to the dungeon
+                // entrance before the reroute.  The instance server loads position from
+                // DB on CMSG_PLAYER_LOGIN; without this update it sees the player's
+                // overworld position (a non-local map) and reroutes them back — loop.
+                CharacterDatabasePreparedStatement* posStmt =
+                    CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
+                posStmt->SetData(0, entX);
+                posStmt->SetData(1, entY);
+                posStmt->SetData(2, entZ);
+                posStmt->SetData(3, entOri);
+                posStmt->SetData(4, static_cast<uint16>(dungeon->map));
+                posStmt->SetData(5, static_cast<uint32>(0)); // zone resolved on load
+                posStmt->SetData(6, pguid.GetCounter());
+                CharacterDatabase.DirectExecute(posStmt);
+
                 // Not a local player — route them via cluster reroute.
                 SetState(pguid, LFG_STATE_DUNGEON);
-                LOG_DEBUG("lfg", "LFGMgr::MakeNewGroup: Rerouting remote player [{}] to {}:{}",
-                          pguid.ToString(), instanceAddr, instancePort);
-                sProxyClient.SendReroute(pguid.GetRawValue(), instanceAddr, instancePort);
+                LOG_DEBUG("lfg", "LFGMgr::MakeNewGroup: Rerouting remote player [{}] to {}:{} map={}",
+                          pguid.ToString(), instanceAddr, instancePort, dungeon->map);
+                sProxyClient.SendReroute(pguid.GetRawValue(), instanceAddr, instancePort,
+                                         dungeon->map, entX, entY, entZ, entOri);
             }
         }
 
