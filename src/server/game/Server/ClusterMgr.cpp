@@ -288,13 +288,22 @@ bool ClusterMgr::IsMapLocal(uint32 mapId) const
 
 bool ClusterMgr::IsZoneLocal(uint32 zoneId) const
 {
-    std::lock_guard<std::mutex> lock(_localMapsMutex);
+    // If this node explicitly owns the zone, it is local
+    {
+        std::lock_guard<std::mutex> lock(_localMapsMutex);
+        if (!_localZones.empty())
+            return _localZones.count(zoneId) > 0;
+    }
 
-    // If no zone routing configured, all zones are local
-    if (_localZones.empty())
-        return true;
+    // No explicit zones configured on this node.
+    // Check if ANY peer claims this zone — if so, it is not local to us.
+    {
+        std::lock_guard<std::mutex> lock(_nodeMutex);
+        if (_zoneToNode.count(zoneId) > 0)
+            return false;  // another node owns this zone
+    }
 
-    return _localZones.count(zoneId) > 0;
+    return true;  // no one claims it, so it is local
 }
 
 std::optional<ClusterNodeInfo> ClusterMgr::GetNodeForZone(uint32 zoneId) const
