@@ -718,7 +718,7 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
         // On transports, collision checks use stale world coords — just offset directly.
         if (target->GetTransport())
         {
-            float followDist = owner->GetCombatReach() + _range;
+            float followDist = (owner->GetCombatReach() + _range) * 0.5f;
             float followAngle = target->GetOrientation() + _angle.RelativeAngle + M_PI; // behind + right
             targetPosition.m_positionX += followDist * cos(followAngle);
             targetPosition.m_positionY += followDist * std::sin(followAngle);

@@ -1,0 +1,195 @@
+================================================================================
+  C9Core WoW Cluster Setup Guide
+  Realm: WoWCluster (3.3.5a WotLK)
+  Last updated: 2026-03-21
+================================================================================
+
+1. ARCHITECTURE OVERVIEW
+========================
+
+The C9Core cluster uses a 3-tier proxy architecture:
+
+  Client --> authserver (login, realm list)
+         --> proxyserver (TCP proxy, owns the client socket)
+             --> worldserver node 1  (Kalimdor)
+             --> worldserver node 2  (Eastern Kingdoms, Outland, Northrend)
+             --> worldserver node 3  (all instances: dungeons, raids, BGs, arenas)
+
+NATS (nats-server) is the message bus for all inter-node communication: player
+directory, reroute requests, BG queues, LFG relay, chat, transport sync, and
+management status heartbeats. No direct TCP between worldserver nodes.
+
+The proxy is the only component that talks to the WoW client. Worldserver nodes
+never see raw client connections -- the proxy forwards packets bidirectionally
+and handles rerouting when a player changes nodes.
+
+
+2. COMPONENTS
+=============
+
+Binary            | Purpose
+------------------+----------------------------------------------------------
+nats-server       | NATS message broker on port 4222. All cluster messaging
+                  | flows through this. Runs on node 1 (192.0.2.70).
+authserver        | Handles client login (SRP6), realm list. Listens on 3724.
+proxyserver       | TCP proxy on port 8085 (advertised in realmlist). Owns
+                  | client connections, routes packets to the correct
+                  | worldserver node. Also manages nodemgr via port 8091
+                  | and clustermgr via port 9090.
+worldserver       | Game logic server, one instance per node. Listens on
+                  | 8086 for proxy connections. Each handles specific maps.
+nodemgr           | Process supervisor. Starts worldserver, auto-restarts on
+                  | crash. Connects to proxyserver:8091 for commands. Can
+                  | optionally wrap worldserver in gdb for crash dumps.
+clustermgr        | Monitoring/management TUI + web UI. Subscribes to NATS
+                  | status topics for health dashboards. Web UI on port 9191.
+
+All binaries are in: /home/wow/wowcluster/bin/
+All configs are in:  /home/wow/wowcluster/etc/
+
+
+3. NODE CONFIGURATION
+=====================
+
+  Node 1 — wow-node-01 (192.0.2.70) — Kalimdor
+  -----------------------------------------------
+  Config:                  worldserver-node1.conf
+  ClusterServer.NodeId   = 1
+  ClusterServer.Maps     = "1"                    (map 1 = Kalimdor)
+  ClusterServer.GameAddress = "192.0.2.70"
+  InstanceServer.Enable  = 0
+  ClusterServer.LFGMasterNode = 1                 (this node runs LFG queue)
+  ClusterServer.BgCoordinatorNode = 1             (this node coordinates BGs)
+  Database: 127.0.0.1:3306 (local MySQL)
+  SOAP: enabled on port 7878
+  RA: enabled on port 3443
+
+  Node 2 — wow-node-02 (192.0.2.71) — EK + Outland + Northrend
+  ---------------------------------------------------------------
+  Config:                  worldserver-node2.conf
+  ClusterServer.NodeId   = 2
+  ClusterServer.Maps     = "0,530,571"            (EK, Outland, Northrend)
+  ClusterServer.GameAddress = "192.0.2.71"
+  InstanceServer.Enable  = 0
+  Database: 192.0.2.70:3306 (remote to node 1 MySQL)
+  SOAP: disabled
+
+  Node 3 — wow-node-03 (192.0.2.72) — Instance Server
+  -----------------------------------------------------
+  Config:                  worldserver-instance.conf
+  ClusterServer.NodeId   = 3
+  ClusterServer.GameAddress = "192.0.2.72"
+  ClusterServer.InstanceServer = 1                (handles all instanced maps)
+  ClusterServer.Maps     = (not set -- receives all instance/raid/BG/arena maps)
+  Database: 192.0.2.70:3306 (remote to node 1 MySQL)
+  SOAP: disabled
+
+  All nodes share:
+  - ClusterServer.NatsURL             = "nats://192.0.2.70:4222"
+  - ClusterServer.TransportSyncInterval = 60
+  - ClusterServer.NodeDeadThreshold   = 30
+  - ClusterServer.MgmtStatusInterval  = 5
+  - ClusterServer.MgmtPlayersInterval = 3
+  - WorldServerPort                   = 8086
+  - DataDir = /home/wow/wowcluster/data
+  - All connect to the same 3 databases: acore_auth, acore_world, acore_characters
+
+  Proxy Server — runs on node 1 (192.0.2.70)
+  -------------------------------------------
+  Config:                proxyserver.conf
+  WorldServerPort      = 8085 (client-facing)
+  NatsServer.URL       = "nats://127.0.0.1:4222"
+  NodeMgrPort          = 8091
+  ManagementPort       = 9090
+  Management.SharedSecret = f0ebc87c130e21f94093c7448af5c5ff470e19bc89c52a5ed5b57747f4e46775
+  WorldServer.Node.Count = 3
+    Node 1: 192.0.2.70:8086
+    Node 2: 192.0.2.71:8086
+    Node 3: 192.0.2.72:8086
+  InstanceServer.Address = 192.0.2.72
+  InstanceServer.Port    = 8086
+  ClusterServer.LFGMasterNode = 1
+  Cluster.RoutingMode    = "roundrobin"
+  Cluster.MapRouting.Default = 3  (unregistered maps default to instance node)
+  Management.MaxPlayersPerNode = 500
+  AutoScale: disabled
+
+
+4. STARTUP ORDER
+================
+
+Must be started in this exact order:
+
+  1. nats-server     (on node 1)
+     /home/wow/wowcluster/bin/nats-server -p 4222
+
+  2. authserver      (on node 1)
+     /home/wow/wowcluster/bin/authserver -c /home/wow/wowcluster/etc/authserver.conf
+
+  3. proxyserver     (on node 1)
+     /home/wow/wowcluster/bin/proxyserver -c /home/wow/wowcluster/etc/proxyserver.conf
+
+  4. nodemgr on each node (starts worldserver automatically):
+     Node 1: nodemgr -c /home/wow/wowcluster/etc/nodemgr-node1.conf
+     Node 2: nodemgr -c /home/wow/wowcluster/etc/nodemgr-node2.conf  (via SSH to .71)
+     Node 3: nodemgr -c /home/wow/wowcluster/etc/nodemgr-node3.conf  (via SSH to .72)
+
+  The start-cluster.sh script automates this. It wraps each process in gdb
+  for crash backtrace capture. Remote nodes (2, 3) are started via SSH.
+
+  Shutdown: stop-cluster.sh (reverse order)
+  Status:   status-cluster.sh
+
+
+5. KEY CONFIG SETTINGS
+======================
+
+Worldserver (cluster-specific):
+  ClusterServer.NodeId              Node identity (1-5), must be unique
+  ClusterServer.NatsURL             NATS broker URL
+  ClusterServer.GameAddress         IP address the proxy uses to reach this node
+  ClusterServer.Maps                Comma-separated map IDs this node handles
+                                    (map 0=EK, 1=Kalimdor, 530=Outland, 571=Northrend)
+  ClusterServer.InstanceServer      1 = this node handles all instanced maps
+  ClusterServer.LFGMasterNode       Which node runs the LFG/LFD queue (usually 1)
+  ClusterServer.BgCoordinatorNode   Which node coordinates battleground queues
+  ClusterServer.TransportSyncInterval  Seconds between transport position sync via NATS
+  ClusterServer.NodeDeadThreshold   Seconds of silence before node is marked dead
+  ClusterServer.MgmtStatusInterval  Seconds between status heartbeats to NATS
+  ClusterServer.MgmtPlayersInterval Seconds between player-list publishes to NATS
+
+Proxy (cluster-specific):
+  WorldServer.Node.Count            Number of backend worldserver nodes
+  WorldServer.Node.N.Address/Port   Address and port for each backend node
+  InstanceServer.Address/Port       Dedicated instance server address
+  Cluster.RoutingMode               "roundrobin" or "leastloaded"
+  Cluster.MapRouting.Default        Default node ID for unregistered maps
+  Cluster.AutoScale.*               Auto-scaling settings (disabled by default)
+  Management.SharedSecret           PSK for nodemgr/clustermgr encrypted channels
+  Management.MaxPlayersPerNode      Max players per node (for routing/auto-scale)
+  NodeMgrPort                       Port for nodemgr connections (8091)
+  ManagementPort                    Port for clustermgr connections (9090)
+  Proxy.PacketLog                   1 = log every proxied packet for debugging
+
+Nodemgr:
+  WorldserverBin                    Path to worldserver binary
+  WorldserverConfig                 Path to the worldserver .conf for this node
+  WorldserverLog                    Where to redirect worldserver stdout
+  NodeMgr.UseGdb                    1 = wrap worldserver in gdb for crash dumps
+
+
+6. CROSS-NODE TRANSFER FLOW
+============================
+
+When a player teleports to a map on a different node (e.g., hearthing from
+Kalimdor to Stormwind):
+
+  1. Source worldserver calls TeleportTo() for the destination map.
+  2. TeleportTo detects the destination map belongs to a different node.
+  3. Player position and state are saved synchronously to the character DB
+     via DirectExecute (not async -- must complete before reroute).
+  4. Source worldserver publishes MSG_REROUTE_PLAYER on NATS topic
+     "cluster.proxy" with the player GUID and destination node ID.
+  5. Proxyserver receives the NATS message and sends SMSG_NEW_WORLD to
+     the client, which triggers the loading screen.
+  6. Proxyserver disconnects the players packet stream from the source
