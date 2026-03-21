@@ -35,7 +35,7 @@ void Acore::Banner::Show(std::string_view applicationName, void(*log)(std::strin
     log("                                ██║     ██║   ██║██╔══██╗██╔══╝");
     log("                                ╚██████╗╚██████╔╝██║  ██║███████╗");
     log("                                 ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝\n");
-    log("     C9Core 3.3.5a  -  (based on AzerothCore)\n");
+    log("     C9Core 3.3.5a\n");
 
     if (logExtraInfo)
     {

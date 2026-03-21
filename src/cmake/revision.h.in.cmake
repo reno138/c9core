@@ -11,7 +11,7 @@
  #define _BUILD_DIRECTORY           R"(@BUILDDIR@)"
  #define _MYSQL_EXECUTABLE          R"(@MYSQL_EXECUTABLE@)"
  #define C9_COMPANYNAME_STR         "C9Core"
- #define C9_LEGALCOPYRIGHT_STR      "(c)2016-@rev_year@ C9Core (based on AzerothCore)"
+ #define C9_LEGALCOPYRIGHT_STR      "(c)2016-@rev_year@ C9Core"
  #define C9_FILEVERSION             0,0,0
  #define C9_FILEVERSION_STR         "@rev_hash@ @rev_date@ (@rev_branch@ branch)"
  #define C9_PRODUCTVERSION          C9_FILEVERSION

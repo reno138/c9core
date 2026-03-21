@@ -701,7 +701,19 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
         else
             i_path->Clear();
 
-        target->MovePositionToFirstCollision(targetPosition, owner->GetCombatReach() + _range, target->ToAbsoluteAngle(_angle.RelativeAngle) - target->GetOrientation());
+        // On transports, collision checks use stale world coords — just offset directly.
+        if (target->GetTransport())
+        {
+            float followDist = owner->GetCombatReach() + _range;
+            float followAngle = target->GetOrientation() + _angle.RelativeAngle + M_PI; // behind + right
+            targetPosition.m_positionX += followDist * cos(followAngle);
+            targetPosition.m_positionY += followDist * std::sin(followAngle);
+        }
+        else
+        {
+            target->MovePositionToFirstCollision(targetPosition, owner->GetCombatReach() + _range, target->ToAbsoluteAngle(_angle.RelativeAngle) - target->GetOrientation());
+        }
+
 
         float x, y, z;
         targetPosition.GetPosition(x, y, z);
