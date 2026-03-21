@@ -628,7 +628,7 @@ void ProxyClient::Update()
 {
     constexpr uint32 NATS_RETRY_INTERVAL_MS     = 10 * 1000;    //  10 seconds
     constexpr uint32 ANNOUNCE_RETRY_INTERVAL_MS = 10 * 1000;    //  10 seconds
-    constexpr uint32 HEARTBEAT_INTERVAL_MS      = 10 * 1000;    //  10 seconds
+    uint32 const HEARTBEAT_INTERVAL_MS = sConfigMgr->GetOption<uint32>("ClusterServer.HeartbeatInterval", 300);    //  10 seconds
     constexpr uint32 REFRESH_INTERVAL_MS        = 5 * 60 * 1000; //  5 minutes
 
     uint32 now = getMSTime();
@@ -680,12 +680,13 @@ void ProxyClient::Update()
     }
 
     // Dead-node detection: check every 15 seconds whether any known peer has gone silent.
-    constexpr uint32 DEAD_CHECK_INTERVAL_MS = 15 * 1000;
+    uint32 const DEAD_CHECK_INTERVAL_MS = sConfigMgr->GetOption<uint32>("ClusterServer.HeartbeatInterval", 300);
     if (now - _lastDeadCheckMs >= DEAD_CHECK_INTERVAL_MS)
     {
         _lastDeadCheckMs = now;
-        uint32 deadThresholdMs = static_cast<uint32>(
-            sConfigMgr->GetOption<int32>("ClusterServer.NodeDeadThreshold", 30)) * 1000u;
+        uint32 deadThresholdMs = sConfigMgr->GetOption<uint32>("ClusterServer.NodeDeadTimeout", 3000);
+
+
         for (uint8 deadNodeId : sClusterMgr.GetStaleNodeIds(deadThresholdMs, now))
             HandleNodeDead(deadNodeId);
     }
@@ -975,13 +976,32 @@ void ProxyClient::HandleNodeDeadMsg(std::vector<uint8> const& payload)
 
     uint8 deadNodeId = payload[0];
     if (deadNodeId == _nodeId)
-        return;  // guard against self-declaration
+        return;
 
     auto orphanedMaps = sClusterMgr.MarkNodeDead(deadNodeId);
 
     LOG_WARN("server.worldserver",
              "ProxyClient: Received MSG_NODE_DEAD for node {}. Orphaned {} map(s).",
              deadNodeId, orphanedMaps.size());
+
+    // Failover: elect this node to claim orphaned maps based on lowest nodeId
+    if (!orphanedMaps.empty() && !sClusterMgr.IsInstanceServerMode())
+    {
+        uint8 lowestAlive = sClusterMgr.GetLowestAliveNonInstanceNodeId();
+        if (lowestAlive == 0 || lowestAlive == _nodeId)
+        {
+            LOG_WARN("server.worldserver",
+                     "ProxyClient: This node (id {}) elected to claim {} orphaned maps from dead node {}",
+                     _nodeId, orphanedMaps.size(), deadNodeId);
+            sClusterMgr.ClaimOrphanedMaps(deadNodeId);
+        }
+        else
+        {
+            LOG_INFO("server.worldserver",
+                     "ProxyClient: Node {} will claim maps from dead node {} (lower nodeId)",
+                     lowestAlive, deadNodeId);
+        }
+    }
 
     if (deadNodeId == _bgCoordNodeId)
     {

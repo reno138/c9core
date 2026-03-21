@@ -1,0 +1,15 @@
+
+#
+#    ClusterServer.HeartbeatInterval
+#        Description: Interval in milliseconds between heartbeat pings to peer nodes.
+#        Default:     300 (ms) — suitable for LAN. Increase for WAN links.
+#
+ClusterServer.HeartbeatInterval = 300
+
+#
+#    ClusterServer.NodeDeadTimeout
+#        Description: Time in milliseconds before a node with no heartbeat is declared dead.
+#                     Should be several multiples of HeartbeatInterval to tolerate jitter.
+#        Default:     3000 (ms)
+#
+ClusterServer.NodeDeadTimeout = 3000
