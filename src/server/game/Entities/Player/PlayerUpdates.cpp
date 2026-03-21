@@ -1361,7 +1361,9 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
     // Cluster: seamless zone-based reroute if new zone is on another node
     if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
-        && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId()))
+        && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
+        && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
+        && !GetVehicle() && !IsBeingTeleportedFar())
     {
         // Save position to DB before reroute
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);

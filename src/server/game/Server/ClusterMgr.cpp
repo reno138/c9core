@@ -56,6 +56,15 @@ bool ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
     // Register new map→node entries.
     for (uint32 mapId : info.maps)
         _mapToNode[mapId] = nodeId;
+
+    // Clear stale zone entries for this node before re-adding
+    for (auto zit = _zoneToNode.begin(); zit != _zoneToNode.end(); )
+    {
+        if (zit->second == nodeId)
+            zit = _zoneToNode.erase(zit);
+        else
+            ++zit;
+    }
     for (uint32 zoneId : info.zones)
         _zoneToNode[zoneId] = nodeId;
 
@@ -137,6 +146,15 @@ std::unordered_set<uint32> ClusterMgr::MarkNodeDead(uint8 nodeId)
         }
         else
             ++mit;
+    }
+
+    // Also clean zone routing entries for the dead node
+    for (auto zit = _zoneToNode.begin(); zit != _zoneToNode.end(); )
+    {
+        if (zit->second == nodeId)
+            zit = _zoneToNode.erase(zit);
+        else
+            ++zit;
     }
 
     return orphaned;

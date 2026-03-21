@@ -630,6 +630,13 @@ void BackendSession::SendRaw(std::vector<uint8> const& data)
 
     // Queue the data for async writing.
     bool wasEmpty = _sendQueue.empty();
+    // Guard against unbounded queue growth if backend is stalled
+    if (_sendQueue.size() > 2048)
+    {
+        LOG_WARN("proxy", "BackendSession: Send queue overflow ({}), dropping connection", _sendQueue.size());
+        Close();
+        return;
+    }
     _sendQueue.push(data);
 
     if (wasEmpty)

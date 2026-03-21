@@ -98,6 +98,12 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
 bool ProxyClient::ConnectNATS()
 {
     // Connect to NATS.
+    // Clean up stale handles from previous failed attempt
+    if (_subTransportQuery) { natsSubscription_Destroy(_subTransportQuery); _subTransportQuery = nullptr; }
+    if (_subAnnounce) { natsSubscription_Destroy(_subAnnounce); _subAnnounce = nullptr; }
+    if (_subBroadcast) { natsSubscription_Destroy(_subBroadcast); _subBroadcast = nullptr; }
+    if (_subNode) { natsSubscription_Destroy(_subNode); _subNode = nullptr; }
+    if (_nc) { natsConnection_Destroy(_nc); _nc = nullptr; }
     natsStatus s = natsConnection_ConnectTo(&_nc, _natsUrl.c_str());
     if (s != NATS_OK)
     {
