@@ -259,6 +259,51 @@ bool ClusterMgr::IsMapLocal(uint32 mapId) const
     return _localMaps.count(mapId) > 0;
 }
 
+
+void ClusterMgr::AddLocalMap(uint32 mapId)
+{
+    {
+        std::lock_guard<std::mutex> lock(_localMapsMutex);
+        _localMaps.insert(mapId);
+    }
+    LOG_INFO("server.worldserver", "ClusterMgr: Dynamically added map {} to local node", mapId);
+    // Re-announce so proxy updates routing
+    sProxyClient.PublishAnnounce();
+}
+
+void ClusterMgr::RemoveLocalMap(uint32 mapId)
+{
+    {
+        std::lock_guard<std::mutex> lock(_localMapsMutex);
+        _localMaps.erase(mapId);
+    }
+    LOG_INFO("server.worldserver", "ClusterMgr: Dynamically removed map {} from local node", mapId);
+    sProxyClient.PublishAnnounce();
+}
+
+void ClusterMgr::ClaimOrphanedMaps(uint8 deadNodeId)
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    auto it = _nodes.find(deadNodeId);
+    if (it == _nodes.end())
+        return;
+
+    auto const& deadNode = it->second;
+    LOG_WARN("server.worldserver", "ClusterMgr: Claiming {} maps from dead node {}",
+             deadNode.maps.size(), deadNodeId);
+
+    {
+        std::lock_guard<std::mutex> mlock(_localMapsMutex);
+        for (uint32 m : deadNode.maps)
+        {
+            _localMaps.insert(m);
+            LOG_INFO("server.worldserver", "ClusterMgr: Claimed map {} from dead node {}", m, deadNodeId);
+        }
+    }
+
+    // Re-announce with expanded map set
+    sProxyClient.PublishAnnounce();
+}
 void ClusterMgr::OnRemotePlayerOnline(uint64 guid, std::string name,
                                        uint32 zoneId, uint8 level, uint8 classId,
                                        uint8 raceId, uint8 teamId, uint8 nodeId)

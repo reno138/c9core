@@ -163,6 +163,42 @@ const CONTINENTS = {
   571: { name:'Northrend',        minX:-12800, maxX:3400,  minY:-15900, maxY:-1400 },
 };
 
+const MAP_NAMES = {
+  0:"Eastern Kingdoms",1:"Kalimdor",530:"Outland",571:"Northrend",
+  33:"Shadowfang Keep",34:"Stormwind Stockade",36:"Deadmines",
+  43:"Wailing Caverns",44:"Monastery",47:"Razorfen Kraul",
+  48:"Blackfathom Deeps",70:"Uldaman",90:"Gnomeregan",
+  109:"Sunken Temple",129:"Razorfen Downs",189:"Scarlet Monastery",
+  209:"Zul Farrak",229:"Blackrock Spire",230:"Blackrock Depths",
+  249:"Onyxia",269:"Opening of the Dark Portal",289:"Scholomance",
+  309:"Zul Gurub",329:"Stratholme",349:"Maraudon",
+  369:"Deeprun Tram",389:"Ragefire Chasm",429:"Dire Maul",
+  469:"Blackwing Lair",489:"Warsong Gulch",509:"Ruins of Ahn Qiraj",
+  529:"Arathi Basin",531:"Ahn Qiraj Temple",532:"Karazhan",
+  533:"Naxxramas",534:"Hyjal Summit",540:"Hellfire Ramparts",
+  542:"Blood Furnace",543:"Ramparts",544:"Magtheridon",
+  545:"Steamvault",546:"Underbog",547:"Slave Pens",
+  548:"Serpentshrine Cavern",550:"Tempest Keep",552:"Arcatraz",
+  553:"Botanica",554:"Mechanar",555:"Shadow Labyrinth",
+  556:"Sethekk Halls",557:"Mana-Tombs",558:"Auchenai Crypts",
+  559:"Nagrand Arena",560:"Old Hillsbrad",564:"Black Temple",
+  565:"Gruul",566:"Eye of the Storm",568:"Zul Aman",
+  572:"Ruins of Lordaeron",574:"Utgarde Keep",575:"Utgarde Pinnacle",
+  576:"Nexus",578:"Oculus",580:"Sunwell Plateau",
+  585:"Magisters Terrace",595:"Culling of Stratholme",
+  598:"Sunwell Fix",599:"Halls of Stone",600:"Drak Tharon Keep",
+  601:"Azjol-Nerub",602:"Halls of Lightning",603:"Ulduar",
+  604:"Gundrak",608:"Violet Hold",615:"Obsidian Sanctum",
+  616:"Eye of Eternity",617:"Dalaran Sewers",619:"Ahn kahet",
+  624:"Vault of Archavon",631:"Icecrown Citadel",
+  632:"Forge of Souls",649:"Trial of the Crusader",
+  650:"Trial of the Champion",658:"Pit of Saron",
+  668:"Halls of Reflection",724:"Ruby Sanctum",
+  30:"Alterac Valley",559:"Nagrand Arena",562:"Blade Edge Arena",
+  572:"Ruins of Lordaeron",617:"Dalaran Sewers",618:"Ring of Valor",
+  628:"Isle of Conquest",726:"Twin Peaks",761:"Battle for Gilneas"
+};
+
 const CLASS_NAMES = ['','Warrior','Paladin','Hunter','Rogue','Priest','DK','Shaman','Mage','Warlock','','Druid'];
 const RACE_NAMES  = ['','Human','Orc','Dwarf','NE','Undead','Tauren','Gnome','Troll','','BE','Draenei'];
 
@@ -207,7 +243,7 @@ function renderSidebar() {
   sb.innerHTML = nodes.map(n => {
     const dot = stateDot(n.state);
     const mapsHtml = (n.mapIds||[]).map(m => {
-      const cname = CONTINENTS[m] ? CONTINENTS[m].name : `Map ${m}`;
+      const cname = MAP_NAMES[m] || `Map ${m}`;
       const pc = state.players.filter(p=>p.mapId==m).length;
       return `<div class="map-item" onclick="event.stopPropagation();showMap(${n.nodeId},${m})">${cname} (${pc})</div>`;
     }).join('');
@@ -320,7 +356,7 @@ function renderNodeDetail(nodeId) {
     <div class="chart-wrap"><canvas id="ch-cpu-${nodeId}"></canvas></div>
     <div class="section-title">Maps</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-      ${(n.mapIds||[]).map(m=>`<button class="btn" onclick="showMap(${nodeId},${m})">${CONTINENTS[m]?CONTINENTS[m].name:'Map '+m}</button>`).join('')}
+      ${(n.mapIds||[]).map(m=>`<button class="btn" onclick="showMap(${nodeId},${m})">${MAP_NAMES[m]||('Map '+m)}</button>`).join('')}
     </div>
     <div class="section-title">Crash Log (${crashes.length})</div>
     <table class="crash-table">

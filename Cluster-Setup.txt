@@ -51,8 +51,8 @@ All configs are in:  /home/wow/wowcluster/etc/
 3. NODE CONFIGURATION
 =====================
 
-  Node 1 — wow-node-01 (192.0.2.70) — Kalimdor
-  -----------------------------------------------
+  Node 1 -- wow-node-01 (192.0.2.70) -- Kalimdor
+  -------------------------------------------------
   Config:                  worldserver-node1.conf
   ClusterServer.NodeId   = 1
   ClusterServer.Maps     = "1"                    (map 1 = Kalimdor)
@@ -64,8 +64,8 @@ All configs are in:  /home/wow/wowcluster/etc/
   SOAP: enabled on port 7878
   RA: enabled on port 3443
 
-  Node 2 — wow-node-02 (192.0.2.71) — EK + Outland + Northrend
-  ---------------------------------------------------------------
+  Node 2 -- wow-node-02 (192.0.2.71) -- EK + Outland + Northrend
+  -----------------------------------------------------------------
   Config:                  worldserver-node2.conf
   ClusterServer.NodeId   = 2
   ClusterServer.Maps     = "0,530,571"            (EK, Outland, Northrend)
@@ -74,8 +74,8 @@ All configs are in:  /home/wow/wowcluster/etc/
   Database: 192.0.2.70:3306 (remote to node 1 MySQL)
   SOAP: disabled
 
-  Node 3 — wow-node-03 (192.0.2.72) — Instance Server
-  -----------------------------------------------------
+  Node 3 -- wow-node-03 (192.0.2.72) -- Instance Server
+  -------------------------------------------------------
   Config:                  worldserver-instance.conf
   ClusterServer.NodeId   = 3
   ClusterServer.GameAddress = "192.0.2.72"
@@ -94,14 +94,14 @@ All configs are in:  /home/wow/wowcluster/etc/
   - DataDir = /home/wow/wowcluster/data
   - All connect to the same 3 databases: acore_auth, acore_world, acore_characters
 
-  Proxy Server — runs on node 1 (192.0.2.70)
-  -------------------------------------------
+  Proxy Server -- runs on node 1 (192.0.2.70)
+  ---------------------------------------------
   Config:                proxyserver.conf
   WorldServerPort      = 8085 (client-facing)
   NatsServer.URL       = "nats://127.0.0.1:4222"
   NodeMgrPort          = 8091
   ManagementPort       = 9090
-  Management.SharedSecret = f0ebc87c130e21f94093c7448af5c5ff470e19bc89c52a5ed5b57747f4e46775
+  Management.SharedSecret = f0ebc87c...f4e46775
   WorldServer.Node.Count = 3
     Node 1: 192.0.2.70:8086
     Node 2: 192.0.2.71:8086
@@ -192,4 +192,91 @@ Kalimdor to Stormwind):
      "cluster.proxy" with the player GUID and destination node ID.
   5. Proxyserver receives the NATS message and sends SMSG_NEW_WORLD to
      the client, which triggers the loading screen.
-  6. Proxyserver disconnects the players packet stream from the source
+  6. Proxyserver disconnects the player's packet stream from the source
+     node and reconnects it to the destination node.
+  7. Client finishes loading and sends a worldport ACK.
+  8. Client sends CMSG_PLAYER_LOGIN on the destination node.
+  9. Destination worldserver loads the player from the character DB
+     (freshly saved in step 3) at the correct position.
+
+  IMPORTANT: The fix for the cross-node teleport bug (2026-03-10) replaced
+  the broken SMSG_REDIRECT_CLIENT (opcode 0x50D, Cataclysm+) approach with
+  the proxy-based NATS reroute described above. The client never sees a
+  disconnect -- the proxy transparently switches backends.
+
+
+7. INSTANCE ENTRY/EXIT
+======================
+
+Entering a dungeon/raid/BG/arena (from a continent node to the instance node):
+
+  1. Player hits an instance portal or uses LFG teleport.
+  2. Source worldserver detects the target map has type MAP_INSTANCE,
+     MAP_RAID, MAP_BATTLEGROUND, or MAP_ARENA.
+  3. Since ClusterServer.InstanceServer = 1 is set on node 3 and the proxy
+     has Cluster.MapRouting.Default = 3, the reroute targets node 3.
+  4. The same NATS MSG_REROUTE_PLAYER flow from section 6 executes.
+  5. Node 3 loads the player, creates or reuses the instance, and places
+     the player at the instance entrance coordinates.
+
+Exiting (instance node back to a continent node):
+
+  1. Player uses the exit portal, hearthstone, or gets teleported out.
+  2. Instance worldserver resolves the destination map (e.g., map 0 for EK).
+  3. The destination map is owned by node 2 (per ClusterServer.Maps = "0,530,571").
+  4. NATS MSG_REROUTE_PLAYER sends the player back to node 2.
+  5. Proxy switches the connection; player loads into the continent.
+
+  The character DB save is synchronous in both directions to prevent stale
+  position/inventory data when the destination node loads the player.
+
+
+8. TROUBLESHOOTING
+==================
+
+Problem: Node not registering with proxy
+  - Check NATS is running: nc -z 192.0.2.70 4222
+  - Verify ClusterServer.NatsURL is correct in the node's worldserver conf
+  - Verify ClusterServer.GameAddress matches the IP the proxy can reach
+  - Check ClusterServer.NodeId is unique across all nodes
+  - Look for NATS connection errors in the worldserver log
+
+Problem: Player stuck on loading screen during cross-node teleport
+  - Check Proxy.PacketLog = 1 in proxyserver.conf, look at Proxy-packets.log
+  - Verify the destination node is online and registered
+  - Check character DB for stale pending-worldport state:
+    SELECT * FROM characters WHERE at_login & 0x20; (worldport pending flag)
+  - If stuck, clear the flag:
+    UPDATE characters SET at_login = at_login & ~0x20 WHERE guid = <guid>;
+
+Problem: Stale instance data after crash
+  - If node 3 crashes, instance states may be stale in the DB
+  - nodemgr will auto-restart worldserver; instances re-create on demand
+  - Players inside the instance at crash time will log back in on their
+    last-saved continent position (the sync save before instance entry)
+
+Problem: LFG/BG queues not working
+  - LFG master is node 1 (ClusterServer.LFGMasterNode = 1)
+  - BG coordinator is node 1 (ClusterServer.BgCoordinatorNode = 1)
+  - If node 1 is down, LFG/BG queuing is unavailable cluster-wide
+  - Check NATS connectivity from other nodes to verify relay works
+
+Problem: Nodemgr not connecting to proxy
+  - Verify Management.SharedSecret matches between proxyserver.conf and
+    nodemgr configs
+  - Check proxy is listening on NodeMgrPort 8091
+  - Check nodemgr logs in /home/wow/wowcluster/logs/
+
+Problem: Database connection failures on remote nodes
+  - Nodes 2 and 3 connect to MySQL on 192.0.2.70:3306 (node 1)
+  - Verify MySQL allows remote connections from .71 and .72
+  - Check firewall rules on node 1 for port 3306
+
+Logs directory: /home/wow/wowcluster/logs/
+  - authserver.log, proxyserver.log, Proxy.log, Proxy-packets.log
+  - worldserver-node1.log, worldserver-node2.log, worldserver-instance.log
+  - nodemgr.log, nodemgr-node1.log, nodemgr-node2.log
+  - clustermgr.log
+  - *-gdb.log files contain crash backtraces when running under gdb
+
+================================================================================

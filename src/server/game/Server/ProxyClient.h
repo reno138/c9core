@@ -58,6 +58,8 @@ class WorldPacket;
 class ProxyClient
 {
 public:
+    /// Re-announce this node after dynamic map change or failover.
+    void PublishAnnounce();
     static ProxyClient& Instance()
     {
         static ProxyClient instance;
@@ -225,8 +227,9 @@ private:
     /// Publish [msgType:1][payload] to cluster.broadcast (all nodes).
     void PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadLen);
 
+    /// Re-announce this node's identity and map set (e.g. after dynamic map change).
+
     /// Build and publish a cluster.announce payload with this node's identity.
-    void PublishAnnounce();
 
     /// Connect to NATS and subscribe to all required subjects.
     /// Returns true on success; false if connection or any required subscription fails.

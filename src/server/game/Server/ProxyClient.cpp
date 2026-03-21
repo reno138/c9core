@@ -956,6 +956,16 @@ void ProxyClient::HandleNodeDead(uint8 deadNodeId)
     // Broadcast so all surviving peer nodes update their routing tables.
     uint8 deadPayload[1] = { deadNodeId };
     PublishBroadcast(MSG_NODE_DEAD, deadPayload, 1);
+
+    // Failover: claim orphaned maps from the dead node so players can still
+    // reach those zones. The proxy will route to us after re-announce.
+    if (!orphanedMaps.empty() && !sClusterMgr.IsInstanceServerMode())
+    {
+        LOG_WARN("server.worldserver",
+                 "ProxyClient: Claiming {} orphaned maps from dead node {}",
+                 orphanedMaps.size(), deadNodeId);
+        sClusterMgr.ClaimOrphanedMaps(deadNodeId);
+    }
 }
 
 void ProxyClient::HandleNodeDeadMsg(std::vector<uint8> const& payload)

@@ -152,6 +152,17 @@ public:
     bool IsInstanceServerMode() const { return _instanceServerMode; }
     std::unordered_set<uint32> GetLocalMaps() const;
 
+    /// Dynamically add a map to this node (e.g. failover from dead node).
+    /// Triggers a re-announce so the proxy updates its routing table.
+    void AddLocalMap(uint32 mapId);
+
+    /// Dynamically remove a map from this node.
+    /// Players on this map should be rerouted before calling this.
+    void RemoveLocalMap(uint32 mapId);
+
+    /// Claim all maps from a dead node (failover).
+    void ClaimOrphanedMaps(uint8 deadNodeId);
+
     // ── Cross-node group invite state ─────────────────────────────────────────
 
     struct CrossNodeInvite
