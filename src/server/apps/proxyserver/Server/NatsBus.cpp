@@ -212,6 +212,24 @@ void NatsBus::OnRegisterMsg(natsConnection* nc, natsSubscription* /*sub*/,
         offset += 4;
     }
 
+    // Parse optional zone data: [zoneCount:2][zoneIds:4*n]
+    std::vector<uint32> zones;
+    if (offset + 2 <= n)
+    {
+        uint16 zoneCount;
+        std::memcpy(&zoneCount, d + offset, 2);
+        offset += 2;
+        zones.reserve(zoneCount);
+        for (int zi = 0; zi < zoneCount && offset + 4 <= n; ++zi)
+        {
+            uint32 zoneId;
+            std::memcpy(&zoneId, d + offset, 4);
+            zones.push_back(zoneId);
+            offset += 4;
+        }
+    }
+
+
     uint8 addrLen = d[offset++];
     if (n < offset + addrLen)
     {

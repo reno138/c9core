@@ -42,6 +42,7 @@ struct ClusterNodeInfo
     uint16      port{ 0 };          ///< WoW game port (typically 8085)
     uint8       type{ 0 };          ///< 0 = regular worldserver, 1 = instance server
     std::unordered_set<uint32> maps; ///< mapIds served by this node
+    std::unordered_set<uint32> zones; ///< zoneIds served (empty = all zones on owned maps)
     uint32      lastSeenMs{ 0 };    ///< getMSTime() when last MSG_NODE_STATUS received; 0 = never seen
     uint32      playerCount{ 0 };   ///< player count from most recent MSG_NODE_STATUS
     bool        dead{ false };      ///< true after dead-node detection; cleared on re-announce
@@ -159,6 +160,7 @@ public:
     std::optional<ClusterNodeInfo> GetNodeForZone(uint32 zoneId) const;
     bool IsInstanceServerMode() const { return _instanceServerMode; }
     std::unordered_set<uint32> GetLocalMaps() const;
+    std::unordered_set<uint32> GetLocalZones() const;
 
     /// Dynamically add a map to this node (e.g. failover from dead node).
     /// Triggers a re-announce so the proxy updates its routing table.

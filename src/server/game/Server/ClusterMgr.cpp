@@ -56,6 +56,8 @@ bool ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
     // Register new map→node entries.
     for (uint32 mapId : info.maps)
         _mapToNode[mapId] = nodeId;
+    for (uint32 zoneId : info.zones)
+        _zoneToNode[zoneId] = nodeId;
 
     if (wasRevived)
     {
@@ -559,4 +561,10 @@ std::unordered_set<uint32> ClusterMgr::GetLocalMaps() const
     }
 
     return _localMaps;  // empty means "all maps local" — caller handles this
+}
+
+std::unordered_set<uint32> ClusterMgr::GetLocalZones() const
+{
+    std::lock_guard<std::mutex> lock(_localMapsMutex);
+    return _localZones;
 }

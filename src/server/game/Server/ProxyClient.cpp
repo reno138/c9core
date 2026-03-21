@@ -238,6 +238,19 @@ void ProxyClient::PublishAnnounce()
         buf.push_back(static_cast<uint8>((mapId >> 24) & 0xFF));
     }
 
+    // Append zone data: [zoneCount:2][zoneIds:4*n]
+    auto localZones = sClusterMgr.GetLocalZones();
+    uint16 zoneCount = static_cast<uint16>(localZones.size());
+    buf.push_back(static_cast<uint8>(zoneCount & 0xFF));
+    buf.push_back(static_cast<uint8>(zoneCount >> 8));
+    for (uint32 zoneId : localZones)
+    {
+        buf.push_back(static_cast<uint8>(zoneId & 0xFF));
+        buf.push_back(static_cast<uint8>((zoneId >> 8) & 0xFF));
+        buf.push_back(static_cast<uint8>((zoneId >> 16) & 0xFF));
+        buf.push_back(static_cast<uint8>((zoneId >> 24) & 0xFF));
+    }
+
     natsStatus s = natsConnection_Publish(_nc, "cluster.announce",
                                           buf.data(), static_cast<int>(buf.size()));
     if (s != NATS_OK)
