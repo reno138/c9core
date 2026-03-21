@@ -44,6 +44,7 @@
 #include "QueryHolder.h"
 #include "ScriptMgr.h"
 #include "ProxyClient.h"
+#include "ClusterMgr.h"
 #include "SocialMgr.h"
 #include "Transport.h"
 #include "Tokenize.h"
@@ -643,8 +644,23 @@ void WorldSession::HandleTeleportTimeout(bool updateInSessions)
 void WorldSession::LogoutPlayer(bool save)
 {
     // finish pending transfers before starting the logout
-    while (_player && _player->IsBeingTeleportedFar())
-        HandleMoveWorldportAck();
+    // Cross-node reroute: if the far teleport destination is on another node,
+    // HandleMoveWorldportAck() would fail (can't create the destination map locally).
+    // The reroute already saved the correct position via DirectExecute in TeleportTo,
+    // so just clear the semaphore and skip the worldport ack processing.
+    bool _crossNodeReroute = false;
+    if (_player && _player->IsBeingTeleportedFar()
+        && sProxyClient.IsConnected()
+        && !sClusterMgr.IsMapLocal(_player->GetTeleportDest().GetMapId()))
+    {
+        _crossNodeReroute = true;
+        _player->SetSemaphoreTeleportFar(0);
+    }
+    else
+    {
+        while (_player && _player->IsBeingTeleportedFar())
+            HandleMoveWorldportAck();
+    }
 
     m_playerLogout = true;
     m_playerSave = save;
@@ -742,12 +758,18 @@ void WorldSession::LogoutPlayer(bool save)
 
         // Repop at Graveyard or other player far teleport will prevent saving player because of not present map
         // Teleport player immediately for correct player save
-        while (_player && _player->IsBeingTeleportedFar())
-            HandleMoveWorldportAck();
+        if (!_crossNodeReroute)
+        {
+            while (_player && _player->IsBeingTeleportedFar())
+                HandleMoveWorldportAck();
+        }
 
         ///- empty buyback items and save the player in the database
         // some save parts only correctly work in case player present in map/player_lists (pets, etc)
-        if (save)
+        // Cross-node reroute: skip SaveToDB — TeleportTo already saved the exit position
+        // via DirectExecute(CHAR_UPD_CHARACTER_POSITION).  Calling SaveToDB here would
+        // overwrite it with the old instance position.
+        if (save && !_crossNodeReroute)
         {
             uint32 eslot;
             for (int j = BUYBACK_SLOT_START; j < BUYBACK_SLOT_END; ++j)
