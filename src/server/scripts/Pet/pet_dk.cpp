@@ -250,13 +250,29 @@ struct npc_pet_dk_ghoul : public CombatAI
         if (!summoner || !summoner->IsPlayer())
             return;
 
-        Player* player = summoner->ToPlayer();
+        // Remember the owner's target so we can attack it after the rising stun expires.
+        if (Unit* victim = summoner->ToPlayer()->GetVictim())
+            _summonTargetGUID = victim->GetGUID();
+    }
 
-        if (Unit* victim = player->GetVictim())
+    void UpdateAI(uint32 diff) override
+    {
+        // While stunned (rising animation), don't run CombatAI - just wait.
+        if (me->HasUnitState(UNIT_STATE_STUNNED))
+            return;
+
+        // Once the stun expires, attack the saved target from summon time.
+        if (!_summonTargetGUID.IsEmpty())
         {
-            me->Attack(victim, true);
-            me->GetMotionMaster()->MoveChase(victim);
+            if (Unit* target = ObjectAccessor::GetUnit(*me, _summonTargetGUID))
+            {
+                if (target->IsAlive() && me->IsValidAttackTarget(target))
+                    AttackStart(target);
+            }
+            _summonTargetGUID.Clear();
         }
+
+        CombatAI::UpdateAI(diff);
     }
 
     void JustDied(Unit* /*who*/) override
@@ -264,6 +280,9 @@ struct npc_pet_dk_ghoul : public CombatAI
         if (me->IsGuardian() || me->IsSummon())
             me->ToTempSummon()->UnSummon();
     }
+
+private:
+    ObjectGuid _summonTargetGUID;
 };
 
 struct npc_pet_dk_risen_ally : public PossessedAI
@@ -283,36 +302,40 @@ struct npc_pet_dk_risen_ally : public PossessedAI
     }
 };
 
-struct npc_pet_dk_army_of_the_dead : public CombatAI
+struct npc_pet_dk_army_of_the_dead : public AggressorAI
 {
-    npc_pet_dk_army_of_the_dead(Creature* creature) : CombatAI(creature) { }
+    npc_pet_dk_army_of_the_dead(Creature* creature) : AggressorAI(creature) { }
 
-    void InitializeAI() override
+    // Restrict MoveInLineOfSight aggro to targets already fighting our owner,
+    // so ghouls don't pull extra packs on their own.
+    bool CanAIAttack(Unit const* target) const override
     {
-        CombatAI::InitializeAI();
-        ((Minion*)me)->SetFollowAngle(rand_norm() * 2 * M_PI);
+        if (!target)
+            return false;
+        Unit* owner = me->GetOwner();
+        if (owner && !target->IsInCombatWith(owner))
+            return false;
+        return AggressorAI::CanAIAttack(target);
     }
 
-    void IsSummonedBy(WorldObject* summoner) override
+    // Owner started attacking a target — engage immediately.
+    // We bypass OnOwnerCombatInteraction because CanStartAttack -> CanAIAttack
+    // may reject the target before combat refs are established.
+    void OwnerAttacked(Unit* target) override
     {
-        if (Unit* owner = summoner->ToUnit())
-        {
-            Unit* victim = owner->GetVictim();
+        if (!target || !me->IsAlive() || me->HasReactState(REACT_PASSIVE))
+            return;
+        if (me->IsValidAttackTarget(target))
+            AttackStart(target);
+    }
 
-            if (victim && me->IsValidAttackTarget(victim))
-            {
-                AttackStart(victim);
-            }
-            else
-            {
-                // If there is no valid target, attack the nearest enemy within 30m
-                if (Unit* nearest = me->SelectNearbyTarget(nullptr, 30.0f))
-                {
-                    if (me->IsValidAttackTarget(nearest))
-                        AttackStart(nearest);
-                }
-            }
-        }
+    // Owner was attacked — help defend.
+    void OwnerAttackedBy(Unit* attacker) override
+    {
+        if (!attacker || !me->IsAlive() || me->HasReactState(REACT_PASSIVE))
+            return;
+        if (me->IsValidAttackTarget(attacker))
+            AttackStart(attacker);
     }
 };
 

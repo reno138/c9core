@@ -70,7 +70,9 @@ enum MageSpells
     SPELL_MAGE_CHILLED_R2                        = 12485,
     SPELL_MAGE_CHILLED_R3                        = 12486,
     SPELL_MAGE_MANA_SURGE                        = 37445,
-    SPELL_MAGE_FROST_NOVA                        = 122
+    SPELL_MAGE_FROST_NOVA                        = 122,
+    SPELL_MAGE_LIVING_BOMB_R1                    = 44457,
+    SPELL_MAGE_MISSILE_BARRAGE_PROC              = 44401
 };
 
 enum MageSpellIcons
@@ -807,7 +809,7 @@ class spell_mage_master_of_elements : public AuraScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE });
+        return ValidateSpellInfo({ SPELL_MAGE_MASTER_OF_ELEMENTS_ENERGIZE, SPELL_MAGE_LIVING_BOMB_R1 });
     }
 
     bool CheckProc(ProcEventInfo& eventInfo)
@@ -823,7 +825,23 @@ class spell_mage_master_of_elements : public AuraScript
     {
         PreventDefaultAction();
 
-        int32 mana = eventInfo.GetDamageInfo()->GetSpellInfo()->CalcPowerCost(GetTarget(), eventInfo.GetDamageInfo()->GetSchoolMask());
+        SpellInfo const* spellInfo = eventInfo.GetDamageInfo()->GetSpellInfo();
+
+        // Living Bomb explosion has no mana cost, use the aura spell's cost instead
+        if (spellInfo->SpellFamilyName == SPELLFAMILY_MAGE
+            && spellInfo->SpellIconID == MAGE_ICON_LIVING_BOMB
+            && !spellInfo->ManaCost && !spellInfo->ManaCostPercentage)
+        {
+            uint8 rank = sSpellMgr->GetSpellRank(spellInfo->Id);
+            spellInfo = sSpellMgr->GetSpellInfo(
+                sSpellMgr->GetSpellWithRank(SPELL_MAGE_LIVING_BOMB_R1, rank));
+            if (!spellInfo)
+                return;
+        }
+
+        // Use base mana cost (ManaCost + ManaCostPercentage) without spell mods,
+        // as the talent refunds based on "base mana cost"
+        int32 mana = spellInfo->ManaCost + int32(CalculatePct(GetTarget()->GetCreateMana(), spellInfo->ManaCostPercentage));
         mana = CalculatePct(mana, aurEff->GetAmount());
 
         if (mana > 0)
@@ -930,8 +948,6 @@ class spell_mage_summon_water_elemental : public SpellScript
 };
 
 // 74396 - Fingers of Frost
-// Charge consumption is handled by the default proc system in PrepareProcToTrigger
-// This script only handles removing the aura state aura (44544) when the buff expires
 class spell_mage_fingers_of_frost : public AuraScript
 {
     PrepareAuraScript(spell_mage_fingers_of_frost);
@@ -941,6 +957,27 @@ class spell_mage_fingers_of_frost : public AuraScript
         return ValidateSpellInfo({ SPELL_MAGE_FINGERS_OF_FROST_AURASTATE_AURA });
     }
 
+    void PrepareProc(ProcEventInfo& eventInfo)
+    {
+        if (Spell const* spell = eventInfo.GetProcSpell())
+        {
+            bool isTriggered = spell->IsTriggered();
+            bool isCastPhase = (eventInfo.GetSpellPhaseMask() & PROC_SPELL_PHASE_CAST) != 0;
+            bool isChanneled = spell->GetSpellInfo()->IsChanneled();
+            bool prevent = false;
+
+            if (isTriggered)
+                prevent = false;
+            else if (isChanneled)
+                prevent = true;
+            else if (!isCastPhase)
+                prevent = true;
+
+            if (prevent)
+                PreventDefaultAction();
+        }
+    }
+
     void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
         GetTarget()->RemoveAurasDueToSpell(SPELL_MAGE_FINGERS_OF_FROST_AURASTATE_AURA);
@@ -948,6 +985,7 @@ class spell_mage_fingers_of_frost : public AuraScript
 
     void Register() override
     {
+        DoPrepareProc += AuraProcFn(spell_mage_fingers_of_frost::PrepareProc);
         AfterEffectRemove += AuraEffectRemoveFn(spell_mage_fingers_of_frost::OnRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
     }
 };
@@ -1181,7 +1219,7 @@ class spell_mage_glyph_of_polymorph : public AuraScript
             return;
 
         // Remove DoTs from target
-        target->RemoveAurasByType(SPELL_AURA_PERIODIC_DAMAGE, ObjectGuid::Empty, nullptr, true);
+        target->RemoveAurasByType(SPELL_AURA_PERIODIC_DAMAGE, ObjectGuid::Empty, target->GetAura(32409), true); // SW:D shall not be removed.
         target->RemoveAurasByType(SPELL_AURA_PERIODIC_DAMAGE_PERCENT, ObjectGuid::Empty, nullptr, true);
         target->RemoveAurasByType(SPELL_AURA_PERIODIC_LEECH, ObjectGuid::Empty, nullptr, true);
     }
@@ -1245,7 +1283,8 @@ class spell_mage_imp_blizzard : public AuraScript
             {
                 SPELL_MAGE_CHILLED_R1,
                 SPELL_MAGE_CHILLED_R2,
-                SPELL_MAGE_CHILLED_R3
+                SPELL_MAGE_CHILLED_R3,
+                SPELL_MAGE_FINGERS_OF_FROST_AURASTATE_AURA
             });
     }
 
@@ -1262,8 +1301,14 @@ class spell_mage_imp_blizzard : public AuraScript
             default: return;
         }
 
+        Unit* caster = GetTarget();
         if (Unit* target = eventInfo.GetProcTarget())
-            GetTarget()->CastSpell(target, spellId, true, nullptr, aurEff);
+            caster->CastSpell(target, spellId, true, nullptr, aurEff);
+
+        // Fingers of Frost: Blizzard chill effects can trigger FoF
+        if (AuraEffect const* fofTalent = caster->GetAuraEffectOfRankedSpell(SPELL_MAGE_FINGERS_OF_FROST, EFFECT_0))
+            if (roll_chance_i(fofTalent->GetAmount()))
+                caster->CastSpell(caster, SPELL_MAGE_FINGERS_OF_FROST_AURASTATE_AURA, true);
     }
 
     void Register() override
@@ -1472,6 +1517,31 @@ class spell_mage_ice_block : public SpellScript
     }
 };
 
+// 12536 - Clearcasting
+class spell_mage_clearcasting : public AuraScript
+{
+    PrepareAuraScript(spell_mage_clearcasting);
+
+    bool CheckProc(ProcEventInfo& eventInfo)
+    {
+        SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
+        if (!spellInfo)
+            return true;
+
+        // Missile Barrage has priority over Clearcasting for Arcane Missiles
+        if (spellInfo->SpellFamilyName == SPELLFAMILY_MAGE && (spellInfo->SpellFamilyFlags[0] & 0x800))
+            if (GetTarget()->HasAura(SPELL_MAGE_MISSILE_BARRAGE_PROC))
+                return false;
+
+        return true;
+    }
+
+    void Register() override
+    {
+        DoCheckProc += AuraCheckProcFn(spell_mage_clearcasting::CheckProc);
+    }
+};
+
 // 44401 - Missile Barrage (proc buff)
 class spell_mage_missile_barrage_proc : public AuraScript
 {
@@ -1485,6 +1555,10 @@ class spell_mage_missile_barrage_proc : public AuraScript
     bool CheckProc(ProcEventInfo& eventInfo)
     {
         Unit* caster = eventInfo.GetActor();
+
+        // Prevent double proc for Arcane Missiles
+        if (caster == eventInfo.GetActionTarget())
+            return false;
 
         // T8 4P bonus: chance to not consume the proc
         if (AuraEffect const* aurEff = caster->GetAuraEffect(SPELL_MAGE_T8_4P_BONUS, EFFECT_0))
@@ -1540,9 +1614,11 @@ void AddSC_mage_spell_scripts()
     RegisterSpellScript(spell_mage_glyph_of_polymorph);
     RegisterSpellScript(spell_mage_hot_streak);
     RegisterSpellScript(spell_mage_ice_barrier);
+    RegisterSpellScript(spell_mage_ice_barrier_aura);
     RegisterSpellScript(spell_mage_ice_block);
     RegisterSpellScript(spell_mage_imp_blizzard);
     RegisterSpellScript(spell_mage_imp_mana_gems);
+    RegisterSpellScript(spell_mage_clearcasting);
     RegisterSpellScript(spell_mage_missile_barrage);
     RegisterSpellScript(spell_mage_missile_barrage_proc);
     RegisterSpellScript(spell_mage_blast_wave);

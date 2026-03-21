@@ -225,8 +225,8 @@ bool WaypointMovementGenerator<Creature>::StartMove(Creature* creature)
     init.Launch();
 
     //Call for creature group update
-    if (creature->GetFormation() && creature->GetFormation()->GetLeader() == creature)
-        creature->GetFormation()->LeaderMoveTo(formationDest.x, formationDest.y, formationDest.z, node.move_type);
+    if (creature->GetFormation() && creature->GetFormation()->GetLeader() == creature && creature->GetFormation()->CanLeaderStartMoving())
+        creature->GetFormation()->LeaderStartedMoving();
 
     return true;
 }
@@ -417,7 +417,6 @@ void FlightPathMovementGenerator::DoFinalize(Player* player)
 
     if (player->m_taxi.empty())
     {
-        player->getHostileRefMgr().setOnlineOfflineState(true);
         // update z position to ground and orientation for landing point
         // this prevent cheating with landing  point at lags
         // when client side flight end early in comparison server side
@@ -476,7 +475,6 @@ void FlightPathMovementGenerator::DoReset(Player* player)
     if (player->pvpInfo.EndTimer)
         player->UpdatePvP(false, true); // PvP flag timer immediately ends when starting taxi
 
-    player->getHostileRefMgr().setOnlineOfflineState(false);
     player->AddUnitState(UNIT_STATE_IN_FLIGHT);
     player->SetUnitFlag(UNIT_FLAG_DISABLE_MOVE | UNIT_FLAG_TAXI_FLIGHT);
 

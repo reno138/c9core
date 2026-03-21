@@ -24,6 +24,7 @@
 #include "ObjectMgr.h"
 #include "Pet.h"
 #include "Player.h"
+#include "RaceMgr.h"
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
 #include "ScriptedCreature.h"
@@ -2093,9 +2094,9 @@ bool ConditionMgr::isConditionTypeValid(Condition* cond)
     }
     case CONDITION_RACE:
     {
-        if (!(cond->ConditionValue1 & RACEMASK_ALL_PLAYABLE))
+        if (!(cond->ConditionValue1 & sRaceMgr->GetPlayableRaceMask()))
         {
-            LOG_ERROR("sql.sql", "Race condition has non existing racemask ({}), skipped", cond->ConditionValue1 & ~RACEMASK_ALL_PLAYABLE);
+            LOG_ERROR("sql.sql", "Race condition has non existing racemask ({}), skipped", cond->ConditionValue1 & ~sRaceMgr->GetPlayableRaceMask());
             return false;
         }
 
