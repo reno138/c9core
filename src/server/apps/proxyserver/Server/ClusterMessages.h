@@ -173,6 +173,7 @@ namespace ClusterMsg
     static constexpr uint8 CLUSTER_BG_QUEUE_JOIN   = 0x13;
     static constexpr uint8 CLUSTER_BG_QUEUE_LEAVE  = 0x14;
     static constexpr uint8 CLUSTER_BG_CREATE_INST  = 0x15; ///< proxy → instance node
+    static constexpr uint8 SEAMLESS_REROUTE         = 0x23; ///< zone-based same-map reroute, no loading screen
     static constexpr uint8 CLUSTER_ARENA_RESULT    = 0x16;
     static constexpr uint8 CLUSTER_BG_INST_CREATED = 0x17; ///< instance node → proxy
     static constexpr uint8 CLUSTER_BG_READY        = 0x18; ///< proxy → player nodes

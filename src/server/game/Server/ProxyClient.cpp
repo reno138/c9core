@@ -1350,6 +1350,36 @@ void ProxyClient::SendRerouteToMap(uint64 playerGuid, uint32 mapId)
         LOG_INFO("server.worldserver", "ProxyClient::SendRerouteToMap GUID {:016X} map={}", playerGuid, mapId);
 }
 
+void ProxyClient::SendSeamlessReroute(uint64 playerGuid, std::string const& address, uint16 port)
+{
+    if (!_nc || !_connected)
+        return;
+
+    // Wire format for MSG_SEAMLESS_REROUTE:
+    //   [sourceNodeId:1][msgType:1][guid:8][addrLen:1][addr:n][port:2]
+    // No map/position - destination node loads from DB (same map, same position).
+    uint8 addrLen = static_cast<uint8>(std::min(address.size(), std::size_t(255)));
+
+    std::vector<uint8> buf;
+    buf.reserve(2 + 8 + 1 + addrLen + 2);
+
+    buf.push_back(_nodeId);
+    buf.push_back(MSG_SEAMLESS_REROUTE);
+
+    for (int i = 0; i < 8; ++i)
+        buf.push_back(static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF));
+
+    buf.push_back(addrLen);
+    buf.insert(buf.end(), address.begin(), address.begin() + addrLen);
+
+    buf.push_back(static_cast<uint8>(port & 0xFF));
+    buf.push_back(static_cast<uint8>(port >> 8));
+
+    natsConnection_Publish(_nc, "cluster.proxy", buf.data(), static_cast<int>(buf.size()));
+    LOG_INFO("server.worldserver",
+             "ProxyClient::SendSeamlessReroute GUID {:016X} -> {}:{}", playerGuid, address, port);
+}
+
 void ProxyClient::AnnounceOnline(Player const* player)
 {
     if (!_connected || !player)

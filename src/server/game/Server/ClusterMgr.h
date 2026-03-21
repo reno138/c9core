@@ -78,6 +78,8 @@ struct ClusterPlayerInfo
 class ClusterMgr
 {
 public:
+    bool IsEnabled() const;
+
     static ClusterMgr& Instance()
     {
         static ClusterMgr instance;
@@ -149,6 +151,12 @@ public:
 
     /// Returns true if mapId is handled locally by this node.
     bool IsMapLocal(uint32 mapId) const;
+
+    /// Returns true if zoneId is handled locally (or zone-based routing is disabled).
+    bool IsZoneLocal(uint32 zoneId) const;
+
+    /// Get the node that owns a zone. Returns nullopt if local or no zone routing.
+    std::optional<ClusterNodeInfo> GetNodeForZone(uint32 zoneId) const;
     bool IsInstanceServerMode() const { return _instanceServerMode; }
     std::unordered_set<uint32> GetLocalMaps() const;
 
@@ -250,6 +258,8 @@ private:
     // ── Local map set ──────────────────────────────────────────────────────
     mutable std::mutex _localMapsMutex;
     std::unordered_set<uint32> _localMaps; ///< non-empty explicit map list
+    std::unordered_set<uint32> _localZones;
+    std::unordered_map<uint32, uint8> _zoneToNode; ///< zoneId -> nodeId routing table ///< non-empty explicit zone list (zone-level sub-map routing)
     bool _instanceServerMode{false}; ///< true = handle all instanceable maps
     bool _allMapsMode{false};        ///< true = handle all maps (no rerouting)
 

@@ -292,6 +292,20 @@ void NatsBus::OnClusterProxyMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
             sProxyMgr.ReroutePlayer(guid, addr, port, mapId, rx, ry, rz, rori);
             break;
         }
+        // ── MSG_SEAMLESS_REROUTE (0x23) ── zone-based same-map, no loading screen
+        case ClusterMsg::SEAMLESS_REROUTE:
+        {
+            // guid(8) + addrLen(1) + addr[addrLen] + port(2)
+            if (rem < 11) break;
+            uint64 guid;    std::memcpy(&guid, p, 8);
+            uint8  addrLen = p[8];
+            if (rem < 9 + addrLen + 2) break;
+            std::string addr(reinterpret_cast<const char*>(p + 9), addrLen);
+            int addrEnd = 9 + addrLen;
+            uint16 port;    std::memcpy(&port, p + addrEnd, 2);
+            sProxyMgr.SeamlessReroutePlayer(guid, addr, port);
+            break;
+        }
         // ── MSG_CLUSTER_PLAYER_ONLINE (0x03) ─────────────────────────────────
         case ClusterMsg::CLUSTER_PLAYER_ONLINE:
         {

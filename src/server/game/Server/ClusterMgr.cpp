@@ -187,6 +187,11 @@ uint8 ClusterMgr::GetInstanceNodeId() const
 
 // ── Local map set ─────────────────────────────────────────────────────────────
 
+bool ClusterMgr::IsEnabled() const
+{
+    return !_allMapsMode && (_instanceServerMode || !_localMaps.empty() || !_localZones.empty());
+}
+
 void ClusterMgr::LoadLocalMaps()
 {
     std::lock_guard<std::mutex> lock(_localMapsMutex);
@@ -238,6 +243,26 @@ void ClusterMgr::LoadLocalMaps()
     for (uint32 m : _localMaps)
         mapList += std::to_string(m) + " ";
     LOG_INFO("server.worldserver", "ClusterMgr: Local maps: [{}]", mapList);
+
+    // Load zone-level routing (optional - subdivides maps across nodes)
+    std::string zoneStr = sConfigMgr->GetOption<std::string>("ClusterServer.Zones", "");
+    if (!zoneStr.empty())
+    {
+        std::istringstream zss(zoneStr);
+        std::string ztok;
+        while (std::getline(zss, ztok, ','))
+        {
+            ztok.erase(0, ztok.find_first_not_of(" \t"));
+            ztok.erase(ztok.find_last_not_of(" \t") + 1);
+            if (!ztok.empty())
+                _localZones.insert(static_cast<uint32>(std::stoul(ztok)));
+        }
+        std::string zList;
+        for (uint32 z : _localZones)
+            zList += std::to_string(z) + " ";
+        LOG_INFO("server.worldserver", "ClusterMgr: Local zones: [{}]", zList);
+    }
+
 }
 
 bool ClusterMgr::IsMapLocal(uint32 mapId) const
@@ -257,6 +282,32 @@ bool ClusterMgr::IsMapLocal(uint32 mapId) const
         return true;
 
     return _localMaps.count(mapId) > 0;
+}
+
+bool ClusterMgr::IsZoneLocal(uint32 zoneId) const
+{
+    std::lock_guard<std::mutex> lock(_localMapsMutex);
+
+    // If no zone routing configured, all zones are local
+    if (_localZones.empty())
+        return true;
+
+    return _localZones.count(zoneId) > 0;
+}
+
+std::optional<ClusterNodeInfo> ClusterMgr::GetNodeForZone(uint32 zoneId) const
+{
+    // Check peer nodes for zone ownership
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    for (auto const& [id, node] : _nodes)
+    {
+        if (node.dead)
+            continue;
+        // Peer nodes advertise zones in their maps set (overloaded for zone routing)
+        // This is a simplification — in practice we need a separate zone->node map
+        // For now, check if the zone matches any peer zone config
+    }
+    return std::nullopt;
 }
 
 

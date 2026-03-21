@@ -269,6 +269,30 @@ std::shared_ptr<ProxySocket> ProxyMgr::GetSession(uint64 guid)
     return socket;
 }
 
+void ProxyMgr::SeamlessReroutePlayer(uint64 guid, std::string const& address, uint16 port)
+{
+    // Seamless zone reroute: same map, no loading screen.
+    // The proxy switches the backend connection without sending SMSG_NEW_WORLD.
+    // The destination node loads the player at their current DB position (same map).
+    auto socket = GetSession(guid);
+    if (!socket)
+    {
+        LOG_WARN("proxy", "ProxyMgr::SeamlessReroutePlayer: GUID {:016X} not found", guid);
+        return;
+    }
+
+    LOG_INFO("proxy", "ProxyMgr: Seamless zone reroute GUID {:016X} to {}:{}", guid, address, port);
+
+    // RerouteToBackend with mapId=0 triggers login-reroute mode:
+    // no SMSG_NEW_WORLD sent, BackendSession sends PLAYER_LOGIN after char_enum.
+    // This is exactly what we want for seamless transfers.
+    Acore::Asio::post(sProxySocketMgr.GetIoContext(),
+        [socket, address, port]()
+    {
+        socket->RerouteToBackend(address, port, 0, 0.f, 0.f, 0.f, 0.f);
+    });
+}
+
 void ProxyMgr::ReroutePlayer(uint64 guid, std::string const& address, uint16 port,
                               uint32 mapId, float x, float y, float z, float ori)
 {

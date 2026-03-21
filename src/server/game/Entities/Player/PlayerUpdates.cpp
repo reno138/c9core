@@ -1359,6 +1359,32 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
 
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
+    // Cluster: seamless zone-based reroute if new zone is on another node
+    if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
+        && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId()))
+    {
+        // Save position to DB before reroute
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
+        stmt->SetData(0, GetPositionX());
+        stmt->SetData(1, GetPositionY());
+        stmt->SetData(2, GetPositionZ());
+        stmt->SetData(3, GetOrientation());
+        stmt->SetData(4, (uint16)GetMapId());
+        stmt->SetData(5, newZone);
+        stmt->SetData(6, GetGUID().GetCounter());
+        CharacterDatabase.DirectExecute(stmt);
+
+        auto destNode = sClusterMgr.GetNodeForZone(newZone);
+        if (destNode)
+        {
+            LOG_INFO("server.worldserver",
+                     "Player {} seamless zone reroute: zone {} -> node {} ({}:{})",
+                     GetName(), newZone, destNode->nodeId, destNode->address, destNode->port);
+            sProxyClient.SendSeamlessReroute(GetGUID().GetRawValue(),
+                                              destNode->address, destNode->port);
+        }
+    }
+
 
     // zone changed, so area changed as well, update it
     UpdateArea(newArea);

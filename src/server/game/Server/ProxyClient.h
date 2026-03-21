@@ -114,6 +114,9 @@ public:
     /// Ask the proxy to reroute this player to the node handling mapId.
     void SendRerouteToMap(uint64 playerGuid, uint32 mapId);
 
+    /// Seamless zone-based reroute: same map, no loading screen.
+    void SendSeamlessReroute(uint64 playerGuid, std::string const& address, uint16 port);
+
     /// Broadcast this player's unit state (HP/power/auras) to all other cluster nodes.
     /// Safe to call from the game update thread.
     void SendClusterUnitUpdate(Player* player);
@@ -347,6 +350,7 @@ private:
     static constexpr uint8 MSG_ANNOUNCE_ACK            = 0x20;
     static constexpr uint8 MSG_RA_COMMAND          = 0x21; ///< proxy -> all nodes: broadcast CLI command
     static constexpr uint8 MSG_RA_REPLY            = 0x22; ///< node -> proxy: CLI command output
+    static constexpr uint8 MSG_SEAMLESS_REROUTE      = 0x23; ///< zone-based same-map reroute, no loading screen
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
