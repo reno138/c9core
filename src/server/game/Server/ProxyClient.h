@@ -39,6 +39,8 @@ typedef struct __natsMsg          natsMsg;
 class Player;
 class WorldPacket;
 
+#include "PlayerTransfer.h"
+
 /**
  * @brief Worldserver-side NATS client for the cluster control channel.
  *
@@ -118,6 +120,12 @@ public:
 
     /// Seamless zone-based reroute: same map, no loading screen.
     void SendSeamlessReroute(uint64 playerGuid, std::string const& address, uint16 port);
+
+    /// Snapshot player state, send via NATS to destination node, then tell
+    /// proxy to reroute the client connection.
+    void SendPlayerTransfer(Player const* player, uint8 destNodeId,
+                            std::string const& address, uint16 port,
+                            uint32 mapId, float x, float y, float z, float ori);
 
     /// Broadcast this player's unit state (HP/power/auras) to all other cluster nodes.
     /// Safe to call from the game update thread.
@@ -353,6 +361,7 @@ private:
     static constexpr uint8 MSG_RA_COMMAND          = 0x21; ///< proxy -> all nodes: broadcast CLI command
     static constexpr uint8 MSG_RA_REPLY            = 0x22; ///< node -> proxy: CLI command output
     static constexpr uint8 MSG_SEAMLESS_REROUTE      = 0x23; ///< zone-based same-map reroute, no loading screen
+    static constexpr uint8 MSG_PLAYER_TRANSFER       = 0x24; ///< cross-node full player state transfer
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};

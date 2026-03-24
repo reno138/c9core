@@ -27,6 +27,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "ClusterMgr.h"
+#include "PlayerTransfer.h"
 #include "GameTime.h"
 #include "Config.h"
 #include "SpellAuras.h"
@@ -556,6 +557,20 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             if (payload.size() < 6u + cmdLen) break;
             std::string cmd(reinterpret_cast<const char*>(payload.data() + 6), cmdLen);
             HandleRACommand(reqId, cmd);
+            break;
+        }
+        case MSG_PLAYER_TRANSFER:
+        {
+            PlayerTransferData td;
+            if (DeserializeTransfer(payload.data(), payload.size(), td))
+            {
+                LOG_INFO("server.worldserver",
+                         "ProxyClient: Received player transfer GUID {:016X} map={}",
+                         td.guid, td.mapId);
+                sClusterMgr.StorePendingTransfer(td.guid, std::move(td));
+            }
+            else
+                LOG_ERROR("server.worldserver", "ProxyClient: Failed to deserialize player transfer");
             break;
         }
         default:
@@ -1417,6 +1432,29 @@ void ProxyClient::SendSeamlessReroute(uint64 playerGuid, std::string const& addr
     natsConnection_Publish(_nc, "cluster.proxy", buf.data(), static_cast<int>(buf.size()));
     LOG_INFO("server.worldserver",
              "ProxyClient::SendSeamlessReroute GUID {:016X} -> {}:{}", playerGuid, address, port);
+}
+
+void ProxyClient::SendPlayerTransfer(Player const* player, uint8 destNodeId,
+                                      std::string const& address, uint16 port,
+                                      uint32 mapId, float x, float y, float z, float ori)
+{
+    if (!_nc || !_connected) return;
+
+    // 1. Snapshot and serialize player state
+    PlayerTransferData td = SnapshotPlayer(player);
+    std::vector<uint8_t> payload = SerializeTransfer(td);
+
+    // 2. Send transfer data to destination node
+    PublishToNode(destNodeId, MSG_PLAYER_TRANSFER,
+                  payload.data(), static_cast<int>(payload.size()));
+
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Sent player transfer GUID {:016X} to node {} ({} bytes)",
+             player->GetGUID().GetRawValue(), destNodeId, payload.size());
+
+    // 3. Tell proxy to reroute client connection
+    SendReroute(player->GetGUID().GetRawValue(), address, port,
+                mapId, x, y, z, ori);
 }
 
 void ProxyClient::AnnounceOnline(Player const* player)
