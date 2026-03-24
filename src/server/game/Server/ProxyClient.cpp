@@ -83,8 +83,7 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
         return;
     }
 
-    // Announce ourselves to peer nodes; Update() will retry every 10s until acknowledged.
-    PublishAnnounce();
+    // Defer announce until World is fully initialized.
     _lastAnnounceRetryMs = getMSTime();
 
     LOG_INFO("server.worldserver",
@@ -687,7 +686,10 @@ void ProxyClient::Update()
         return;
     }
 
-    // Re-announce every 10 seconds until at least one peer sends MSG_ANNOUNCE_ACK.
+    // Don't announce until world is ready.
+    if (!_worldReady)
+        return;
+
     if (!_clusterRegistered && now - _lastAnnounceRetryMs >= ANNOUNCE_RETRY_INTERVAL_MS)
     {
         _lastAnnounceRetryMs = now;

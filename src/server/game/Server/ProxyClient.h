@@ -73,6 +73,8 @@ public:
     /// @param gameAddress  This node's LAN IP (from ClusterServer.GameAddress config) —
     ///                     sent in the registration payload so the proxy can match it
     ///                     against its configured node address table.
+    void SetWorldReady() { _worldReady = true; PublishAnnounce(); }
+
     void Initialize(std::string const& natsUrl, uint8 serverType,
                     uint16 gamePort, std::string const& gameAddress);
 
@@ -362,6 +364,7 @@ private:
     // ── Node identity ─────────────────────────────────────────────────────────
     uint8       _nodeId{ 0 };    ///< Config-derived node ID (ClusterServer.NodeId).
     uint8       _serverType{ 0 };
+    bool        _worldReady{ false };
     uint16      _gamePort{ 0 };
     std::string _gameAddress;    ///< Own LAN IP (sent in registration so proxy can match it)
     std::string _natsUrl;

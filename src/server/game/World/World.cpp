@@ -1049,6 +1049,9 @@ void World::SetInitialWorldSettings()
 
     METRIC_EVENT("events", "World initialized", "World Initialized In " + std::to_string(startupDuration / 60000) + " Minutes " + std::to_string((startupDuration % 60000) / 1000) + " Seconds");
 
+    if (sProxyClient.IsConnected())
+        sProxyClient.SetWorldReady();
+
     if (sConfigMgr->isDryRun())
     {
         sMapMgr->UnloadAll();
