@@ -52,6 +52,8 @@
 #include "ClusterMgr.h"
 #include "PlayerTransfer.h"
 #include "ProxyClient.h"
+#include "SharedPlayerCache.h"
+#include "SharedPlayerState.h"
 #include "SocialMgr.h"
 #include "SpellAuraEffects.h"
 #include "SpellAuras.h"
@@ -919,6 +921,56 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                         aura->SetDuration(ta.duration);
                 }
             }
+        }
+    }
+
+
+    // Cluster: activate player from shared cache if this is a transfer login.
+    // The cache has real-time state from the source node — fresher than DB.
+    if (sClusterMgr.IsEnabled())
+    {
+        auto cachedState = sSharedPlayerCache.Get(playerGuid.GetRawValue());
+        if (cachedState && cachedState->ownerNodeId != sProxyClient.GetNodeId())
+        {
+            LOG_INFO("server.worldserver", "Activating {} from shared cache (from node {})",
+                     pCurrChar->GetName(), cachedState->ownerNodeId);
+
+            // Apply cached position
+            pCurrChar->Relocate(cachedState->posX, cachedState->posY, cachedState->posZ, cachedState->posO);
+
+            // Apply cached vitals
+            pCurrChar->SetHealth(std::min(cachedState->health, pCurrChar->GetMaxHealth()));
+            if (cachedState->power <= pCurrChar->GetMaxPower(Powers(cachedState->powerType)))
+                pCurrChar->SetPower(Powers(cachedState->powerType), cachedState->power);
+
+            // Apply cached transport
+            if (cachedState->transportGuid != 0)
+            {
+                // Find transport on this node by iterating MotionTransports
+                // (transport GUIDs are consistent across nodes)
+                // For now, skip transport reattachment — it's complex and can be added later
+            }
+
+            // Apply cached auras
+            pCurrChar->RemoveAllAuras();
+            for (auto const& ca : cachedState->auras)
+            {
+                pCurrChar->AddAura(ca.spellId, pCurrChar);
+                if (Aura* a = pCurrChar->GetAura(ca.spellId))
+                {
+                    if (ca.stacks > 1) a->SetStackAmount(ca.stacks);
+                    if (ca.duration >= 0) a->SetDuration(ca.duration);
+                }
+            }
+
+            // Update cache ownership to this node
+            sSharedPlayerCache.UpdateFromPlayer(playerGuid.GetRawValue(), [](SharedPlayerState& s) {
+                s.ownerNodeId = sProxyClient.GetNodeId();
+                s.active = true;
+            });
+
+            // Broadcast updated ownership
+            sProxyClient.BroadcastPlayerStateFull(playerGuid.GetRawValue());
         }
     }
 

@@ -157,6 +157,12 @@ public:
     /// Returns true if zoneId is handled locally (or zone-based routing is disabled).
     bool IsZoneLocal(uint32 zoneId) const;
 
+
+    // Player ownership: GUID -> nodeId of current owner
+    void SetPlayerOwner(uint64 guid, uint8 nodeId);
+    uint8 GetPlayerOwner(uint64 guid) const;
+    bool IsPlayerOwnedLocally(uint64 guid) const;
+
     /// Get the node that owns a zone. Returns nullopt if local or no zone routing.
     std::optional<ClusterNodeInfo> GetNodeForZone(uint32 zoneId) const;
     bool IsInstanceServerMode() const { return _instanceServerMode; }
@@ -286,6 +292,11 @@ private:
     std::mutex _inviteMutex;
     std::unordered_map<uint64, CrossNodeInvite>   _pendingInvites;   ///< invitee_guid → invite
     std::vector<CrossNodeInviteResult>             _inviteResults;    ///< queued results
+
+
+    // ── Player ownership ──────────────────────────────────────────────────
+    mutable std::mutex _ownershipMutex;
+    std::unordered_map<uint64, uint8> _playerOwnership;
 
     // ── Pending player transfers ──────────────────────────────────────────
     mutable std::mutex _transferMutex;

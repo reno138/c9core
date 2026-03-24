@@ -16,6 +16,7 @@
  */
 
 #include "ClusterMgr.h"
+#include "ProxyClient.h"
 #include "Config.h"
 #include "Log.h"
 #include "DBCStores.h"
@@ -612,6 +613,29 @@ std::unordered_set<uint32> ClusterMgr::GetLocalZones() const
 {
     std::lock_guard<std::mutex> lock(_localMapsMutex);
     return _localZones;
+}
+
+
+// ── Player ownership ─────────────────────────────────────────────────────────
+
+void ClusterMgr::SetPlayerOwner(uint64 guid, uint8 nodeId)
+{
+    std::lock_guard<std::mutex> lock(_ownershipMutex);
+    _playerOwnership[guid] = nodeId;
+}
+
+uint8 ClusterMgr::GetPlayerOwner(uint64 guid) const
+{
+    std::lock_guard<std::mutex> lock(_ownershipMutex);
+    auto it = _playerOwnership.find(guid);
+    return (it != _playerOwnership.end()) ? it->second : 0;
+}
+
+bool ClusterMgr::IsPlayerOwnedLocally(uint64 guid) const
+{
+    std::lock_guard<std::mutex> lock(_ownershipMutex);
+    auto it = _playerOwnership.find(guid);
+    return (it != _playerOwnership.end()) ? (it->second == sProxyClient.GetNodeId()) : false;
 }
 
 // ── Pending player transfers ─────────────────────────────────────────────────

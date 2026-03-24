@@ -2912,6 +2912,13 @@ protected:
     uint32 m_zoneUpdateId;
     uint32 m_zoneUpdateTimer;
     bool m_pendingZoneReroute{ false };
+
+    // Zone transfer hysteresis
+    uint32 m_zoneTransferDwellZone{0};     ///< zone ID being dwelled in for potential transfer
+    uint32 m_zoneTransferDwellTimer{0};    ///< ms remaining before transfer triggers
+    uint32 m_zoneTransferCooldown{0};      ///< ms remaining before another transfer allowed
+    static constexpr uint32 ZONE_TRANSFER_DWELL_MS    = 2000;  ///< 2s dwell before transfer
+    static constexpr uint32 ZONE_TRANSFER_COOLDOWN_MS = 5000;  ///< 5s cooldown after transfer
     uint32 m_areaUpdateId;
     uint32 m_clusterUnitUpdateTimer{ 0 }; ///< sends/synthesizes cross-node unit stats every 2s
 

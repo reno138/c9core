@@ -607,6 +607,7 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
                 });
 
                 LOG_INFO("server.worldserver", "ProxyClient: Node {} claimed GUID {:016X}", claimingNode, guid);
+                sClusterMgr.SetPlayerOwner(guid, claimingNode);
             }
             break;
         }
@@ -623,6 +624,7 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
                 });
 
                 LOG_INFO("server.worldserver", "ProxyClient: Node {} released GUID {:016X}", releasingNode, guid);
+                sClusterMgr.SetPlayerOwner(guid, 0);
             }
             break;
         }

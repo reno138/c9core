@@ -515,6 +515,49 @@ void Player::Update(uint32 p_time)
         RemoveFromNotify(NOTIFY_VISIBILITY_CHANGED);
     }
 
+
+    // Cluster: zone transfer dwell timer
+    if (m_zoneTransferDwellTimer > 0)
+    {
+        if (m_zoneTransferDwellTimer <= p_time)
+        {
+            m_zoneTransferDwellTimer = 0;
+            uint32 targetZone = m_zoneTransferDwellZone;
+            m_zoneTransferDwellZone = 0;
+
+            auto destNode = sClusterMgr.GetNodeForZone(targetZone);
+            if (destNode && sProxyClient.IsConnected())
+            {
+                LOG_INFO("server.worldserver",
+                         "Player {} zone transfer: zone {} -> node {} ({}:{}) [dwell expired]",
+                         GetName(), targetZone, destNode->nodeId, destNode->address, destNode->port);
+
+                // 1. Broadcast full state so dest node has latest
+                sProxyClient.BroadcastPlayerStateFull(GetGUID().GetRawValue());
+
+                // 2. Claim ownership on destination
+                sProxyClient.ClaimPlayer(GetGUID().GetRawValue());
+
+                // 3. Tell proxy to seamlessly swap backends
+                sProxyClient.SendSeamlessReroute(GetGUID().GetRawValue(),
+                                                 destNode->address, destNode->port);
+
+                // 4. Set cooldown and freeze updates
+                m_zoneTransferCooldown = ZONE_TRANSFER_COOLDOWN_MS;
+                m_pendingZoneReroute = true;
+                return;
+            }
+        }
+        else
+        {
+            m_zoneTransferDwellTimer -= p_time;
+        }
+    }
+
+    // Decrement transfer cooldown
+    if (m_zoneTransferCooldown > 0)
+        m_zoneTransferCooldown = (m_zoneTransferCooldown > p_time) ? m_zoneTransferCooldown - p_time : 0;
+
     // Cluster: detect state changes for broadcast
     if (sClusterMgr.IsEnabled())
     {
@@ -1394,74 +1437,33 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     uint32 oldZoneUpdateId = m_zoneUpdateId;
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
-    // ──────────────────────────────────────────────────────────────────────
-    // CLUSTER ZONE REROUTE — DISABLED pending shared-state rewrite.
-    //
-    // TODO (shared-state rewrite):
-    //   1. All nodes hold all online player state in real-time via NATS.
-    //      Every HP tick, position update, buff change broadcasts to all nodes.
-    //      When a transfer happens, the destination node already has current state.
-    //
-    //   2. Zone transfer = just activate the cached player on the dest node
-    //      and deactivate on the source. No DB load, no login sequence,
-    //      no session teardown. Eliminates all stale-session issues.
-    //
-    //   3. BOUNDARY HYSTERESIS: Players running along zone borders will cross
-    //      back and forth rapidly. DO NOT transfer on every zone change.
-    //      Requirements:
-    //        - Dwell timer: player must remain in the new zone for N ms
-    //          (e.g. 2000ms) before triggering a transfer.
-    //        - Transfer cooldown: after a transfer completes, ignore zone
-    //          changes for M ms (e.g. 5000ms) to prevent ping-pong.
-    //        - Reset dwell timer if player crosses back before it fires.
-    //        - Track with m_zoneTransferDwellZone, m_zoneTransferDwellTimer,
-    //          m_zoneTransferCooldown on the Player object.
-    //
-    //   4. This architecture also enables future horizontal scaling:
-    //      multiple nodes running the same map, with cross-node player
-    //      visibility (each node can render players from other nodes
-    //      because it has their state in memory).
-    // ──────────────────────────────────────────────────────────────────────
-    if (false && sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
+    // Cluster: zone-based transfer with hysteresis (dwell timer + cooldown)
+    if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
         && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
+        && m_zoneTransferCooldown == 0
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
         && !GetVehicle() && !IsBeingTeleportedFar())
     {
-        auto destNode = sClusterMgr.GetNodeForZone(newZone);
-        if (destNode)
+        if (m_zoneTransferDwellZone != newZone)
         {
-            LOG_INFO("server.worldserver",
-                     "Player {} zone transfer via NATS: zone {} -> node {} ({}:{})",
-                     GetName(), newZone, destNode->nodeId, destNode->address, destNode->port);
-
-            // Save pet to DB synchronously so dest node can load it
-            if (Pet* pet = GetPet())
-                pet->SavePetToDB(PET_SAVE_AS_CURRENT);
-
-            bool isInitialLogin = (oldZoneUpdateId == uint32(-1));
-            if (isInitialLogin)
-            {
-                // First zone set after login — client is still loading.
-                // Use regular reroute (loading screen is already showing).
-                sProxyClient.SendPlayerTransfer(this, destNode->nodeId,
-                                                destNode->address, destNode->port,
-                                                GetMapId(), GetPositionX(), GetPositionY(),
-                                                GetPositionZ(), GetOrientation());
-            }
-            else
-            {
-                // In-world zone crossing — use seamless reroute (no loading screen)
-                sProxyClient.SendPlayerTransferSeamless(this, destNode->nodeId,
-                                                         destNode->address, destNode->port);
-            }
-
-            // Freeze player updates until proxy closes old backend
-            m_pendingZoneReroute = true;
-            return;
+            // Entered a new non-local zone — start dwell timer
+            m_zoneTransferDwellZone = newZone;
+            m_zoneTransferDwellTimer = ZONE_TRANSFER_DWELL_MS;
+            LOG_DEBUG("server.worldserver", "Player {} entered non-local zone {} — dwell timer started ({}ms)",
+                      GetName(), newZone, ZONE_TRANSFER_DWELL_MS);
+        }
+        // Dwell timer is decremented in Player::Update; transfer triggers when it expires
+    }
+    else
+    {
+        // Back in local zone or conditions not met — cancel dwell
+        if (m_zoneTransferDwellZone != 0)
+        {
+            LOG_DEBUG("server.worldserver", "Player {} returned to local zone — dwell cancelled", GetName());
+            m_zoneTransferDwellZone = 0;
+            m_zoneTransferDwellTimer = 0;
         }
     }
-
-
     // zone changed, so area changed as well, update it
     UpdateArea(newArea);
 
