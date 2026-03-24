@@ -29,6 +29,8 @@
 #include "SharedDefines.h"
 #include "Timer.h"
 #include <atomic>
+#include <mutex>
+#include <vector>
 #include <list>
 #include <map>
 #include <unordered_map>
@@ -241,6 +243,9 @@ public:
     [[nodiscard]] std::string const& GetRealmName() const override { return _realmName; } // pussywizard
     void SetRealmName(std::string name) override { _realmName = name; } // pussywizard
 
+    /// Queue a player GUID for deactivation on the next update tick (cluster transfer out).
+    void QueuePlayerDeactivation(uint64 guid) override;
+
 protected:
     void _UpdateGameTime();
     // callback for UpdateRealmCharacters
@@ -314,6 +319,9 @@ private:
      *
      * @param session The World Session that we are finalizing.
      */
+    std::mutex _deactivateQueueMutex;
+    std::vector<uint64> _playerDeactivateQueue;
+
     inline void FinalizePlayerWorldSession(WorldSession* session);
 };
 

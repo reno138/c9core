@@ -608,6 +608,17 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
 
                 LOG_INFO("server.worldserver", "ProxyClient: Node {} claimed GUID {:016X}", claimingNode, guid);
                 sClusterMgr.SetPlayerOwner(guid, claimingNode);
+
+                // If we own this player locally and another node is claiming it,
+                // queue deactivation for the world update thread
+                if (claimingNode != _nodeId)
+                {
+                    if (Player* player = ObjectAccessor::FindPlayer(ObjectGuid(guid)))
+                    {
+                        LOG_INFO("server.worldserver", "ProxyClient: Local player GUID {:016X} claimed by node {} -- queueing deactivation", guid, claimingNode);
+                        sWorld->QueuePlayerDeactivation(guid);
+                    }
+                }
             }
             break;
         }

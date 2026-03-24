@@ -45,6 +45,7 @@
 #include "ScriptMgr.h"
 #include "ProxyClient.h"
 #include "ClusterMgr.h"
+#include "SharedPlayerCache.h"
 #include "SocialMgr.h"
 #include "Transport.h"
 #include "Tokenize.h"
@@ -785,6 +786,15 @@ void WorldSession::LogoutPlayer(bool save)
         // the player may not be in the world when logging out
         // e.g if he got disconnected during a transfer to another map
         // calls to GetMap in this case may cause crashes
+        // Cluster: remove from shared cache and broadcast offline
+        if (sClusterMgr.IsEnabled())
+        {
+            uint64 logoutGuid = _player->GetGUID().GetRawValue();
+            sSharedPlayerCache.Remove(logoutGuid);
+            sClusterMgr.SetPlayerOwner(logoutGuid, 0);
+            LOG_DEBUG("server.worldserver", "Cluster: Removed GUID {:016X} from shared cache (logout)", logoutGuid);
+        }
+
         _player->CleanupsBeforeDelete();
         if (Map* _map = _player->FindMap())
         {

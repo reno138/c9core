@@ -1427,6 +1427,50 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
         ChatHandler(pCurrChar->GetSession()).SendNotification(LANG_GM_ON);
 
     m_playerLoading = false;
+
+    // Cluster: populate shared cache with this player's initial state
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+    {
+        SharedPlayerState state;
+        state.guid = pCurrChar->GetGUID().GetRawValue();
+        state.accountId = GetAccountId();
+        state.ownerNodeId = sProxyClient.GetNodeId();
+        state.active = true;
+        state.mapId = pCurrChar->GetMapId();
+        state.zoneId = pCurrChar->GetZoneId();
+        state.areaId = pCurrChar->GetAreaId();
+        state.posX = pCurrChar->GetPositionX();
+        state.posY = pCurrChar->GetPositionY();
+        state.posZ = pCurrChar->GetPositionZ();
+        state.posO = pCurrChar->GetOrientation();
+        state.health = pCurrChar->GetHealth();
+        state.maxHealth = pCurrChar->GetMaxHealth();
+        state.powerType = pCurrChar->getPowerType();
+        state.power = pCurrChar->GetPower(Powers(pCurrChar->getPowerType()));
+        state.maxPower = pCurrChar->GetMaxPower(Powers(pCurrChar->getPowerType()));
+        state.level = pCurrChar->GetLevel();
+        state.inCombat = pCurrChar->IsInCombat();
+        state.isDead = pCurrChar->isDead();
+        state.raceId = pCurrChar->getRace();
+        state.classId = pCurrChar->getClass();
+        state.gender = pCurrChar->getGender();
+        state.displayId = pCurrChar->GetDisplayId();
+        state.lastUpdateMs = getMSTime();
+
+        if (Pet* pet = pCurrChar->GetPet())
+        {
+            state.petEntry = pet->GetEntry();
+            state.petHealth = pet->GetHealth();
+            state.petMana = pet->GetPower(POWER_MANA);
+            state.petName = pet->GetName();
+        }
+
+        sSharedPlayerCache.StoreFullState(std::move(state));
+        sProxyClient.BroadcastPlayerStateFull(pCurrChar->GetGUID().GetRawValue());
+        sClusterMgr.SetPlayerOwner(pCurrChar->GetGUID().GetRawValue(), sProxyClient.GetNodeId());
+
+        LOG_INFO("server.worldserver", "Cluster: Published initial state for {} to shared cache", pCurrChar->GetName());
+    }
 }
 
 void WorldSession::HandlePlayerLoginToCharOutOfWorld(Player* /*pCurrChar*/)

@@ -1206,6 +1206,30 @@ void World::Update(uint32 diff)
         sWorldSessionMgr->UpdateSessions(diff);
     }
 
+    // Cluster: process player deactivations from ownership transfers.
+    // This runs after session updates but before map updates, so it is safe
+    // to remove players from maps here.
+    {
+        std::vector<uint64> deactivations;
+        {
+            std::lock_guard<std::mutex> lock(_deactivateQueueMutex);
+            deactivations.swap(_playerDeactivateQueue);
+        }
+        for (uint64 guid : deactivations)
+        {
+            if (Player* player = ObjectAccessor::FindPlayer(ObjectGuid(guid)))
+            {
+                LOG_INFO("server.worldserver", "World: Deactivating player {} (GUID {:016X}) -- ownership transferred to another node",
+                         player->GetName(), guid);
+                player->RemoveAllAuras();
+                if (WorldSession* session = player->GetSession())
+                    session->SetPlayer(nullptr);
+                if (player->IsInWorld())
+                    player->GetMap()->RemovePlayerFromMap(player, true);
+            }
+        }
+    }
+
     // ── Cluster: process cross-node group invite results ───────────────────────
     if (sProxyClient.IsConnected())
     {
@@ -1902,6 +1926,12 @@ void World::LoadDBVersion()
 
     if (_dbVersion.empty())
         _dbVersion = "Unknown world database.";
+}
+
+void World::QueuePlayerDeactivation(uint64 guid)
+{
+    std::lock_guard<std::mutex> lock(_deactivateQueueMutex);
+    _playerDeactivateQueue.push_back(guid);
 }
 
 void World::UpdateAreaDependentAuras()

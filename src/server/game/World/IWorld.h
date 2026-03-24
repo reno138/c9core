@@ -110,6 +110,7 @@ public:
     virtual void LoadDBVersion() = 0;
     [[nodiscard]] virtual char const* GetDBVersion() const = 0;
     virtual void UpdateAreaDependentAuras() = 0;
+    virtual void QueuePlayerDeactivation(uint64 guid) = 0;
     [[nodiscard]] virtual uint32 GetCleaningFlags() const = 0;
     virtual void   SetCleaningFlags(uint32 flags) = 0;
     virtual void   ResetEventSeasonalQuests(uint16 event_id) = 0;
