@@ -396,6 +396,15 @@ void BackendSession::DispatchToClient()
     if (_opcode == SMSG_LOGIN_VERIFY_WORLD_OPCODE)
         owner->SetClientInWorld();
 
+    // When the backend sends SMSG_LOGOUT_COMPLETE, the client returns to the character
+    // select screen.  Reset proxy state so the next CMSG_PLAYER_LOGIN is treated as a
+    // fresh login rather than a reroute or stale in-world state.
+    if (_opcode == SMSG_LOGOUT_COMPLETE_OPCODE)
+    {
+        LOG_INFO("proxy", "BackendSession: SMSG_LOGOUT_COMPLETE for GUID {:016X} — resetting proxy state", _playerGuid);
+        owner->SetClientOutOfWorld();
+    }
+
     // Pass the plaintext header bytes and payload to ProxySocket.
     // ProxySocket will re-encrypt the header for the client direction.
     owner->QueuePacketForClient(_plainHeader, _headerLen, _payloadBuffer);

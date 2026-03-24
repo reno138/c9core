@@ -161,6 +161,7 @@ public:
     /// Called by BackendSession when SMSG_LOGIN_VERIFY_WORLD is forwarded to the client
     /// (either directly or as a rewrite).  Marks this session as "client has entered world".
     void SetClientInWorld() { _clientInWorld = true; }
+    void SetClientOutOfWorld() { _clientInWorld = false; }
 
     /// True if the client has already entered the world (received SMSG_LOGIN_VERIFY_WORLD).
     bool IsClientInWorld() const { return _clientInWorld; }
