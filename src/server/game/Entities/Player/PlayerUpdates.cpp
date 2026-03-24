@@ -1384,6 +1384,10 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
                      GetName(), newZone, destNode->nodeId, destNode->address, destNode->port);
             sProxyClient.SendSeamlessReroute(GetGUID().GetRawValue(),
                                               destNode->address, destNode->port);
+
+            // Clean up this session so the destination node can create a fresh one.
+            // LogoutPlayer saves and removes the player from the world on this node.
+            GetSession()->LogoutPlayer(true);
         }
     }
 
