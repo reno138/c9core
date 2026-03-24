@@ -1368,7 +1368,7 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
     // Cluster: zone-based reroute via NATS player transfer
-    if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
+    if (false && sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
         && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
         && !GetVehicle() && !IsBeingTeleportedFar())
