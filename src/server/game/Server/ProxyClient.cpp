@@ -323,6 +323,7 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         std::memcpy(&mapId, d + off + i * 4, 4);
         info.maps.insert(mapId);
     }
+    off += mapCount * 4;  // advance past map data
 
     // Parse zone data: [zoneCount:2][zoneIds:4*n]
     if (n >= off + 2)
