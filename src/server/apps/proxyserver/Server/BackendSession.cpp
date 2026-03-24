@@ -405,6 +405,14 @@ void BackendSession::DispatchToClient()
         owner->SetClientOutOfWorld();
     }
 
+    // SMSG_CHARACTER_LOGIN_FAILED means the login was rejected — client returns to
+    // character select.  Same state reset needed.
+    if (_opcode == SMSG_CHARACTER_LOGIN_FAILED_OPCODE)
+    {
+        LOG_INFO("proxy", "BackendSession: SMSG_CHARACTER_LOGIN_FAILED for GUID {:016X} — resetting proxy state", _playerGuid);
+        owner->SetClientOutOfWorld();
+    }
+
     // Pass the plaintext header bytes and payload to ProxySocket.
     // ProxySocket will re-encrypt the header for the client direction.
     owner->QueuePacketForClient(_plainHeader, _headerLen, _payloadBuffer);

@@ -147,6 +147,7 @@ private:
     static constexpr uint16 SMSG_LOGIN_VERIFY_WORLD_OPCODE = 0x236;
     static constexpr uint16 SMSG_NEW_WORLD_OPCODE          = 0x03E;
     static constexpr uint16 SMSG_LOGOUT_COMPLETE_OPCODE  = 0x04D;
+    static constexpr uint16 SMSG_CHARACTER_LOGIN_FAILED_OPCODE = 0x041;
     static constexpr uint32 WOTLK_CLIENT_BUILD             = 12340;
     static constexpr uint8  AUTH_OK_CODE                   = 0x0C;
 
