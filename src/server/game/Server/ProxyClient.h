@@ -233,6 +233,18 @@ public:
     /// Send a LFG_RELAY_RESP to a specific node (master → proxy → target node).
     void SendLFGRelayResponse(uint8 targetNodeId, uint8 innerType, std::vector<uint8> const& payload);
 
+    /// Broadcast a delta state update for a local player to all nodes.
+    void BroadcastPlayerStateDelta(uint64 guid, uint8 fieldMask);
+
+    /// Broadcast full state for a player (on login or ownership claim).
+    void BroadcastPlayerStateFull(uint64 guid);
+
+    /// Claim ownership of a player (destination node during transfer).
+    void ClaimPlayer(uint64 guid);
+
+    /// Release ownership of a player (source node during transfer).
+    void ReleasePlayer(uint64 guid);
+
 private:
     ProxyClient() = default;
     ~ProxyClient() = default;
@@ -367,6 +379,11 @@ private:
     static constexpr uint8 MSG_RA_REPLY            = 0x22; ///< node -> proxy: CLI command output
     static constexpr uint8 MSG_SEAMLESS_REROUTE      = 0x23; ///< zone-based same-map reroute, no loading screen
     static constexpr uint8 MSG_PLAYER_TRANSFER       = 0x24; ///< cross-node full player state transfer
+
+    static constexpr uint8 MSG_PLAYER_STATE_DELTA    = 0x25; ///< delta state update (broadcast)
+    static constexpr uint8 MSG_PLAYER_STATE_FULL     = 0x26; ///< full state sync (broadcast on login/transfer)
+    static constexpr uint8 MSG_PLAYER_CLAIM          = 0x27; ///< ownership claim (broadcast)
+    static constexpr uint8 MSG_PLAYER_RELEASE        = 0x28; ///< ownership release (broadcast)
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};

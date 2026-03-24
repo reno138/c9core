@@ -28,6 +28,8 @@
 #include "BattlegroundQueue.h"
 #include "ClusterMgr.h"
 #include "PlayerTransfer.h"
+#include "SharedPlayerCache.h"
+#include "PlayerStateSync.h"
 #include "GameTime.h"
 #include "Config.h"
 #include "SpellAuras.h"
@@ -573,6 +575,57 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
                 LOG_ERROR("server.worldserver", "ProxyClient: Failed to deserialize player transfer");
             break;
         }
+        case MSG_PLAYER_STATE_DELTA:
+        {
+            uint64 guid;
+            uint8 mask;
+            SharedPlayerState delta;
+            if (DeserializeStateDelta(payload.data(), static_cast<int>(payload.size()), guid, mask, delta))
+                sSharedPlayerCache.ApplyDelta(guid, mask, delta);
+            break;
+        }
+        case MSG_PLAYER_STATE_FULL:
+        {
+            SharedPlayerState state;
+            if (DeserializeFullState(payload.data(), static_cast<int>(payload.size()), state))
+            {
+                LOG_DEBUG("server.worldserver", "ProxyClient: Received full state for GUID {:016X} from node {}", state.guid, state.ownerNodeId);
+                sSharedPlayerCache.StoreFullState(std::move(state));
+            }
+            break;
+        }
+        case MSG_PLAYER_CLAIM:
+        {
+            if (payload.size() >= 9)
+            {
+                uint64 guid = 0;
+                for (int i = 0; i < 8; ++i) guid |= uint64(payload[i]) << (i * 8);
+                uint8 claimingNode = payload[8];
+
+                sSharedPlayerCache.UpdateFromPlayer(guid, [claimingNode](SharedPlayerState& s) {
+                    s.ownerNodeId = claimingNode;
+                });
+
+                LOG_INFO("server.worldserver", "ProxyClient: Node {} claimed GUID {:016X}", claimingNode, guid);
+            }
+            break;
+        }
+        case MSG_PLAYER_RELEASE:
+        {
+            if (payload.size() >= 9)
+            {
+                uint64 guid = 0;
+                for (int i = 0; i < 8; ++i) guid |= uint64(payload[i]) << (i * 8);
+                uint8 releasingNode = payload[8];
+
+                sSharedPlayerCache.UpdateFromPlayer(guid, [](SharedPlayerState& s) {
+                    s.active = false;
+                });
+
+                LOG_INFO("server.worldserver", "ProxyClient: Node {} released GUID {:016X}", releasingNode, guid);
+            }
+            break;
+        }
         default:
             LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming msgType 0x{:02X}", msgType);
             break;
@@ -674,6 +727,55 @@ bool ProxyClient::QueryBestInstanceAddress(std::string& outAddr, uint16& outPort
 }
 
 // ── Periodic updates (MSG_NODE_STATUS / MSG_NODE_REFRESH) ────────────────────
+
+
+// ── Shared Player State NATS methods ──────────────────────────────────────────
+
+void ProxyClient::BroadcastPlayerStateDelta(uint64 guid, uint8 fieldMask)
+{
+    if (!_nc || !_connected) return;
+    auto state = sSharedPlayerCache.Get(guid);
+    if (!state) return;
+
+    std::vector<uint8> payload = SerializeStateDelta(guid, fieldMask, *state);
+    PublishBroadcast(MSG_PLAYER_STATE_DELTA, payload.data(), static_cast<int>(payload.size()));
+}
+
+void ProxyClient::BroadcastPlayerStateFull(uint64 guid)
+{
+    if (!_nc || !_connected) return;
+    auto state = sSharedPlayerCache.Get(guid);
+    if (!state) return;
+
+    std::vector<uint8> payload = SerializeFullState(*state);
+    PublishBroadcast(MSG_PLAYER_STATE_FULL, payload.data(), static_cast<int>(payload.size()));
+
+    LOG_DEBUG("server.worldserver", "ProxyClient: Broadcast full state for GUID {:016X} ({} bytes)", guid, payload.size());
+}
+
+void ProxyClient::ClaimPlayer(uint64 guid)
+{
+    if (!_nc || !_connected) return;
+
+    uint8 payload[9];
+    for (int i = 0; i < 8; ++i) payload[i] = static_cast<uint8>((guid >> (i * 8)) & 0xFF);
+    payload[8] = _nodeId;
+
+    PublishBroadcast(MSG_PLAYER_CLAIM, payload, 9);
+    LOG_INFO("server.worldserver", "ProxyClient: Claiming ownership of GUID {:016X} for node {}", guid, _nodeId);
+}
+
+void ProxyClient::ReleasePlayer(uint64 guid)
+{
+    if (!_nc || !_connected) return;
+
+    uint8 payload[9];
+    for (int i = 0; i < 8; ++i) payload[i] = static_cast<uint8>((guid >> (i * 8)) & 0xFF);
+    payload[8] = _nodeId;
+
+    PublishBroadcast(MSG_PLAYER_RELEASE, payload, 9);
+    LOG_INFO("server.worldserver", "ProxyClient: Releasing ownership of GUID {:016X} from node {}", guid, _nodeId);
+}
 
 void ProxyClient::Update()
 {
