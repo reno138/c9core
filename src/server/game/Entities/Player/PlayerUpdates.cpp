@@ -1367,7 +1367,34 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     uint32 oldZoneUpdateId = m_zoneUpdateId;
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
-    // Cluster: zone-based reroute via NATS player transfer
+    // ──────────────────────────────────────────────────────────────────────
+    // CLUSTER ZONE REROUTE — DISABLED pending shared-state rewrite.
+    //
+    // TODO (shared-state rewrite):
+    //   1. All nodes hold all online player state in real-time via NATS.
+    //      Every HP tick, position update, buff change broadcasts to all nodes.
+    //      When a transfer happens, the destination node already has current state.
+    //
+    //   2. Zone transfer = just activate the cached player on the dest node
+    //      and deactivate on the source. No DB load, no login sequence,
+    //      no session teardown. Eliminates all stale-session issues.
+    //
+    //   3. BOUNDARY HYSTERESIS: Players running along zone borders will cross
+    //      back and forth rapidly. DO NOT transfer on every zone change.
+    //      Requirements:
+    //        - Dwell timer: player must remain in the new zone for N ms
+    //          (e.g. 2000ms) before triggering a transfer.
+    //        - Transfer cooldown: after a transfer completes, ignore zone
+    //          changes for M ms (e.g. 5000ms) to prevent ping-pong.
+    //        - Reset dwell timer if player crosses back before it fires.
+    //        - Track with m_zoneTransferDwellZone, m_zoneTransferDwellTimer,
+    //          m_zoneTransferCooldown on the Player object.
+    //
+    //   4. This architecture also enables future horizontal scaling:
+    //      multiple nodes running the same map, with cross-node player
+    //      visibility (each node can render players from other nodes
+    //      because it has their state in memory).
+    // ──────────────────────────────────────────────────────────────────────
     if (false && sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
         && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
