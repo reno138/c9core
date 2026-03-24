@@ -32,6 +32,7 @@
 #include "Packet.h"
 #include "SharedDefines.h"
 #include "World.h"
+#include "PlayerTransfer.h"
 #include <map>
 #include <memory>
 #include <utility>
@@ -1275,6 +1276,13 @@ private:
     uint32 _timeSyncTimer;
 
     uint32 _orderCounter;
+
+    // Cluster: deferred pet transfer state for cross-node reroute
+    TransferPetInfo _pendingPetTransfer{};
+public:
+    TransferPetInfo const& GetPendingPetTransfer() const { return _pendingPetTransfer; }
+    void ClearPendingPetTransfer() { _pendingPetTransfer = {}; }
+private:
 
     WorldSession(WorldSession const& right) = delete;
     WorldSession& operator=(WorldSession const& right) = delete;

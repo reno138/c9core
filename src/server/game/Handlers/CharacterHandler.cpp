@@ -50,6 +50,7 @@
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "ClusterMgr.h"
+#include "PlayerTransfer.h"
 #include "ProxyClient.h"
 #include "SocialMgr.h"
 #include "SpellAuraEffects.h"
@@ -847,6 +848,80 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     }
 
     pCurrChar->GetMotionMaster()->Initialize();
+
+    // Cluster: apply pending NATS transfer state if this login was triggered
+    // by a cross-node reroute. The transfer has fresher HP/mana/position/buffs
+    // than the DB (which may have stale async-saved data).
+    if (sClusterMgr.IsEnabled())
+    {
+        auto transfer = sClusterMgr.TakePendingTransfer(playerGuid.GetRawValue());
+        if (transfer)
+        {
+            LOG_INFO("server.worldserver",
+                     "Applying NATS transfer for {} from map {} pos ({:.1f},{:.1f},{:.1f})",
+                     pCurrChar->GetName(), transfer->mapId, transfer->posX, transfer->posY, transfer->posZ);
+
+            // Position
+            pCurrChar->Relocate(transfer->posX, transfer->posY, transfer->posZ, transfer->orientation);
+
+            // Vitals
+            pCurrChar->SetHealth(std::min(transfer->health, pCurrChar->GetMaxHealth()));
+            if (transfer->power <= pCurrChar->GetMaxPower(Powers(transfer->powerType)))
+                pCurrChar->SetPower(Powers(transfer->powerType), transfer->power);
+
+            // Transport - find matching transport on this node and attach
+            if (transfer->transport.onTransport && transfer->transport.entry != 0)
+            {
+                // Iterate motion transports to find one with matching GO entry
+                MotionTransport* foundTransport = nullptr;
+                {
+                    auto& container = HashMapHolder<MotionTransport>::GetContainer();
+                    std::shared_lock lock(*HashMapHolder<MotionTransport>::GetLock());
+                    for (auto const& pair : container)
+                    {
+                        if (pair.second->GetEntry() == transfer->transport.entry)
+                        {
+                            foundTransport = pair.second;
+                            break;
+                        }
+                    }
+                }
+                if (foundTransport)
+                {
+                    float tx = transfer->transport.offsetX;
+                    float ty = transfer->transport.offsetY;
+                    float tz = transfer->transport.offsetZ;
+                    float to = transfer->transport.offsetO;
+                    foundTransport->AddPassenger(pCurrChar, false);
+                    pCurrChar->m_movementInfo.transport.guid = foundTransport->GetGUID();
+                    pCurrChar->m_movementInfo.transport.pos.Relocate(tx, ty, tz, to);
+                    pCurrChar->m_movementInfo.AddMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+                    // Calculate world position from transport offset
+                    float wx = tx, wy = ty, wz = tz, wo = to;
+                    foundTransport->CalculatePassengerPosition(wx, wy, wz, &wo);
+                    pCurrChar->Relocate(wx, wy, wz, wo);
+                }
+            }
+
+            // Store pet transfer for deferred application (after pet spawns)
+            _pendingPetTransfer = transfer->pet;
+
+            // Auras - remove DB-loaded auras and reapply from transfer snapshot
+            pCurrChar->RemoveAllAuras();
+            for (auto const& ta : transfer->auras)
+            {
+                pCurrChar->AddAura(ta.spellId, pCurrChar);
+                if (Aura* aura = pCurrChar->GetAura(ta.spellId))
+                {
+                    if (ta.stackAmount > 1)
+                        aura->SetStackAmount(ta.stackAmount);
+                    if (ta.duration >= 0)
+                        aura->SetDuration(ta.duration);
+                }
+            }
+        }
+    }
+
     pCurrChar->SendDungeonDifficulty(false);
 
     WorldPacket data(SMSG_LOGIN_VERIFY_WORLD, 20);
