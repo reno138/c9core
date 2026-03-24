@@ -613,3 +613,24 @@ std::unordered_set<uint32> ClusterMgr::GetLocalZones() const
     std::lock_guard<std::mutex> lock(_localMapsMutex);
     return _localZones;
 }
+
+// ── Pending player transfers ─────────────────────────────────────────────────
+
+void ClusterMgr::StorePendingTransfer(uint64 guid, PlayerTransferData&& data)
+{
+    std::lock_guard<std::mutex> lock(_transferMutex);
+    LOG_INFO("server.worldserver", "ClusterMgr: Stored pending transfer for GUID {:016X} (map {})",
+             guid, data.mapId);
+    _pendingTransfers[guid] = std::move(data);
+}
+
+std::optional<PlayerTransferData> ClusterMgr::TakePendingTransfer(uint64 guid)
+{
+    std::lock_guard<std::mutex> lock(_transferMutex);
+    auto it = _pendingTransfers.find(guid);
+    if (it == _pendingTransfers.end())
+        return std::nullopt;
+    PlayerTransferData data = std::move(it->second);
+    _pendingTransfers.erase(it);
+    return data;
+}

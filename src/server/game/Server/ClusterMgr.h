@@ -19,6 +19,7 @@
 #define ClusterMgr_h__
 
 #include "Define.h"
+#include "PlayerTransfer.h"
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -245,6 +246,14 @@ public:
     /// Retrieve cached unit state.  Returns false if guid not found.
     bool GetUnitState(uint64 guid, ClusterUnitState& out) const;
 
+    // ── Pending player transfers (NATS callback → login handler) ─────────────
+
+    /// Store a player transfer snapshot received from another node.
+    void StorePendingTransfer(uint64 guid, PlayerTransferData&& data);
+
+    /// Retrieve and remove a pending transfer (one-shot consumption).
+    std::optional<PlayerTransferData> TakePendingTransfer(uint64 guid);
+
 private:
     ClusterMgr() = default;
 
@@ -277,6 +286,10 @@ private:
     std::mutex _inviteMutex;
     std::unordered_map<uint64, CrossNodeInvite>   _pendingInvites;   ///< invitee_guid → invite
     std::vector<CrossNodeInviteResult>             _inviteResults;    ///< queued results
+
+    // ── Pending player transfers ──────────────────────────────────────────
+    mutable std::mutex _transferMutex;
+    std::unordered_map<uint64, PlayerTransferData> _pendingTransfers;
 };
 
 #define sClusterMgr ClusterMgr::Instance()
