@@ -1380,11 +1380,26 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
                      "Player {} zone transfer via NATS: zone {} -> node {} ({}:{})",
                      GetName(), newZone, destNode->nodeId, destNode->address, destNode->port);
 
-            // Snapshot player state and send via NATS to dest node, then reroute proxy
-            sProxyClient.SendPlayerTransfer(this, destNode->nodeId,
-                                            destNode->address, destNode->port,
-                                            GetMapId(), GetPositionX(), GetPositionY(),
-                                            GetPositionZ(), GetOrientation());
+            // Save pet to DB synchronously so dest node can load it
+            if (Pet* pet = GetPet())
+                pet->SavePetToDB(PET_SAVE_AS_CURRENT);
+
+            bool isInitialLogin = (oldZoneUpdateId == uint32(-1));
+            if (isInitialLogin)
+            {
+                // First zone set after login — client is still loading.
+                // Use regular reroute (loading screen is already showing).
+                sProxyClient.SendPlayerTransfer(this, destNode->nodeId,
+                                                destNode->address, destNode->port,
+                                                GetMapId(), GetPositionX(), GetPositionY(),
+                                                GetPositionZ(), GetOrientation());
+            }
+            else
+            {
+                // In-world zone crossing — use seamless reroute (no loading screen)
+                sProxyClient.SendPlayerTransferSeamless(this, destNode->nodeId,
+                                                         destNode->address, destNode->port);
+            }
 
             // Freeze player updates until proxy closes old backend
             m_pendingZoneReroute = true;

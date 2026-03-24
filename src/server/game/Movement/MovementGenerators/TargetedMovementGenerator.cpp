@@ -715,23 +715,18 @@ bool FollowMovementGenerator<T>::DoUpdate(T* owner, uint32 time_diff)
         else
             i_path->Clear();
 
-        // On transports, collision and pathfinding use stale world coords.
-        // Skip repositioning entirely — pet stays where follow last placed it
-        // and moves with the transport as a passenger.
+        // On transports, collision checks use stale world coords -- just offset directly.
         if (target->GetTransport())
         {
-            if (!owner->IsStopped())
-                owner->StopMoving();
-            return true;
+            float followDist = owner->GetCombatReach() + _range;
+            float followAngle = target->GetOrientation() + _angle.RelativeAngle + M_PI; // behind
+            targetPosition.m_positionX += followDist * cos(followAngle);
+            targetPosition.m_positionY += followDist * std::sin(followAngle);
         }
-
-        target->MovePositionToFirstCollision(targetPosition, owner->GetCombatReach() + _range, target->ToAbsoluteAngle(_angle.RelativeAngle) - target->GetOrientation());
-
-
-
-
-
-
+        else
+        {
+            target->MovePositionToFirstCollision(targetPosition, owner->GetCombatReach() + _range, target->ToAbsoluteAngle(_angle.RelativeAngle) - target->GetOrientation());
+        }
 
 
         float x, y, z;

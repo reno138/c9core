@@ -1457,6 +1457,28 @@ void ProxyClient::SendPlayerTransfer(Player const* player, uint8 destNodeId,
                 mapId, x, y, z, ori);
 }
 
+void ProxyClient::SendPlayerTransferSeamless(Player const* player, uint8 destNodeId,
+                                              const std::string& address, uint16 port)
+{
+    if (!_nc || !_connected) return;
+
+    // 1. Snapshot and serialize player state
+    PlayerTransferData td = SnapshotPlayer(player);
+    std::vector<uint8_t> payload = SerializeTransfer(td);
+
+    // 2. Send transfer data to destination node via NATS
+    PublishToNode(destNodeId, MSG_PLAYER_TRANSFER,
+                  payload.data(), static_cast<int>(payload.size()));
+
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Sent seamless player transfer GUID {:016X} to node {} ({} bytes)",
+             player->GetGUID().GetRawValue(), destNodeId, payload.size());
+
+    // 3. Tell proxy to do a seamless backend swap (no loading screen)
+    SendSeamlessReroute(player->GetGUID().GetRawValue(), address, port);
+}
+
+
 void ProxyClient::AnnounceOnline(Player const* player)
 {
     if (!_connected || !player)

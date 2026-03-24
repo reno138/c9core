@@ -127,6 +127,11 @@ public:
                             std::string const& address, uint16 port,
                             uint32 mapId, float x, float y, float z, float ori);
 
+    /// Same as SendPlayerTransfer but uses seamless reroute (no loading screen).
+    /// Use for zone-level transfers within the same continent.
+    void SendPlayerTransferSeamless(Player const* player, uint8 destNodeId,
+                                     std::string const& address, uint16 port);
+
     /// Broadcast this player's unit state (HP/power/auras) to all other cluster nodes.
     /// Safe to call from the game update thread.
     void SendClusterUnitUpdate(Player* player);
