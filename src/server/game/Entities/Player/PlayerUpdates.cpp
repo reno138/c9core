@@ -26,6 +26,8 @@
 #include "Group.h"
 #include "ClusterMgr.h"
 #include "ProxyClient.h"
+#include "SharedPlayerCache.h"
+#include "Transport.h"
 #include "WorldPacket.h"
 #include "Guild.h"
 #include "InstanceScript.h"
@@ -512,6 +514,31 @@ void Player::Update(uint32 p_time)
         m_delayed_unit_relocation_timer = 0;
         RemoveFromNotify(NOTIFY_VISIBILITY_CHANGED);
     }
+
+    // Cluster: detect state changes for broadcast
+    if (sClusterMgr.IsEnabled())
+    {
+        MarkClusterStateDirty(STATE_FIELD_POSITION); // always — movement is continuous
+        if (GetHealth() != m_clusterLastHealth)
+        {
+            MarkClusterStateDirty(STATE_FIELD_HEALTH);
+            m_clusterLastHealth = GetHealth();
+        }
+        if (GetPower(Powers(getPowerType())) != m_clusterLastPower)
+        {
+            MarkClusterStateDirty(STATE_FIELD_POWER);
+            m_clusterLastPower = GetPower(Powers(getPowerType()));
+        }
+        if (IsInCombat() != m_clusterLastCombat || isDead() != m_clusterLastDead)
+        {
+            MarkClusterStateDirty(STATE_FIELD_COMBAT | STATE_FIELD_DEATH);
+            m_clusterLastCombat = IsInCombat();
+            m_clusterLastDead = isDead();
+        }
+    }
+
+    // Cluster: broadcast dirty state to all nodes at 10Hz
+    BroadcastClusterStateIfDirty(p_time);
 }
 
 void Player::UpdateMirrorTimers()
@@ -1504,6 +1531,9 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     UpdateLocalChannels(newZone);
 
     UpdateZoneDependentAuras(newZone);
+
+    // Cluster: mark position dirty for state broadcast (zone changed)
+    MarkClusterStateDirty(STATE_FIELD_POSITION);
 }
 
 void Player::UpdateEquipSpellsAtFormChange()
@@ -2551,4 +2581,95 @@ void Player::ProcessSpellQueue()
         else // If the first spell can't execute, stop processing
             break;
     }
+}
+
+void Player::BroadcastClusterStateIfDirty(uint32 diff)
+{
+    if (!sClusterMgr.IsEnabled() || !sProxyClient.IsConnected())
+        return;
+
+    m_clusterStateBroadcastTimer += diff;
+    if (m_clusterStateBroadcastTimer < CLUSTER_STATE_BROADCAST_INTERVAL)
+        return;
+
+    m_clusterStateBroadcastTimer = 0;
+
+    if (m_clusterDirtyFields == 0)
+        return;
+
+    uint8 dirtyMask = m_clusterDirtyFields;
+    m_clusterDirtyFields = 0;
+
+    // Update the shared cache with current state
+    uint64 playerGuid = GetGUID().GetRawValue();
+    sSharedPlayerCache.UpdateFromPlayer(playerGuid, [this, dirtyMask](SharedPlayerState& s) {
+        s.guid = GetGUID().GetRawValue();
+        s.ownerNodeId = sProxyClient.GetNodeId();
+        s.active = true;
+
+        if (dirtyMask & STATE_FIELD_POSITION)
+        {
+            s.mapId = GetMapId();
+            s.zoneId = GetZoneId();
+            s.areaId = GetAreaId();
+            s.posX = GetPositionX();
+            s.posY = GetPositionY();
+            s.posZ = GetPositionZ();
+            s.posO = GetOrientation();
+        }
+        if (dirtyMask & STATE_FIELD_HEALTH)
+        {
+            s.health = GetHealth();
+            s.maxHealth = GetMaxHealth();
+        }
+        if (dirtyMask & STATE_FIELD_POWER)
+        {
+            s.powerType = getPowerType();
+            s.power = GetPower(Powers(getPowerType()));
+            s.maxPower = GetMaxPower(Powers(getPowerType()));
+        }
+        if (dirtyMask & STATE_FIELD_COMBAT)
+        {
+            s.inCombat = IsInCombat();
+            s.inFlight = IsInFlight();
+        }
+        if (dirtyMask & STATE_FIELD_TRANSPORT)
+        {
+            if (Transport* t = GetTransport())
+            {
+                s.transportGuid = t->GetGUID().GetRawValue();
+                s.transOffX = GetTransOffsetX();
+                s.transOffY = GetTransOffsetY();
+                s.transOffZ = GetTransOffsetZ();
+                s.transOffO = GetTransOffsetO();
+            }
+            else
+            {
+                s.transportGuid = 0;
+            }
+        }
+        if (dirtyMask & STATE_FIELD_PET)
+        {
+            if (Pet* pet = const_cast<Player*>(this)->GetPet())
+            {
+                s.petEntry = pet->GetEntry();
+                s.petHealth = pet->GetHealth();
+                s.petMana = pet->GetPower(POWER_MANA);
+                s.petName = pet->GetName();
+            }
+            else
+            {
+                s.petEntry = 0;
+            }
+        }
+        if (dirtyMask & STATE_FIELD_DEATH)
+        {
+            s.isDead = isDead();
+        }
+        s.lastUpdateMs = getMSTime();
+        s.lastBroadcastMs = getMSTime();
+    });
+
+    // Broadcast delta to all nodes
+    sProxyClient.BroadcastPlayerStateDelta(playerGuid, dirtyMask);
 }

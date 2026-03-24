@@ -41,6 +41,7 @@
 #include "TradeData.h"
 #include "Unit.h"
 #include "WorldSession.h"
+#include "SharedPlayerState.h"  // for StateFieldMask
 #include <set>
 #include <string>
 #include <vector>
@@ -2913,6 +2914,21 @@ protected:
     bool m_pendingZoneReroute{ false };
     uint32 m_areaUpdateId;
     uint32 m_clusterUnitUpdateTimer{ 0 }; ///< sends/synthesizes cross-node unit stats every 2s
+
+    // Cluster shared state broadcast
+    uint32 m_clusterStateBroadcastTimer{0};  ///< ms since last state broadcast
+    uint8  m_clusterDirtyFields{0};           ///< bitmask of StateFieldMask values that changed
+    uint32 m_clusterLastHealth{0};
+    uint32 m_clusterLastPower{0};
+    bool   m_clusterLastCombat{false};
+    bool   m_clusterLastDead{false};
+    static constexpr uint32 CLUSTER_STATE_BROADCAST_INTERVAL = 100; ///< broadcast every 100ms (10Hz)
+
+    /// Mark state fields as dirty for next broadcast
+    void MarkClusterStateDirty(uint8 fields) { m_clusterDirtyFields |= fields; }
+
+    /// Broadcast dirty state to all nodes if interval elapsed, then clear dirty mask
+    void BroadcastClusterStateIfDirty(uint32 diff);
 
     uint32 m_deathTimer;
     time_t m_deathExpireTime;
