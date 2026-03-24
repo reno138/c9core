@@ -401,6 +401,11 @@ void BackendSession::DispatchToClient()
     // fresh login rather than a reroute or stale in-world state.
     if (_opcode == SMSG_LOGOUT_COMPLETE_OPCODE)
     {
+        if (owner->IsRerouting())
+        {
+            LOG_INFO("proxy", "BackendSession: Suppressing SMSG_LOGOUT_COMPLETE during reroute (GUID {:016X})", _playerGuid);
+            return;  // Don't forward logout to client during seamless reroute
+        }
         LOG_INFO("proxy", "BackendSession: SMSG_LOGOUT_COMPLETE for GUID {:016X} — resetting proxy state", _playerGuid);
         owner->SetClientOutOfWorld();
     }

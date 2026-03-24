@@ -55,6 +55,13 @@ constexpr auto ZONE_UPDATE_INTERVAL = 1000;
 
 void Player::Update(uint32 p_time)
 {
+    // Cluster: zone reroute in progress. Skip ALL updates on this player.
+    // The proxy is switching backends; when it closes the old connection,
+    // WorldSession::Update will detect the closed socket and call LogoutPlayer
+    // safely (before Map iteration starts on the next tick).
+    if (m_pendingZoneReroute)
+        return;
+
     if (!IsInWorld())
         return;
 
@@ -1357,15 +1364,19 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     if (GetGroup())
         SetGroupUpdateFlag(GROUP_UPDATE_FULL);
 
+    uint32 oldZoneUpdateId = m_zoneUpdateId;
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
-    // Cluster: seamless zone-based reroute if new zone is on another node
-    if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
+    // Cluster: zone-based reroute — DISABLED pending seamless implementation.
+    // Map-level clustering still works (continents/instances on different nodes).
+    // Zone-level (e.g. Orgrimmar on a separate node) needs seamless reroute
+    // that doesn't trigger loading screens or session teardown issues.
+    if (false && sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
         && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
         && !GetVehicle() && !IsBeingTeleportedFar())
     {
-        // Save position to DB before reroute
+        // Save position to DB synchronously before reroute
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
         stmt->SetData(0, GetPositionX());
         stmt->SetData(1, GetPositionY());
@@ -1379,15 +1390,24 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
         auto destNode = sClusterMgr.GetNodeForZone(newZone);
         if (destNode)
         {
-            LOG_INFO("server.worldserver",
-                     "Player {} seamless zone reroute: zone {} -> node {} ({}:{})",
-                     GetName(), newZone, destNode->nodeId, destNode->address, destNode->port);
-            sProxyClient.SendSeamlessReroute(GetGUID().GetRawValue(),
-                                              destNode->address, destNode->port);
+            bool isInitialLogin = (oldZoneUpdateId == uint32(-1));
 
-            // Clean up this session so the destination node can create a fresh one.
-            // LogoutPlayer saves and removes the player from the world on this node.
-            GetSession()->LogoutPlayer(true);
+            // Use regular reroute for all zone transitions. This shows a brief
+            // loading screen but reliably handles session state. The proxy closes
+            // the old backend, sends SMSG_NEW_WORLD to client, connects to new
+            // backend, and sends CMSG_PLAYER_LOGIN.
+            LOG_INFO("server.worldserver",
+                     "Player {} zone reroute: zone {} -> node {} ({}:{})",
+                     GetName(), newZone, destNode->nodeId, destNode->address, destNode->port);
+            sProxyClient.SendReroute(GetGUID().GetRawValue(),
+                                     destNode->address, destNode->port,
+                                     GetMapId(), GetPositionX(), GetPositionY(),
+                                     GetPositionZ(), GetOrientation());
+
+            // Mark player as pending reroute — skip updates until proxy closes
+            // the old backend and the WorldSession cleans up naturally.
+            m_pendingZoneReroute = true;
+            return;
         }
     }
 

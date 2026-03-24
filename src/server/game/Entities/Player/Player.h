@@ -2910,6 +2910,7 @@ protected:
 
     uint32 m_zoneUpdateId;
     uint32 m_zoneUpdateTimer;
+    bool m_pendingZoneReroute{ false };
     uint32 m_areaUpdateId;
     uint32 m_clusterUnitUpdateTimer{ 0 }; ///< sends/synthesizes cross-node unit stats every 2s
 
