@@ -24,6 +24,11 @@
 #include <algorithm>
 #include <cstring>
 #include <sstream>
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <arpa/inet.h>
+#endif
 
 // ── Peer node routing table ───────────────────────────────────────────────────
 
@@ -284,6 +289,16 @@ void ClusterMgr::LoadLocalMaps()
         LOG_INFO("server.worldserver", "ClusterMgr: Local zones: [{}]", zList);
     }
 
+    // Load NAT/redirect config
+    _gameAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
+    _gamePort = sConfigMgr->GetOption<uint16>("WorldServerPort", 8085);
+    _externalAddress = sConfigMgr->GetOption<std::string>("ClusterServer.ExternalAddress", "");
+    _externalPort = sConfigMgr->GetOption<uint16>("ClusterServer.ExternalPort", 0);
+    _nodeId = sConfigMgr->GetOption<uint8>("ClusterServer.NodeId", 1);
+
+    if (!_externalAddress.empty())
+        LOG_INFO("server.worldserver", "ClusterMgr: NAT redirect: external {}:{}, internal {}:{}",
+                 _externalAddress, _externalPort, _gameAddress, _gamePort);
 }
 
 bool ClusterMgr::IsMapLocal(uint32 mapId) const
@@ -658,3 +673,58 @@ std::optional<PlayerTransferData> ClusterMgr::TakePendingTransfer(uint64 guid)
     _pendingTransfers.erase(it);
     return data;
 }
+
+// ── Client redirect (proxy-less transfers) ──────────────────────────────────
+
+void ClusterMgr::StorePendingRedirect(uint32 accountId, PendingRedirect&& redirect)
+{
+    std::lock_guard<std::mutex> lock(_redirectMutex);
+    _pendingRedirects[accountId] = std::move(redirect);
+    LOG_INFO("server.worldserver", "ClusterMgr: Stored redirect token for account {} (GUID {:016X} from node {})",
+             accountId, redirect.playerGuid, redirect.sourceNodeId);
+}
+
+std::optional<ClusterMgr::PendingRedirect> ClusterMgr::TakePendingRedirect(uint32 accountId)
+{
+    std::lock_guard<std::mutex> lock(_redirectMutex);
+    auto it = _pendingRedirects.find(accountId);
+    if (it == _pendingRedirects.end())
+        return std::nullopt;
+    PendingRedirect data = std::move(it->second);
+    _pendingRedirects.erase(it);
+    return data;
+}
+
+std::pair<std::string, uint16> ClusterMgr::GetRedirectAddressForNode(uint8 destNodeId, std::string const& clientIp) const
+{
+    std::lock_guard<std::mutex> lock(_nodeMutex);
+    auto it = _nodes.find(destNodeId);
+    if (it == _nodes.end())
+        return {"", 0};
+
+    auto const& node = it->second;
+
+    // If client is on a local network and node has NAT config, use internal address
+    if (!node.externalAddress.empty() && node.externalPort != 0)
+    {
+        // Check if client is local (RFC1918)
+        uint32 addr = ntohl(inet_addr(clientIp.c_str()));
+        bool isLocal = ((addr & 0xFF000000) == 0x0A000000) ||   // 10.0.0.0/8
+                       ((addr & 0xFFF00000) == 0xAC100000) ||   // 172.16.0.0/12
+                       ((addr & 0xFFFF0000) == 0xC0A80000) ||   // 192.168.0.0/16
+                       ((addr & 0xFF000000) == 0x7F000000);     // 127.0.0.0/8
+
+        if (isLocal)
+            return {node.address, node.port};
+        else
+            return {node.externalAddress, node.externalPort};
+    }
+
+    return {node.address, node.port};
+}
+
+std::string ClusterMgr::GetGameAddress() const { return _gameAddress; }
+uint16 ClusterMgr::GetGamePort() const { return _gamePort; }
+std::string ClusterMgr::GetExternalAddress() const { return _externalAddress; }
+uint16 ClusterMgr::GetExternalPort() const { return _externalPort; }
+uint8 ClusterMgr::GetNodeId() const { return _nodeId; }

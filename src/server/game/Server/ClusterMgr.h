@@ -40,7 +40,9 @@ struct ClusterNodeInfo
 {
     uint8       nodeId{ 0 };
     std::string address;            ///< LAN IP (e.g. "192.0.2.71")
-    uint16      port{ 0 };          ///< WoW game port (typically 8085)
+    uint16      port{ 0 };          ///< WoW game port (typically 8086)
+    std::string externalAddress;    ///< Public/NAT IP for external clients (empty = no NAT)
+    uint16      externalPort{ 0 };  ///< Public port for external clients (0 = same as port)
     uint8       type{ 0 };          ///< 0 = regular worldserver, 1 = instance server
     std::unordered_set<uint32> maps; ///< mapIds served by this node
     std::unordered_set<uint32> zones; ///< zoneIds served (empty = all zones on owned maps)
@@ -260,6 +262,32 @@ public:
     /// Retrieve and remove a pending transfer (one-shot consumption).
     std::optional<PlayerTransferData> TakePendingTransfer(uint64 guid);
 
+    // ── Client redirect (proxy-less transfers) ──────────────────────────────
+
+    /// Pending redirect token from a source node, validated when client reconnects.
+    struct PendingRedirect
+    {
+        uint32 accountId{ 0 };
+        uint32 token{ 0 };
+        uint64 playerGuid{ 0 };
+        uint8  sourceNodeId{ 0 };
+        uint32 timestampMs{ 0 };   ///< getMSTime() for expiry (30s)
+    };
+
+    void StorePendingRedirect(uint32 accountId, PendingRedirect&& redirect);
+    std::optional<PendingRedirect> TakePendingRedirect(uint32 accountId);
+
+    /// NAT-aware address resolution for SMSG_REDIRECT_CLIENT.
+    /// Returns the correct (ip, port) pair based on whether the client is local or external.
+    std::pair<std::string, uint16> GetRedirectAddressForNode(uint8 destNodeId, std::string const& clientIp) const;
+
+    /// This node's config
+    std::string GetGameAddress() const;
+    uint16 GetGamePort() const;
+    std::string GetExternalAddress() const;
+    uint16 GetExternalPort() const;
+    uint8 GetNodeId() const;
+
 private:
     ClusterMgr() = default;
 
@@ -301,6 +329,17 @@ private:
     // ── Pending player transfers ──────────────────────────────────────────
     mutable std::mutex _transferMutex;
     std::unordered_map<uint64, PlayerTransferData> _pendingTransfers;
+
+    // ── Pending redirect tokens ──────────────────────────────────────────
+    mutable std::mutex _redirectMutex;
+    std::unordered_map<uint32, PendingRedirect> _pendingRedirects; ///< accountId → token
+
+    // ── This node's config ───────────────────────────────────────────────
+    std::string _gameAddress;
+    uint16 _gamePort{ 0 };
+    std::string _externalAddress;
+    uint16 _externalPort{ 0 };
+    uint8 _nodeId{ 0 };
 };
 
 #define sClusterMgr ClusterMgr::Instance()

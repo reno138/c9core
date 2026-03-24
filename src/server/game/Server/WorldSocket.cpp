@@ -721,6 +721,9 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
         _worldSession->InitWarden(account.SessionKey, account.OS);
     }
 
+    // Cache session key for SMSG_REDIRECT_CLIENT HMAC (cluster transfers)
+    _worldSession->SetSessionKey(account.SessionKey);
+
     _worldSession->ValidateAccountFlags();
 
     sWorldSessionMgr->AddSession(_worldSession);

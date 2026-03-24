@@ -462,6 +462,10 @@ public:
     void InitWarden(SessionKey const&, std::string const& os);
     Warden* GetWarden();
 
+    /// Session key for HMAC-based client redirect (SMSG_REDIRECT_CLIENT)
+    void SetSessionKey(SessionKey const& key) { _clusterSessionKey = key; }
+    SessionKey const& GetSessionKey() const { return _clusterSessionKey; }
+
 
     /// Session in auth.queue currently
     void SetInQueue(bool state) { m_inQueue = state; }
@@ -1227,6 +1231,7 @@ private:
     Player* _player;
     std::shared_ptr<WorldSocket> m_Socket;
     std::string m_Address;
+    SessionKey _clusterSessionKey{};   ///< cached for SMSG_REDIRECT_CLIENT HMAC
 
     AccountTypes _security;
     bool _skipQueue;
