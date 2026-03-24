@@ -639,6 +639,22 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             }
             break;
         }
+        case MSG_REDIRECT_TOKEN:
+        {
+            if (payload.size() >= 17)
+            {
+                ClusterMgr::PendingRedirect pr;
+                std::memcpy(&pr.accountId, payload.data(), 4);
+                std::memcpy(&pr.token, payload.data() + 4, 4);
+                pr.playerGuid = 0;
+                for (int i = 0; i < 8; ++i) pr.playerGuid |= uint64(payload[8 + i]) << (i * 8);
+                pr.sourceNodeId = payload[16];
+                pr.timestampMs = getMSTime();
+
+                sClusterMgr.StorePendingRedirect(pr.accountId, std::move(pr));
+            }
+            break;
+        }
         default:
             LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming msgType 0x{:02X}", msgType);
             break;
@@ -788,6 +804,26 @@ void ProxyClient::ReleasePlayer(uint64 guid)
 
     PublishBroadcast(MSG_PLAYER_RELEASE, payload, 9);
     LOG_INFO("server.worldserver", "ProxyClient: Releasing ownership of GUID {:016X} from node {}", guid, _nodeId);
+}
+
+void ProxyClient::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token, uint8 destNodeId)
+{
+    if (!_nc || !_connected) return;
+
+    // Wire: [accountId:4][token:4][guid:8][sourceNodeId:1] = 17 bytes
+    uint8 payload[17];
+    std::memcpy(payload, &accountId, 4);
+    std::memcpy(payload + 4, &token, 4);
+    for (int i = 0; i < 8; ++i) payload[8 + i] = static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF);
+    payload[16] = _nodeId;
+
+    // Send to destination node specifically
+    PublishToNode(destNodeId, MSG_REDIRECT_TOKEN, payload, 17);
+    // Also broadcast so all nodes know about the pending redirect
+    PublishBroadcast(MSG_REDIRECT_TOKEN, payload, 17);
+
+    LOG_INFO("server.worldserver", "ProxyClient: Published redirect token for account {} GUID {:016X} -> node {} (token=0x{:08X})",
+             accountId, playerGuid, destNodeId, token);
 }
 
 void ProxyClient::Update()

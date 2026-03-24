@@ -245,6 +245,11 @@ public:
     /// Release ownership of a player (source node during transfer).
     void ReleasePlayer(uint64 guid);
 
+    /// Publish redirect token to destination node for validation on reconnect.
+    void PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token, uint8 destNodeId);
+
+    static constexpr uint8 MSG_REDIRECT_TOKEN         = 0x29;  ///< redirect token for proxy-less transfer
+
 private:
     ProxyClient() = default;
     ~ProxyClient() = default;

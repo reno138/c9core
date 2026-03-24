@@ -50,6 +50,7 @@
 #include "ScriptMgr.h"
 #include "SharedDefines.h"
 #include "ClusterMgr.h"
+#include "ClientRedirect.h"
 #include "PlayerTransfer.h"
 #include "ProxyClient.h"
 #include "SharedPlayerCache.h"
@@ -828,24 +829,36 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     // the client directly to the owning node via SMSG_REDIRECT_CLIENT.
     // When the client reconnects to the correct node, HandlePlayerLoginFromDB runs
     // again with IsMapLocal() == true and proceeds normally.
-    if (sProxyClient.IsConnected()
+    if (sClusterMgr.IsEnabled()
         && !sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
     {
         uint32 const mapId = pCurrChar->GetMapId();
-        uint64 const charGuid = pCurrChar->GetGUID().GetRawValue(); // save before delete
-        float const px = pCurrChar->GetPositionX();
-        float const py = pCurrChar->GetPositionY();
-        float const pz = pCurrChar->GetPositionZ();
-        float const po = pCurrChar->GetOrientation();
-        // LoadFromDB applied auras; remove them before deleting to satisfy Unit::~Unit assertion.
-        pCurrChar->RemoveAllAuras();
-        SetPlayer(nullptr);         // LoadFromDB set _player; clear it before delete
-        delete pCurrChar;
-        m_playerLoading = false;
+        uint64 const charGuid = pCurrChar->GetGUID().GetRawValue();
+
         auto destNode = sClusterMgr.GetNodeForMap(mapId);
         if (destNode)
-            sProxyClient.SendReroute(charGuid, destNode->address, destNode->port,
-                                     mapId, px, py, pz, po);
+        {
+            LOG_INFO("server.worldserver", "Player {} on wrong node (map {}), redirecting to node {} ({}:{})",
+                     pCurrChar->GetName(), mapId, destNode->nodeId, destNode->address, destNode->port);
+
+            // Broadcast full state so dest node has it cached
+            sProxyClient.BroadcastPlayerStateFull(charGuid);
+
+            // Publish redirect token
+            uint32 token = ClientRedirect::SuspendClient(this);
+            sProxyClient.PublishRedirectToken(GetAccountId(), charGuid, token, destNode->nodeId);
+
+            // Redirect client to destination node
+            auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
+                destNode->nodeId, GetRemoteAddress());
+            ClientRedirect::RedirectClient(this, redirectIp, redirectPort, token);
+        }
+
+        // Clean up — client will disconnect and reconnect to dest node
+        pCurrChar->RemoveAllAuras();
+        SetPlayer(nullptr);
+        delete pCurrChar;
+        m_playerLoading = false;
         return;
     }
 

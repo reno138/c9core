@@ -27,6 +27,7 @@
 #include "ClusterMgr.h"
 #include "ProxyClient.h"
 #include "SharedPlayerCache.h"
+#include "ClientRedirect.h"
 #include "Transport.h"
 #include "WorldPacket.h"
 #include "Guild.h"
@@ -538,13 +539,18 @@ void Player::Update(uint32 p_time)
                 // 2. Claim ownership on destination
                 sProxyClient.ClaimPlayer(GetGUID().GetRawValue());
 
-                // 3. Tell proxy to seamlessly swap backends
-                sProxyClient.SendSeamlessReroute(GetGUID().GetRawValue(),
-                                                 destNode->address, destNode->port);
+                // 3. Publish redirect token so dest node can validate
+                uint32 token = ClientRedirect::SuspendClient(GetSession());
+                sProxyClient.PublishRedirectToken(GetSession()->GetAccountId(),
+                                                  GetGUID().GetRawValue(), token, destNode->nodeId);
 
-                // 4. Set cooldown and freeze updates
+                // 4. Redirect client to destination node (client disconnects + reconnects)
+                auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
+                    destNode->nodeId, GetSession()->GetRemoteAddress());
+                ClientRedirect::RedirectClient(GetSession(), redirectIp, redirectPort, token);
+
+                // 5. Set cooldown — LogoutPlayer will run naturally when client disconnects
                 m_zoneTransferCooldown = ZONE_TRANSFER_COOLDOWN_MS;
-                m_pendingZoneReroute = true;
                 return;
             }
         }
