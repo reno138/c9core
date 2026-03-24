@@ -1367,45 +1367,26 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     uint32 oldZoneUpdateId = m_zoneUpdateId;
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
-    // Cluster: zone-based reroute — DISABLED pending seamless implementation.
-    // Map-level clustering still works (continents/instances on different nodes).
-    // Zone-level (e.g. Orgrimmar on a separate node) needs seamless reroute
-    // that doesn't trigger loading screens or session teardown issues.
-    if (false && sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
+    // Cluster: zone-based reroute via NATS player transfer
+    if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
         && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
         && !GetVehicle() && !IsBeingTeleportedFar())
     {
-        // Save position to DB synchronously before reroute
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
-        stmt->SetData(0, GetPositionX());
-        stmt->SetData(1, GetPositionY());
-        stmt->SetData(2, GetPositionZ());
-        stmt->SetData(3, GetOrientation());
-        stmt->SetData(4, (uint16)GetMapId());
-        stmt->SetData(5, newZone);
-        stmt->SetData(6, GetGUID().GetCounter());
-        CharacterDatabase.DirectExecute(stmt);
-
         auto destNode = sClusterMgr.GetNodeForZone(newZone);
         if (destNode)
         {
-            bool isInitialLogin = (oldZoneUpdateId == uint32(-1));
-
-            // Use regular reroute for all zone transitions. This shows a brief
-            // loading screen but reliably handles session state. The proxy closes
-            // the old backend, sends SMSG_NEW_WORLD to client, connects to new
-            // backend, and sends CMSG_PLAYER_LOGIN.
             LOG_INFO("server.worldserver",
-                     "Player {} zone reroute: zone {} -> node {} ({}:{})",
+                     "Player {} zone transfer via NATS: zone {} -> node {} ({}:{})",
                      GetName(), newZone, destNode->nodeId, destNode->address, destNode->port);
-            sProxyClient.SendReroute(GetGUID().GetRawValue(),
-                                     destNode->address, destNode->port,
-                                     GetMapId(), GetPositionX(), GetPositionY(),
-                                     GetPositionZ(), GetOrientation());
 
-            // Mark player as pending reroute — skip updates until proxy closes
-            // the old backend and the WorldSession cleans up naturally.
+            // Snapshot player state and send via NATS to dest node, then reroute proxy
+            sProxyClient.SendPlayerTransfer(this, destNode->nodeId,
+                                            destNode->address, destNode->port,
+                                            GetMapId(), GetPositionX(), GetPositionY(),
+                                            GetPositionZ(), GetOrientation());
+
+            // Freeze player updates until proxy closes old backend
             m_pendingZoneReroute = true;
             return;
         }

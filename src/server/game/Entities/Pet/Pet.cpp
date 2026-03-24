@@ -509,6 +509,23 @@ bool Pet::LoadPetFromDB(Player* owner, uint32 petEntry, uint32 petnumber, bool c
         // must be after SetMinion (owner guid check)
         LoadTemplateImmunities(0);
         //LoadMechanicTemplateImmunity();
+
+        // Cluster: apply transferred pet vitals from NATS
+        if (Player* owner = GetOwner())
+        {
+            auto const& pt = owner->GetSession()->GetPendingPetTransfer();
+            if (pt.entry != 0 && pt.entry == GetEntry())
+            {
+                if (pt.health > 0)
+                    SetHealth(std::min(pt.health, GetMaxHealth()));
+                if (pt.mana > 0)
+                    SetPower(POWER_MANA, std::min(pt.mana, GetMaxPower(POWER_MANA)));
+                owner->GetSession()->ClearPendingPetTransfer();
+                LOG_INFO("server.worldserver", "Pet: Applied NATS transfer state for pet {} (HP={} Mana={})",
+                         GetName(), pt.health, pt.mana);
+            }
+        }
+
         m_loading = false;
     });
 
