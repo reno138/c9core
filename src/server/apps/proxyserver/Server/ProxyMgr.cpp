@@ -283,13 +283,14 @@ void ProxyMgr::SeamlessReroutePlayer(uint64 guid, std::string const& address, ui
 
     LOG_INFO("proxy", "ProxyMgr: Seamless zone reroute GUID {:016X} to {}:{}", guid, address, port);
 
-    // RerouteToBackend with mapId=0 triggers login-reroute mode:
-    // no SMSG_NEW_WORLD sent, BackendSession sends PLAYER_LOGIN after char_enum.
-    // This is exactly what we want for seamless transfers.
+    // Seamless zone reroute: connect to new backend in background while
+    // keeping the old backend alive. The old backend continues forwarding
+    // packets to the client until the new one is fully ready, then we
+    // hot-swap. No SMSG_NEW_WORLD, no loading screen.
     Acore::Asio::post(sProxySocketMgr.GetIoContext(),
         [socket, address, port]()
     {
-        socket->RerouteToBackend(address, port, 0, 0.f, 0.f, 0.f, 0.f);
+        socket->SeamlessRerouteToBackend(address, port);
     });
 }
 

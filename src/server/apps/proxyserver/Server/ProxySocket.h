@@ -70,6 +70,7 @@ public:
 
     /// Initiate a backend switch to the given address:port (called by ProxyMgr).
     /// mapId/x/y/z/ori: when non-zero, send SMSG_NEW_WORLD to client (native in-world reroute).
+    void SeamlessRerouteToBackend(std::string const& address, uint16 port);
     void RerouteToBackend(std::string const& address, uint16 port,
                           uint32 mapId = 0, float x = 0.f, float y = 0.f, float z = 0.f, float ori = 0.f);
 

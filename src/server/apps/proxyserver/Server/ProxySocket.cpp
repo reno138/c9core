@@ -405,6 +405,32 @@ void ProxySocket::ResumeAfterAuth()
     AsyncRead();
 }
 
+
+void ProxySocket::SeamlessRerouteToBackend(std::string const& address, uint16 port)
+{
+    if (_rerouting)
+    {
+        LOG_WARN("proxy", "ProxySocket: SeamlessReroute called while reroute in progress");
+        return;
+    }
+
+    LOG_INFO("proxy", "ProxySocket: Seamless zone reroute GUID {:016X} to {}:{}", _playerGuid, address, port);
+    _rerouting = true;
+
+    // Keep old backend alive — it continues forwarding packets to client.
+    // Create pending backend that connects in background.
+    _pendingBackend = std::make_shared<BackendSession>(
+        sProxySocketMgr.GetIoContext(),
+        shared_from_this(),
+        _accountName, _sessionKey, _realmId, _playerGuid,
+        GetRemoteIpAddress().to_string(),
+        /*isLoginReroute=*/ true);  // login reroute = no SMSG_NEW_WORLD
+
+    _pendingBackend->Connect(address, port);
+    // OnRerouteComplete will be called when handshake finishes.
+    // At that point we hot-swap: close old backend, switch to new one.
+}
+
 void ProxySocket::RerouteToBackend(std::string const& address, uint16 port,
                                    uint32 mapId, float x, float y, float z, float ori)
 {
