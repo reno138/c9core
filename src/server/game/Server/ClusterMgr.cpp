@@ -326,17 +326,14 @@ bool ClusterMgr::IsZoneLocal(uint32 zoneId) const
 
 std::optional<ClusterNodeInfo> ClusterMgr::GetNodeForZone(uint32 zoneId) const
 {
-    // Check peer nodes for zone ownership
     std::lock_guard<std::mutex> lock(_nodeMutex);
-    for (auto const& [id, node] : _nodes)
-    {
-        if (node.dead)
-            continue;
-        // Peer nodes advertise zones in their maps set (overloaded for zone routing)
-        // This is a simplification — in practice we need a separate zone->node map
-        // For now, check if the zone matches any peer zone config
-    }
-    return std::nullopt;
+    auto zit = _zoneToNode.find(zoneId);
+    if (zit == _zoneToNode.end())
+        return std::nullopt;
+    auto nit = _nodes.find(zit->second);
+    if (nit == _nodes.end() || nit->second.dead)
+        return std::nullopt;
+    return nit->second;
 }
 
 

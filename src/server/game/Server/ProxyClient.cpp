@@ -324,6 +324,23 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         info.maps.insert(mapId);
     }
 
+    // Parse zone data: [zoneCount:2][zoneIds:4*n]
+    if (n >= off + 2)
+    {
+        uint16 zoneCount = static_cast<uint16>(d[off]) | (static_cast<uint16>(d[off + 1]) << 8);
+        off += 2;
+        if (zoneCount > 128) zoneCount = 128;
+        if (n >= off + zoneCount * 4)
+        {
+            for (uint16 i = 0; i < zoneCount; ++i)
+            {
+                uint32 zoneId = 0;
+                std::memcpy(&zoneId, d + off + i * 4, 4);
+                info.zones.insert(zoneId);
+            }
+        }
+    }
+
     // All data copied — safe to release the NATS message now.
     natsMsg_Destroy(msg);
 
