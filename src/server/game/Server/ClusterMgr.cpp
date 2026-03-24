@@ -327,13 +327,34 @@ bool ClusterMgr::IsZoneLocal(uint32 zoneId) const
 std::optional<ClusterNodeInfo> ClusterMgr::GetNodeForZone(uint32 zoneId) const
 {
     std::lock_guard<std::mutex> lock(_nodeMutex);
+    // Check explicit zone->node mapping first
     auto zit = _zoneToNode.find(zoneId);
-    if (zit == _zoneToNode.end())
-        return std::nullopt;
-    auto nit = _nodes.find(zit->second);
-    if (nit == _nodes.end() || nit->second.dead)
-        return std::nullopt;
-    return nit->second;
+    if (zit != _zoneToNode.end())
+    {
+        auto nit = _nodes.find(zit->second);
+        if (nit != _nodes.end() && !nit->second.dead)
+            return nit->second;
+    }
+
+    // No explicit zone owner — find the map owner for this zone.
+    // Look up which map this zone belongs to, then find the node that
+    // owns that map but does NOT have explicit zones (i.e. the continent node).
+    // This handles the case where a zone-server only owns specific zones
+    // and the player moves to an unclaimed zone on the same map.
+    AreaTableEntry const* area = sAreaTableStore.LookupEntry(zoneId);
+    if (area)
+    {
+        uint32 mapId = area->mapid;
+        auto mit = _mapToNode.find(mapId);
+        if (mit != _mapToNode.end())
+        {
+            auto nit = _nodes.find(mit->second);
+            if (nit != _nodes.end() && !nit->second.dead)
+                return nit->second;
+        }
+    }
+
+    return std::nullopt;
 }
 
 
