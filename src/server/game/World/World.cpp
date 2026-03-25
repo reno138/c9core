@@ -1223,12 +1223,11 @@ void World::Update(uint32 diff)
                          player->GetName(), guid);
                 player->RemoveAllAuras();
                 if (WorldSession* session = player->GetSession())
-                {
                     session->SetPlayer(nullptr);
-                    // Close the socket so the orphaned session gets destroyed
-                    // on the next WorldSession::Update tick (returns false → removed).
-                    session->KickPlayer("redirect-out deactivation");
-                }
+                // Do NOT close the socket here. The client may still need the
+                // old connection alive while it transitions to the new node.
+                // The client will close it when ready, or the session will
+                // time out naturally.
                 if (player->IsInWorld())
                     player->GetMap()->RemovePlayerFromMap(player, true);
             }

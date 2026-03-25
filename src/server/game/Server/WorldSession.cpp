@@ -1574,18 +1574,10 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
     SendClientCacheVersion(clientCacheVersion);
     SendTutorialsData();
 
-    // Cluster redirect auto-login: if this session was created by a redirect,
-    // queue CMSG_PLAYER_LOGIN now that the init packets have been sent.
-    // The client expects AUTH_OK + addon info + cache version + tutorials
-    // before it will accept login data.
-    uint64 redirectGuid = GetRedirectAutoLoginGuid();
-    if (redirectGuid != 0)
-    {
-        LOG_INFO("network", "WorldSession: Redirect auto-login for GUID {:016X} after session init", redirectGuid);
-        WorldPacket* loginPacket = new WorldPacket(CMSG_PLAYER_LOGIN, 8);
-        *loginPacket << ObjectGuid(redirectGuid);
-        QueuePacket(loginPacket);
-    }
+    // NOTE: Redirect auto-login is handled directly in HandleRedirectionAuthProofCallback
+    // (WorldSocket.cpp) — NOT here. The redirect path sends AUTH_OK + init packets
+    // synchronously and queues CMSG_PLAYER_LOGIN immediately, bypassing the async
+    // InitializeSession flow entirely. This callback only runs for normal logins.
 }
 
 void WorldSession::SetPacketLogging(bool state)
