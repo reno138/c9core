@@ -841,26 +841,51 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         }
     }
 
-    // Cluster: if the player's saved map OR zone is owned by a different node,
+    // Cluster: if the player's ACTUAL map or zone is owned by a different node,
     // redirect the client directly to the owning node via SMSG_REDIRECT_CLIENT.
-    // Check zone first (more specific), then map.
+    // Use NATS transfer/cache data for map/zone (DB may be stale from async saves).
     if (sClusterMgr.IsEnabled())
     {
         std::optional<ClusterNodeInfo> destNode;
         std::string reason;
 
-        // Use cached zone if available (more current than DB), else use DB zone
-        uint32 checkZone = pCurrChar->GetZoneId();
+        // Determine the REAL map and zone — prefer NATS transfer data over DB
+        uint32 checkMap = pCurrChar->GetMapId();   // DB default
+        uint32 checkZone = pCurrChar->GetZoneId(); // DB default
         {
-            auto cs = sSharedPlayerCache.Get(playerGuid.GetRawValue());
-            if (cs && cs->zoneId != 0)
-                checkZone = cs->zoneId;
+            // Pending transfer has the freshest data (snapshot from source node at redirect time)
+            auto transfer = sClusterMgr.TakePendingTransfer(playerGuid.GetRawValue());
+            if (transfer)
+            {
+                checkMap = transfer->mapId;
+                checkZone = transfer->zoneId;
+                LOG_INFO("server.worldserver", "Zone check using NATS transfer: map {} zone {} (DB had map {} zone {})",
+                         checkMap, checkZone, pCurrChar->GetMapId(), pCurrChar->GetZoneId());
+                // Re-store it — we still need it for the post-login application below
+                sClusterMgr.StorePendingTransfer(playerGuid.GetRawValue(), std::move(*transfer));
+            }
+            else
+            {
+                // Fall back to shared cache
+                auto cs = sSharedPlayerCache.Get(playerGuid.GetRawValue());
+                if (cs)
+                {
+                    if (cs->mapId != 0 || cs->zoneId != 0)
+                    {
+                        checkMap = cs->mapId;
+                        if (cs->zoneId != 0)
+                            checkZone = cs->zoneId;
+                        LOG_INFO("server.worldserver", "Zone check using cache: map {} zone {} (DB had map {} zone {})",
+                                 checkMap, checkZone, pCurrChar->GetMapId(), pCurrChar->GetZoneId());
+                    }
+                }
+            }
         }
 
-        if (!sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
+        if (!sClusterMgr.IsMapLocal(checkMap))
         {
-            destNode = sClusterMgr.GetNodeForMap(pCurrChar->GetMapId());
-            reason = fmt::format("map {}", pCurrChar->GetMapId());
+            destNode = sClusterMgr.GetNodeForMap(checkMap);
+            reason = fmt::format("map {}", checkMap);
         }
         else if (!sClusterMgr.IsZoneLocal(checkZone))
         {
