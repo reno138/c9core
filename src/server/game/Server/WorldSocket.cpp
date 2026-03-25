@@ -656,27 +656,20 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
     LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} authenticated via redirect from {}",
              account.Id, GetRemoteIpAddress().to_string());
 
-    // Auto-login: the shared player cache has this player's data on every node.
-    // Populate _legitCharacters from cache (no DB query needed) and queue login.
+    // Pre-populate legit characters so the client can send CMSG_CHAR_ENUM and CMSG_PLAYER_LOGIN.
+    // The client drives the flow: AUTH_OK -> client sends CHAR_ENUM -> server responds -> client sends PLAYER_LOGIN.
     if (redirectPlayerGuid != 0)
     {
-        // The shared cache confirms this GUID belongs to this account — validated
-        // by the source node before redirect. Add all cached players for this account.
         auto allPlayers = sSharedPlayerCache.GetAll();
         for (auto const& p : allPlayers)
         {
             if (p.accountId == account.Id)
                 _worldSession->AddLegitCharacter(ObjectGuid(p.guid));
         }
-        // Also add the redirect target in case it wasn't in cache yet
         _worldSession->AddLegitCharacter(ObjectGuid(redirectPlayerGuid));
 
-        LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Auto-login GUID {:016X} for account {}",
-                 redirectPlayerGuid, account.Id);
-
-        WorldPacket* loginPacket = new WorldPacket(CMSG_PLAYER_LOGIN, 8);
-        *loginPacket << ObjectGuid(redirectPlayerGuid);
-        _worldSession->QueuePacket(loginPacket);
+        LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Redirect auth OK for GUID {:016X}, waiting for client to drive login",
+                 redirectPlayerGuid);
     }
 
     AsyncRead();
