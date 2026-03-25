@@ -26,7 +26,7 @@
 class Player;
 
 /// Wire‑format version — bump when struct layout changes
-constexpr uint8 PLAYER_TRANSFER_VERSION = 1;
+constexpr uint8 PLAYER_TRANSFER_VERSION = 2;
 /// Two‑byte magic "PT" (0x50 0x54)
 constexpr uint16 PLAYER_TRANSFER_MAGIC = 0x5450; // little‑endian "PT"
 
@@ -65,6 +65,70 @@ struct TransferTransportInfo
     float  offsetO      = 0.f;
 };
 
+/// Equipment slot snapshot
+struct TransferEquipItem
+{
+    uint8  slot         = 0;
+    uint32 entry        = 0;
+    int32  randomProp   = 0;
+    uint32 enchants[3]  = {};
+};
+
+/// Spell known by the player
+struct TransferSpellInfo
+{
+    uint32 spellId      = 0;
+    bool   active       = true;
+    uint8  specMask     = 0;
+};
+
+/// Talent allocation
+struct TransferTalentInfo
+{
+    uint32 talentId     = 0;
+    uint32 spellId      = 0;
+    uint8  specMask     = 0;
+};
+
+/// Action bar button
+struct TransferActionButton
+{
+    uint8  button       = 0;
+    uint32 action       = 0;
+    uint8  type         = 0;
+};
+
+/// Skill value
+struct TransferSkillInfo
+{
+    uint16 skillId      = 0;
+    uint16 value        = 0;
+    uint16 maxValue     = 0;
+    uint16 bonusTemp    = 0;
+    uint16 bonusPerm    = 0;
+};
+
+/// Quest log entry
+struct TransferQuestInfo
+{
+    uint32 questId      = 0;
+    uint8  status       = 0;
+    bool   explored     = false;
+    uint32 timer        = 0;
+    uint16 creatureOrGOCount[4] = {};
+    uint16 itemCount[6] = {};
+    uint16 playerCount  = 0;
+};
+
+/// Spell cooldown
+struct TransferCooldownInfo
+{
+    uint32 spellId      = 0;
+    uint32 endTimeMs    = 0;
+    uint16 categoryId   = 0;
+    uint32 itemId       = 0;
+};
+
 /// Complete player state for cross‑node NATS transfer
 struct PlayerTransferData
 {
@@ -100,10 +164,24 @@ struct PlayerTransferData
 
     // timestamp (server game‑time seconds when snapshot was taken)
     uint64 timestamp    = 0;
+
+    // --- Extended fields (v2) ---
+    uint8  activeSpec   = 0;
+    std::vector<TransferEquipItem>    equipment;
+    std::vector<TransferSpellInfo>    spells;
+    std::vector<TransferTalentInfo>   talents;
+    std::vector<TransferActionButton> actionButtons;
+    std::vector<TransferSkillInfo>    skills;
+    std::vector<TransferQuestInfo>    quests;
+    std::vector<TransferCooldownInfo> cooldowns;
+    std::vector<uint32>               rewardedQuests;
 };
 
-/// Build a PlayerTransferData from a live Player pointer (must be called on the node that owns the player).
+/// Build a PlayerTransferData (v1) from a live Player pointer.
 PlayerTransferData SnapshotPlayer(Player const* player);
+
+/// Build a full PlayerTransferData (v2) with equipment, spells, talents, quests, etc.
+PlayerTransferData SnapshotPlayerFull(Player const* player);
 
 /// Serialize a PlayerTransferData to a binary byte buffer suitable for NATS publish.
 /// Wire format: little‑endian, length‑prefixed strings, "PT" magic + version header.

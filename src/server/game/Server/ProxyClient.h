@@ -245,6 +245,9 @@ public:
     /// Release ownership of a player (source node during transfer).
     void ReleasePlayer(uint64 guid);
 
+    /// Broadcast a full PlayerTransferData v2 snapshot to all nodes.
+    void BroadcastPlayerTransferFull(Player const* player);
+
     /// Publish redirect token to destination node for validation on reconnect.
     void PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token, uint8 destNodeId);
 

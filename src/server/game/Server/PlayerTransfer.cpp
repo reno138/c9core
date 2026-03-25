@@ -17,6 +17,7 @@
 
 #include "PlayerTransfer.h"
 #include "GameTime.h"
+#include "Item.h"
 #include "Player.h"
 #include "Pet.h"
 #include "SpellAuras.h"
@@ -173,6 +174,124 @@ PlayerTransferData SnapshotPlayer(Player const* player)
 }
 
 // ---------------------------------------------------------------------------
+// SnapshotPlayerFull — capture FULL state (v2) into PlayerTransferData
+// ---------------------------------------------------------------------------
+
+PlayerTransferData SnapshotPlayerFull(Player const* player)
+{
+    PlayerTransferData d = SnapshotPlayer(player);
+    if (!player)
+        return d;
+
+    d.activeSpec = player->GetActiveSpec();
+
+    // Equipment (19 slots)
+    for (uint8 slot = 0; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        if (Item* item = const_cast<Player*>(player)->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+        {
+            TransferEquipItem ei;
+            ei.slot = slot;
+            ei.entry = item->GetEntry();
+            ei.randomProp = item->GetItemRandomPropertyId();
+            ei.enchants[0] = item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT);
+            ei.enchants[1] = item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT);
+            ei.enchants[2] = item->GetEnchantmentId(SOCK_ENCHANTMENT_SLOT);
+            d.equipment.push_back(ei);
+        }
+    }
+
+    // Known spells
+    for (auto const& [spellId, spell] : player->GetSpellMap())
+    {
+        if (spell->State == PLAYERSPELL_REMOVED)
+            continue;
+        TransferSpellInfo si;
+        si.spellId = spellId;
+        si.active = spell->Active;
+        si.specMask = spell->specMask;
+        d.spells.push_back(si);
+    }
+
+    // Talents
+    for (auto const& [talentId, talent] : player->GetTalentMap())
+    {
+        if (talent->State == PLAYERSPELL_REMOVED)
+            continue;
+        TransferTalentInfo ti;
+        ti.talentId = talent->talentID;
+        ti.spellId = talentId;
+        ti.specMask = talent->specMask;
+        d.talents.push_back(ti);
+    }
+
+    // Action buttons
+    for (auto const& [button, ab] : player->GetActionButtons())
+    {
+        if (ab.uState == ACTIONBUTTON_DELETED)
+            continue;
+        TransferActionButton tb;
+        tb.button = button;
+        tb.action = ab.GetAction();
+        tb.type = static_cast<uint8>(ab.GetType());
+        d.actionButtons.push_back(tb);
+    }
+
+    // Skills
+    for (auto const& [skillId, status] : player->GetSkillStatusMap())
+    {
+        if (status.uState == SKILL_DELETED)
+            continue;
+        TransferSkillInfo si;
+        si.skillId = static_cast<uint16>(skillId);
+        uint16 field = static_cast<uint16>(status.pos);
+        si.value    = player->GetUInt32Value(PLAYER_SKILL_VALUE_INDEX(field)) & 0xFFFF;
+        si.maxValue = (player->GetUInt32Value(PLAYER_SKILL_VALUE_INDEX(field)) >> 16) & 0xFFFF;
+        si.bonusTemp = player->GetUInt32Value(PLAYER_SKILL_BONUS_INDEX(field)) & 0xFFFF;
+        si.bonusPerm = (player->GetUInt32Value(PLAYER_SKILL_BONUS_INDEX(field)) >> 16) & 0xFFFF;
+        d.skills.push_back(si);
+    }
+
+    // Quest log (active quests)
+    for (auto const& [questId, qStatus] : player->getQuestStatusMap())
+    {
+        if (qStatus.Status == QUEST_STATUS_NONE)
+            continue;
+        TransferQuestInfo qi;
+        qi.questId = questId;
+        qi.status = static_cast<uint8>(qStatus.Status);
+        qi.explored = qStatus.Explored;
+        qi.timer = qStatus.Timer;
+        for (int i = 0; i < 4; ++i)
+            qi.creatureOrGOCount[i] = qStatus.CreatureOrGOCount[i];
+        for (int i = 0; i < 6; ++i)
+            qi.itemCount[i] = qStatus.ItemCount[i];
+        qi.playerCount = qStatus.PlayerCount;
+        d.quests.push_back(qi);
+    }
+
+    // Cooldowns
+    uint32 now = GameTime::GetGameTimeMS().count();
+    for (auto const& [spellId, cd] : player->GetSpellCooldownMap())
+    {
+        if (cd.end <= now)
+            continue;
+        TransferCooldownInfo ci;
+        ci.spellId = spellId;
+        ci.endTimeMs = cd.end - now;
+        ci.categoryId = cd.category;
+        ci.itemId = cd.itemid;
+        d.cooldowns.push_back(ci);
+    }
+
+    // Rewarded quests
+    for (uint32 qid : player->getRewardedQuests())
+        d.rewardedQuests.push_back(qid);
+
+    return d;
+}
+
+// ---------------------------------------------------------------------------
 // SerializeTransfer — PlayerTransferData → binary buffer
 // ---------------------------------------------------------------------------
 
@@ -245,6 +364,79 @@ std::vector<uint8> SerializeTransfer(PlayerTransferData const& d)
     // timestamp
     WriteLE<uint64>(buf, d.timestamp);
 
+    // --- v2 extended fields ---
+    WriteLE<uint8>(buf, d.activeSpec);
+
+    WriteLE<uint16>(buf, static_cast<uint16>(d.equipment.size()));
+    for (auto const& e : d.equipment)
+    {
+        WriteLE<uint8>(buf, e.slot);
+        WriteLE<uint32>(buf, e.entry);
+        WriteLE<int32>(buf, e.randomProp);
+        WriteLE<uint32>(buf, e.enchants[0]);
+        WriteLE<uint32>(buf, e.enchants[1]);
+        WriteLE<uint32>(buf, e.enchants[2]);
+    }
+
+    WriteLE<uint32>(buf, static_cast<uint32>(d.spells.size()));
+    for (auto const& s : d.spells)
+    {
+        WriteLE<uint32>(buf, s.spellId);
+        WriteLE<uint8>(buf, s.active ? 1 : 0);
+        WriteLE<uint8>(buf, s.specMask);
+    }
+
+    WriteLE<uint16>(buf, static_cast<uint16>(d.talents.size()));
+    for (auto const& t : d.talents)
+    {
+        WriteLE<uint32>(buf, t.talentId);
+        WriteLE<uint32>(buf, t.spellId);
+        WriteLE<uint8>(buf, t.specMask);
+    }
+
+    WriteLE<uint16>(buf, static_cast<uint16>(d.actionButtons.size()));
+    for (auto const& ab : d.actionButtons)
+    {
+        WriteLE<uint8>(buf, ab.button);
+        WriteLE<uint32>(buf, ab.action);
+        WriteLE<uint8>(buf, ab.type);
+    }
+
+    WriteLE<uint16>(buf, static_cast<uint16>(d.skills.size()));
+    for (auto const& sk : d.skills)
+    {
+        WriteLE<uint16>(buf, sk.skillId);
+        WriteLE<uint16>(buf, sk.value);
+        WriteLE<uint16>(buf, sk.maxValue);
+        WriteLE<uint16>(buf, sk.bonusTemp);
+        WriteLE<uint16>(buf, sk.bonusPerm);
+    }
+
+    WriteLE<uint16>(buf, static_cast<uint16>(d.quests.size()));
+    for (auto const& q : d.quests)
+    {
+        WriteLE<uint32>(buf, q.questId);
+        WriteLE<uint8>(buf, q.status);
+        WriteLE<uint8>(buf, q.explored ? 1 : 0);
+        WriteLE<uint32>(buf, q.timer);
+        for (int i = 0; i < 4; ++i) WriteLE<uint16>(buf, q.creatureOrGOCount[i]);
+        for (int i = 0; i < 6; ++i) WriteLE<uint16>(buf, q.itemCount[i]);
+        WriteLE<uint16>(buf, q.playerCount);
+    }
+
+    WriteLE<uint16>(buf, static_cast<uint16>(d.cooldowns.size()));
+    for (auto const& cd : d.cooldowns)
+    {
+        WriteLE<uint32>(buf, cd.spellId);
+        WriteLE<uint32>(buf, cd.endTimeMs);
+        WriteLE<uint16>(buf, cd.categoryId);
+        WriteLE<uint32>(buf, cd.itemId);
+    }
+
+    WriteLE<uint32>(buf, static_cast<uint32>(d.rewardedQuests.size()));
+    for (uint32 qid : d.rewardedQuests)
+        WriteLE<uint32>(buf, qid);
+
     return buf;
 }
 
@@ -261,7 +453,7 @@ bool DeserializeTransfer(uint8 const* data, size_t len, PlayerTransferData& d)
     uint8  version = 0;
     if (!r.ReadLE(magic) || magic != PLAYER_TRANSFER_MAGIC)
         return false;
-    if (!r.ReadLE(version) || version != PLAYER_TRANSFER_VERSION)
+    if (!r.ReadLE(version) || version < 1 || version > PLAYER_TRANSFER_VERSION)
         return false;
 
     // identity
@@ -332,6 +524,113 @@ bool DeserializeTransfer(uint8 const* data, size_t len, PlayerTransferData& d)
 
     // timestamp
     if (!r.ReadLE(d.timestamp)) return false;
+
+    // --- v2 extended fields (optional — v1 payloads end here) ---
+    if (version >= 2 && r.CanRead(1))
+    {
+        if (!r.ReadLE(d.activeSpec)) return false;
+
+        uint16 equipCount = 0;
+        if (!r.ReadLE(equipCount)) return false;
+        d.equipment.resize(equipCount);
+        for (uint16 i = 0; i < equipCount; ++i)
+        {
+            auto& e = d.equipment[i];
+            if (!r.ReadLE(e.slot))       return false;
+            if (!r.ReadLE(e.entry))      return false;
+            if (!r.ReadLE(e.randomProp)) return false;
+            if (!r.ReadLE(e.enchants[0])) return false;
+            if (!r.ReadLE(e.enchants[1])) return false;
+            if (!r.ReadLE(e.enchants[2])) return false;
+        }
+
+        uint32 spellCount = 0;
+        if (!r.ReadLE(spellCount)) return false;
+        if (spellCount > 10000) return false;
+        d.spells.resize(spellCount);
+        for (uint32 i = 0; i < spellCount; ++i)
+        {
+            auto& s = d.spells[i];
+            if (!r.ReadLE(s.spellId)) return false;
+            uint8 activeByte = 0;
+            if (!r.ReadLE(activeByte)) return false;
+            s.active = (activeByte != 0);
+            if (!r.ReadLE(s.specMask)) return false;
+        }
+
+        uint16 talentCount = 0;
+        if (!r.ReadLE(talentCount)) return false;
+        d.talents.resize(talentCount);
+        for (uint16 i = 0; i < talentCount; ++i)
+        {
+            auto& t = d.talents[i];
+            if (!r.ReadLE(t.talentId)) return false;
+            if (!r.ReadLE(t.spellId))  return false;
+            if (!r.ReadLE(t.specMask)) return false;
+        }
+
+        uint16 abCount = 0;
+        if (!r.ReadLE(abCount)) return false;
+        d.actionButtons.resize(abCount);
+        for (uint16 i = 0; i < abCount; ++i)
+        {
+            auto& ab = d.actionButtons[i];
+            if (!r.ReadLE(ab.button)) return false;
+            if (!r.ReadLE(ab.action)) return false;
+            if (!r.ReadLE(ab.type))   return false;
+        }
+
+        uint16 skillCount = 0;
+        if (!r.ReadLE(skillCount)) return false;
+        d.skills.resize(skillCount);
+        for (uint16 i = 0; i < skillCount; ++i)
+        {
+            auto& sk = d.skills[i];
+            if (!r.ReadLE(sk.skillId))   return false;
+            if (!r.ReadLE(sk.value))     return false;
+            if (!r.ReadLE(sk.maxValue))  return false;
+            if (!r.ReadLE(sk.bonusTemp)) return false;
+            if (!r.ReadLE(sk.bonusPerm)) return false;
+        }
+
+        uint16 questCount = 0;
+        if (!r.ReadLE(questCount)) return false;
+        d.quests.resize(questCount);
+        for (uint16 i = 0; i < questCount; ++i)
+        {
+            auto& q = d.quests[i];
+            if (!r.ReadLE(q.questId)) return false;
+            if (!r.ReadLE(q.status))  return false;
+            uint8 exploredByte = 0;
+            if (!r.ReadLE(exploredByte)) return false;
+            q.explored = (exploredByte != 0);
+            if (!r.ReadLE(q.timer)) return false;
+            for (int j = 0; j < 4; ++j)
+                if (!r.ReadLE(q.creatureOrGOCount[j])) return false;
+            for (int j = 0; j < 6; ++j)
+                if (!r.ReadLE(q.itemCount[j])) return false;
+            if (!r.ReadLE(q.playerCount)) return false;
+        }
+
+        uint16 cdCount = 0;
+        if (!r.ReadLE(cdCount)) return false;
+        d.cooldowns.resize(cdCount);
+        for (uint16 i = 0; i < cdCount; ++i)
+        {
+            auto& cd = d.cooldowns[i];
+            if (!r.ReadLE(cd.spellId))    return false;
+            if (!r.ReadLE(cd.endTimeMs))  return false;
+            if (!r.ReadLE(cd.categoryId)) return false;
+            if (!r.ReadLE(cd.itemId))     return false;
+        }
+
+        uint32 rwdCount = 0;
+        if (!r.ReadLE(rwdCount)) return false;
+        if (rwdCount > 10000) return false;
+        d.rewardedQuests.resize(rwdCount);
+        for (uint32 i = 0; i < rwdCount; ++i)
+            if (!r.ReadLE(d.rewardedQuests[i])) return false;
+    }
 
     return true;
 }

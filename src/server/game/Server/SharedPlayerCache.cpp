@@ -72,11 +72,12 @@ void SharedPlayerCache::ApplyDelta(uint64 guid, uint8 fieldMask, SharedPlayerSta
 
     if (fieldMask & STATE_FIELD_TRANSPORT)
     {
-        s.transportGuid = delta.transportGuid;
-        s.transOffX     = delta.transOffX;
-        s.transOffY     = delta.transOffY;
-        s.transOffZ     = delta.transOffZ;
-        s.transOffO     = delta.transOffO;
+        s.transportGuid  = delta.transportGuid;
+        s.transportEntry = delta.transportEntry;
+        s.transOffX      = delta.transOffX;
+        s.transOffY      = delta.transOffY;
+        s.transOffZ      = delta.transOffZ;
+        s.transOffO      = delta.transOffO;
     }
 
     if (fieldMask & STATE_FIELD_PET)

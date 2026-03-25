@@ -333,7 +333,6 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         uint16 zoneCount = static_cast<uint16>(d[off]) | (static_cast<uint16>(d[off + 1]) << 8);
         off += 2;
         if (zoneCount > 128) zoneCount = 128;
-        LOG_INFO("server.worldserver", "ProxyClient: Announce from node {} — parsed {} zones", info.nodeId, zoneCount);
         if (n >= off + zoneCount * 4)
         {
             for (uint16 i = 0; i < zoneCount; ++i)
@@ -723,6 +722,9 @@ void ProxyClient::HandleRemotePlayerOffline(uint64 guid)
 {
     LOG_INFO("server.worldserver", "ProxyClient: Remote player OFFLINE GUID {:016X}", guid);
     sClusterMgr.OnRemotePlayerOffline(guid);
+
+    // Clean up transfer and state cache for logged-off player
+    sSharedPlayerCache.Remove(guid);
 
     // Friend notification: tell local players who have this remote player as a
     // friend that they have gone offline.
@@ -1630,6 +1632,25 @@ void ProxyClient::SendPlayerTransferSeamless(Player const* player, uint8 destNod
     SendSeamlessReroute(player->GetGUID().GetRawValue(), address, port);
 }
 
+
+void ProxyClient::BroadcastPlayerTransferFull(Player const* player)
+{
+    if (!_nc || !_connected || !player) return;
+
+    PlayerTransferData td = SnapshotPlayerFull(player);
+    std::vector<uint8_t> payload = SerializeTransfer(td);
+
+    // Broadcast to all nodes via cluster.broadcast with MSG_PLAYER_TRANSFER
+    PublishBroadcast(MSG_PLAYER_TRANSFER,
+                     payload.data(), static_cast<int>(payload.size()));
+
+    // Also store locally so this node has the latest
+    sClusterMgr.StorePendingTransfer(player->GetGUID().GetRawValue(), std::move(td));
+
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Broadcast full v2 transfer for {} ({} bytes)",
+             player->GetName(), payload.size());
+}
 
 void ProxyClient::AnnounceOnline(Player const* player)
 {

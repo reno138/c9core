@@ -2604,6 +2604,9 @@ void Player::GiveLevel(uint8 level)
     SendQuestGiverStatusMultiple();
 
     sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 }
 
 bool Player::IsMaxLevel() const
@@ -3393,6 +3396,9 @@ void Player::learnSpell(uint32 spellId, bool temporary /*= false*/, bool learnFr
         if (itr2 != m_spells.end() && itr2->second->State != PLAYERSPELL_REMOVED && !itr2->second->IsInSpec(m_activeSpec))
             learnSpell(itr2->first, temporary);
     }
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 }
 
 void Player::removeSpell(uint32 spell_id, uint8 removeSpecMask, bool onlyTemporary)
@@ -3858,6 +3864,9 @@ bool Player::resetTalents(bool noResetCost)
         m_resetTalentsCost = resetCost;
         m_resetTalentsTime = GameTime::GetGameTime().count();
     }
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 
     return true;
 }
@@ -4527,6 +4536,9 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
             }
         }
     }
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 }
 
 void Player::KillPlayer()
@@ -4559,6 +4571,9 @@ void Player::KillPlayer()
 
     // update visibility
     //UpdateObjectVisibility(); // pussywizard: not needed
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 }
 
 void Player::OfflineResurrect(ObjectGuid const& guid, CharacterDatabaseTransaction trans)
@@ -14184,6 +14199,9 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank, bool command /*= fa
     }
 
     sScriptMgr->OnPlayerLearnTalents(this, talentId, talentRank, spellId);
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 }
 
 void Player::LearnPetTalent(ObjectGuid petGuid, uint32 talentId, uint32 talentRank)

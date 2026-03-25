@@ -1640,7 +1640,9 @@ public:
 
     [[nodiscard]] RewardedQuestSet const& getRewardedQuests() const { return m_RewardedQuests; }
     QuestStatusMap& getQuestStatusMap() { return m_QuestStatus; }
+    [[nodiscard]] QuestStatusMap const& getQuestStatusMap() const { return m_QuestStatus; }
     QuestStatusSaveMap& GetQuestStatusSaveMap() { return m_QuestStatusSave; }
+    [[nodiscard]] ActionButtonList const& GetActionButtons() const { return m_actionButtons; }
 
     [[nodiscard]] std::size_t GetRewardedQuestCount() const { return m_RewardedQuests.size(); }
     [[nodiscard]] bool IsQuestRewarded(uint32 quest_id) const
@@ -2919,6 +2921,11 @@ protected:
     uint32 m_zoneTransferCooldown{ZONE_TRANSFER_COOLDOWN_MS}; ///< starts with cooldown to block transfer on initial login
     static constexpr uint32 ZONE_TRANSFER_DWELL_MS    = 2000;  ///< 2s dwell before transfer
     static constexpr uint32 ZONE_TRANSFER_COOLDOWN_MS = 5000;  ///< 5s cooldown after transfer
+
+    // Cluster: periodic full state refresh (cold tier)
+    uint32 m_clusterFullRefreshTimer{0};
+    static constexpr uint32 CLUSTER_FULL_REFRESH_MS = 120000;  ///< 2 minutes
+
     uint32 m_areaUpdateId;
     uint32 m_clusterUnitUpdateTimer{ 0 }; ///< sends/synthesizes cross-node unit stats every 2s
 

@@ -118,6 +118,7 @@ namespace
         if (fieldMask & STATE_FIELD_TRANSPORT)
         {
             WriteLE<uint64>(buf, s.transportGuid);
+            WriteLE<uint32>(buf, s.transportEntry);
             WriteLE<float>(buf, s.transOffX);
             WriteLE<float>(buf, s.transOffY);
             WriteLE<float>(buf, s.transOffZ);
@@ -188,11 +189,12 @@ namespace
 
         if (fieldMask & STATE_FIELD_TRANSPORT)
         {
-            if (!r.ReadLE(s.transportGuid)) return false;
-            if (!r.ReadLE(s.transOffX))     return false;
-            if (!r.ReadLE(s.transOffY))     return false;
-            if (!r.ReadLE(s.transOffZ))     return false;
-            if (!r.ReadLE(s.transOffO))     return false;
+            if (!r.ReadLE(s.transportGuid))   return false;
+            if (!r.ReadLE(s.transportEntry))  return false;
+            if (!r.ReadLE(s.transOffX))       return false;
+            if (!r.ReadLE(s.transOffY))       return false;
+            if (!r.ReadLE(s.transOffZ))       return false;
+            if (!r.ReadLE(s.transOffO))       return false;
         }
 
         if (fieldMask & STATE_FIELD_PET)

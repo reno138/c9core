@@ -73,6 +73,7 @@ struct SharedPlayerState
 
     // Transport
     uint64 transportGuid{0};
+    uint32 transportEntry{0};    // GO entry ID for finding MotionTransport on dest node
     float  transOffX{0}, transOffY{0}, transOffZ{0}, transOffO{0};
 
     // Pet

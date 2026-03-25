@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "ClusterMgr.h"
 #include "CreatureAI.h"
 #include "DisableMgr.h"
 #include "GameEventMgr.h"
@@ -26,6 +27,7 @@
 #include "MapMgr.h"
 #include "Player.h"
 #include "PoolMgr.h"
+#include "ProxyClient.h"
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
 #include "SpellAuraEffects.h"
@@ -594,6 +596,9 @@ void Player::AddQuest(Quest const* quest, Object* questGiver)
     // Xinef: area auras may change on quest accept!
     UpdateZoneDependentAuras(GetZoneId());
     UpdateAreaDependentAuras(GetAreaId());
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 }
 
 void Player::CompleteQuest(uint32 quest_id)
@@ -876,6 +881,9 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
     UpdateAreaDependentAuras(GetAreaId());
 
     sScriptMgr->OnPlayerCompleteQuest(this, quest);
+
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+        sProxyClient.BroadcastPlayerTransferFull(this);
 }
 
 void Player::SetRewardedQuest(uint32 quest_id)

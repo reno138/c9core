@@ -987,12 +987,43 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             if (cachedState->power <= pCurrChar->GetMaxPower(Powers(cachedState->powerType)))
                 pCurrChar->SetPower(Powers(cachedState->powerType), cachedState->power);
 
-            // Apply cached transport
-            if (cachedState->transportGuid != 0)
+            // Apply cached transport — find MotionTransport by entry and reattach
+            if (cachedState->transportEntry != 0)
             {
-                // Find transport on this node by iterating MotionTransports
-                // (transport GUIDs are consistent across nodes)
-                // For now, skip transport reattachment — it's complex and can be added later
+                MotionTransport* foundTransport = nullptr;
+                {
+                    auto& container = HashMapHolder<MotionTransport>::GetContainer();
+                    std::shared_lock lock(*HashMapHolder<MotionTransport>::GetLock());
+                    for (auto const& pair : container)
+                    {
+                        if (pair.second->GetEntry() == cachedState->transportEntry)
+                        {
+                            foundTransport = pair.second;
+                            break;
+                        }
+                    }
+                }
+                if (foundTransport)
+                {
+                    float tx = cachedState->transOffX;
+                    float ty = cachedState->transOffY;
+                    float tz = cachedState->transOffZ;
+                    float to = cachedState->transOffO;
+                    foundTransport->AddPassenger(pCurrChar, false);
+                    pCurrChar->m_movementInfo.transport.guid = foundTransport->GetGUID();
+                    pCurrChar->m_movementInfo.transport.pos.Relocate(tx, ty, tz, to);
+                    pCurrChar->m_movementInfo.AddMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+                    float wx = tx, wy = ty, wz = tz, wo = to;
+                    foundTransport->CalculatePassengerPosition(wx, wy, wz, &wo);
+                    pCurrChar->Relocate(wx, wy, wz, wo);
+                    LOG_INFO("server.worldserver", "Restored {} to transport entry {} at offset ({:.1f},{:.1f},{:.1f})",
+                             pCurrChar->GetName(), cachedState->transportEntry, tx, ty, tz);
+                }
+                else
+                {
+                    LOG_WARN("server.worldserver", "Transport entry {} not found on this node for {}",
+                             cachedState->transportEntry, pCurrChar->GetName());
+                }
             }
 
             // Apply cached auras
@@ -1013,8 +1044,9 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                 s.active = true;
             });
 
-            // Broadcast updated ownership
+            // Broadcast updated ownership + full transfer data
             sProxyClient.BroadcastPlayerStateFull(playerGuid.GetRawValue());
+            sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
         }
     }
 
@@ -1511,9 +1543,10 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
 
         sSharedPlayerCache.StoreFullState(std::move(state));
         sProxyClient.BroadcastPlayerStateFull(pCurrChar->GetGUID().GetRawValue());
+        sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
         sClusterMgr.SetPlayerOwner(pCurrChar->GetGUID().GetRawValue(), sProxyClient.GetNodeId());
 
-        LOG_INFO("server.worldserver", "Cluster: Published initial state for {} to shared cache", pCurrChar->GetName());
+        LOG_INFO("server.worldserver", "Cluster: Published initial state + full transfer for {} to all nodes", pCurrChar->GetName());
     }
 }
 

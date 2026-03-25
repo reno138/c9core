@@ -546,6 +546,9 @@ void Player::Update(uint32 p_time)
                 // 1. Broadcast full state so dest node has latest
                 sProxyClient.BroadcastPlayerStateFull(GetGUID().GetRawValue());
 
+                // 1b. Broadcast full PlayerTransferData (includes transport entry, pet, auras with casters)
+                sProxyClient.BroadcastPlayerTransferFull(this);
+
                 // 2. Claim ownership on destination
                 sProxyClient.ClaimPlayer(GetGUID().GetRawValue());
 
@@ -578,6 +581,17 @@ void Player::Update(uint32 p_time)
     // Decrement transfer cooldown
     if (m_zoneTransferCooldown > 0)
         m_zoneTransferCooldown = (m_zoneTransferCooldown > p_time) ? m_zoneTransferCooldown - p_time : 0;
+
+    // Cluster: periodic full state refresh (cold tier — every 2 minutes)
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+    {
+        m_clusterFullRefreshTimer += p_time;
+        if (m_clusterFullRefreshTimer >= CLUSTER_FULL_REFRESH_MS)
+        {
+            m_clusterFullRefreshTimer = 0;
+            sProxyClient.BroadcastPlayerTransferFull(this);
+        }
+    }
 
     // Cluster: detect state changes for broadcast
     if (sClusterMgr.IsEnabled())
@@ -2663,6 +2677,7 @@ void Player::BroadcastClusterStateIfDirty(uint32 diff)
             if (Transport* t = GetTransport())
             {
                 s.transportGuid = t->GetGUID().GetRawValue();
+                s.transportEntry = t->GetEntry();
                 s.transOffX = GetTransOffsetX();
                 s.transOffY = GetTransOffsetY();
                 s.transOffZ = GetTransOffsetZ();
@@ -2671,6 +2686,7 @@ void Player::BroadcastClusterStateIfDirty(uint32 diff)
             else
             {
                 s.transportGuid = 0;
+                s.transportEntry = 0;
             }
         }
         if (dirtyMask & STATE_FIELD_PET)
