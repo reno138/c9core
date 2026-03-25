@@ -59,9 +59,14 @@ bool ClusterMgr::RegisterRemoteNode(ClusterNodeInfo info)
             ++it;
     }
 
-    // Register new map→node entries.
-    for (uint32 mapId : info.maps)
-        _mapToNode[mapId] = nodeId;
+    // Register new map→node entries — but ONLY if this node has no zones.
+    // A node with zones is a zones-only node that loads map terrain locally
+    // but does NOT own the map. Two nodes must never claim the same map.
+    if (info.zones.empty())
+    {
+        for (uint32 mapId : info.maps)
+            _mapToNode[mapId] = nodeId;
+    }
 
     // Clear stale zone entries for this node before re-adding
     for (auto zit = _zoneToNode.begin(); zit != _zoneToNode.end(); )

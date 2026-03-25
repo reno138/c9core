@@ -224,7 +224,11 @@ void ProxyClient::PublishAnnounce()
 
     // Wire format for cluster.announce:
     //   [nodeId:1][serverType:1][gamePort:2][addrLen:1][addr:n][mapCount:2][mapIds:4*n]
-    auto localMaps = sClusterMgr.GetLocalMaps();
+    // If this node has zones configured, it's a zones-only node — don't
+    // announce maps, because Maps config just tells the worldserver what
+    // terrain to load. The map is OWNED by another node; we only own zones.
+    auto localZones = sClusterMgr.GetLocalZones();
+    auto localMaps = localZones.empty() ? sClusterMgr.GetLocalMaps() : std::unordered_set<uint32>{};
     uint16 mapCount = static_cast<uint16>(localMaps.size());
     uint8  addrLen  = static_cast<uint8>(_gameAddress.size());
 
@@ -247,7 +251,6 @@ void ProxyClient::PublishAnnounce()
     }
 
     // Append zone data: [zoneCount:2][zoneIds:4*n]
-    auto localZones = sClusterMgr.GetLocalZones();
     uint16 zoneCount = static_cast<uint16>(localZones.size());
     buf.push_back(static_cast<uint8>(zoneCount & 0xFF));
     buf.push_back(static_cast<uint8>(zoneCount >> 8));
@@ -266,7 +269,7 @@ void ProxyClient::PublishAnnounce()
                  natsStatus_GetText(s));
     else
         LOG_INFO("server.worldserver",
-                 "ProxyClient: Published cluster.announce (nodeId={} maps={})", _nodeId, mapCount);
+                 "ProxyClient: Published cluster.announce (nodeId={} maps={} zones={})", _nodeId, mapCount, zoneCount);
 }
 
 /// Called on the NATS dispatch thread for cluster.announce messages.
