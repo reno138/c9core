@@ -1574,18 +1574,9 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
     SendClientCacheVersion(clientCacheVersion);
     SendTutorialsData();
 
-    // Cluster redirect auto-login: if this session was created by a redirect,
-    // queue CMSG_PLAYER_LOGIN now that the init packets have been sent.
-    // The client expects AUTH_OK + addon info + cache version + tutorials
-    // before it will accept login data.
-    uint64 redirectGuid = GetRedirectAutoLoginGuid();
-    if (redirectGuid != 0)
-    {
-        LOG_INFO("network", "WorldSession: Redirect auto-login for GUID {:016X} after session init", redirectGuid);
-        WorldPacket* loginPacket = new WorldPacket(CMSG_PLAYER_LOGIN, 8);
-        *loginPacket << ObjectGuid(redirectGuid);
-        QueuePacket(loginPacket);
-    }
+    // No auto-login here. After redirect, the client drives the flow:
+    // CMSG_CHAR_ENUM → CMSG_PLAYER_LOGIN. This was the working behavior
+    // from the 2026-03-24 session (commit c5d77d7b8).
 }
 
 void WorldSession::SetPacketLogging(bool state)

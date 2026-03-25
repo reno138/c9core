@@ -637,12 +637,11 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
     _worldSession->SetSessionKey(account.SessionKey);
     _worldSession->SetAuthSeed(_authSeed);
 
-    // Store redirect GUID so auto-login can happen after session init completes
+    // Populate legit characters so the client can request char enum.
+    // Do NOT auto-login — the client drives the post-redirect flow:
+    // it sends CMSG_CHAR_ENUM, gets the list, then CMSG_PLAYER_LOGIN.
     if (redirectPlayerGuid != 0)
     {
-        _worldSession->SetRedirectAutoLoginGuid(redirectPlayerGuid);
-
-        // Populate legit characters from shared cache
         auto allPlayers = sSharedPlayerCache.GetAll();
         for (auto const& p : allPlayers)
         {
