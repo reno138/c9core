@@ -896,11 +896,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             destNode = sClusterMgr.GetNodeForMap(checkMap);
             reason = fmt::format("map {}", checkMap);
         }
-        else if (!sClusterMgr.IsZoneLocal(checkZone))
-        {
-            destNode = sClusterMgr.GetNodeForZone(checkZone);
-            reason = fmt::format("zone {}", checkZone);
-        }
+        // Zone-level redirect is NOT done at login — let the in-game dwell timer
+        // handle it once the player is fully in-world. The login-path redirect
+        // for zones fails because the client isn't in a state to handle SMSG_REDIRECT_CLIENT
+        // during the login sequence.
 
         if (destNode)
         {
