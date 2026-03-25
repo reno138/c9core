@@ -638,11 +638,8 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
         account.Locale, account.Recruiter, account.IsRectuiter,
         account.Security ? true : false, account.TotalTime);
 
-    // Skip addon info for redirect — not needed
-    // _worldSession->ReadAddonsInfo(...);
-
-    if (wardenActive)
-        _worldSession->InitWarden(account.SessionKey, account.OS);
+    // Skip addon info and Warden for redirect — client doesn't expect them after redirect auth.
+    // Warden sends SMSG_WARDEN_DATA immediately which the client can't process in redirect state.
 
     _worldSession->SetSessionKey(account.SessionKey);
     _worldSession->SetAuthSeed(_authSeed);
