@@ -826,6 +826,21 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         return;
     }
 
+    // Cluster: apply shared cache position FIRST so zone checks use the real
+    // position (not stale DB). During redirect, the player's DB position might
+    // be in Durotar but the cache has them in Org (where they were when redirect fired).
+    if (sClusterMgr.IsEnabled())
+    {
+        auto cachedState = sSharedPlayerCache.Get(playerGuid.GetRawValue());
+        if (cachedState)
+        {
+            LOG_INFO("server.worldserver", "Applying cached position for {} before zone check: map {} zone {} ({:.1f},{:.1f},{:.1f})",
+                     pCurrChar->GetName(), cachedState->mapId, cachedState->zoneId,
+                     cachedState->posX, cachedState->posY, cachedState->posZ);
+            pCurrChar->Relocate(cachedState->posX, cachedState->posY, cachedState->posZ, cachedState->posO);
+        }
+    }
+
     // Cluster: if the player's saved map OR zone is owned by a different node,
     // redirect the client directly to the owning node via SMSG_REDIRECT_CLIENT.
     // Check zone first (more specific), then map.
@@ -834,15 +849,23 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         std::optional<ClusterNodeInfo> destNode;
         std::string reason;
 
+        // Use cached zone if available (more current than DB), else use DB zone
+        uint32 checkZone = pCurrChar->GetZoneId();
+        {
+            auto cs = sSharedPlayerCache.Get(playerGuid.GetRawValue());
+            if (cs && cs->zoneId != 0)
+                checkZone = cs->zoneId;
+        }
+
         if (!sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
         {
             destNode = sClusterMgr.GetNodeForMap(pCurrChar->GetMapId());
             reason = fmt::format("map {}", pCurrChar->GetMapId());
         }
-        else if (!sClusterMgr.IsZoneLocal(pCurrChar->GetZoneId()))
+        else if (!sClusterMgr.IsZoneLocal(checkZone))
         {
-            destNode = sClusterMgr.GetNodeForZone(pCurrChar->GetZoneId());
-            reason = fmt::format("zone {}", pCurrChar->GetZoneId());
+            destNode = sClusterMgr.GetNodeForZone(checkZone);
+            reason = fmt::format("zone {}", checkZone);
         }
 
         if (destNode)

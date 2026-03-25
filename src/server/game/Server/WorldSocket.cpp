@@ -18,6 +18,7 @@
 #include "WorldSocket.h"
 #include "AccountMgr.h"
 #include "ClusterMgr.h"
+#include "SharedPlayerCache.h"
 #include "Config.h"
 #include "CryptoHash.h"
 #include "CryptoRandom.h"
@@ -602,17 +603,18 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
     AccountInfo account(result->Fetch());
 
     // Verify there's a pending redirect token for this account
+    uint64 redirectPlayerGuid = 0;
     auto redirect = sClusterMgr.TakePendingRedirect(account.Id);
     if (!redirect)
     {
         LOG_WARN("network", "WorldSocket::HandleRedirectionAuthProof: No pending redirect for account {} ({})",
                  account.Id, _redirectAccountName);
-        // Allow anyway for now — the redirect token might have expired or not arrived yet
     }
     else
     {
+        redirectPlayerGuid = redirect->playerGuid;
         LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Validated redirect token for account {} GUID {:016X}",
-                 account.Id, redirect->playerGuid);
+                 account.Id, redirectPlayerGuid);
     }
 
     // Initialize encryption with the session key (same as normal auth)
@@ -651,8 +653,33 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
 
     sWorldSessionMgr->AddSession(_worldSession);
 
-    LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} ({}) authenticated via redirect from {}",
-             account.Id, _worldSession->GetPlayerInfo(), GetRemoteIpAddress().to_string());
+    LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} authenticated via redirect from {}",
+             account.Id, GetRemoteIpAddress().to_string());
+
+    // Auto-login: the shared player cache has this player's data on every node.
+    // Populate _legitCharacters from cache (no DB query needed) and queue login.
+    if (redirectPlayerGuid != 0)
+    {
+        // The shared cache confirms this GUID belongs to this account — validated
+        // by the source node before redirect. Add all cached players for this account.
+        auto allPlayers = sSharedPlayerCache.GetAll();
+        for (auto const& p : allPlayers)
+        {
+            if (p.accountId == account.Id)
+                _worldSession->AddLegitCharacter(ObjectGuid(p.guid));
+        }
+        // Also add the redirect target in case it wasn't in cache yet
+        _worldSession->AddLegitCharacter(ObjectGuid(redirectPlayerGuid));
+
+        LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Auto-login GUID {:016X} for account {}",
+                 redirectPlayerGuid, account.Id);
+
+        WorldPacket* loginPacket = new WorldPacket(CMSG_PLAYER_LOGIN, 8);
+        *loginPacket << ObjectGuid(redirectPlayerGuid);
+        _worldSession->QueuePacket(loginPacket);
+    }
+
+    AsyncRead();
 }
 
 void WorldSocket::HandleAuthSession(WorldPacket & recvPacket)

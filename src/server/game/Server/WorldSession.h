@@ -470,6 +470,10 @@ public:
     void SetAuthSeed(std::array<uint8, 4> const& seed) { _clusterAuthSeed = seed; }
     std::array<uint8, 4> const& GetAuthSeed() const { return _clusterAuthSeed; }
 
+    /// GUID to auto-login after redirect char enum completes
+    void SetRedirectAutoLoginGuid(uint64 guid) { _redirectAutoLoginGuid = guid; }
+    uint64 GetRedirectAutoLoginGuid() const { return _redirectAutoLoginGuid; }
+
 
     /// Session in auth.queue currently
     void SetInQueue(bool state) { m_inQueue = state; }
@@ -1237,6 +1241,7 @@ private:
     std::string m_Address;
     SessionKey _clusterSessionKey{};   ///< cached for SMSG_REDIRECT_CLIENT HMAC
     std::array<uint8, 4> _clusterAuthSeed{}; ///< auth seed from SMSG_AUTH_CHALLENGE
+    uint64 _redirectAutoLoginGuid{0}; ///< GUID to auto-login after redirect
 
     AccountTypes _security;
     bool _skipQueue;
