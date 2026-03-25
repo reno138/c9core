@@ -2916,7 +2916,7 @@ protected:
     // Zone transfer hysteresis
     uint32 m_zoneTransferDwellZone{0};     ///< zone ID being dwelled in for potential transfer
     uint32 m_zoneTransferDwellTimer{0};    ///< ms remaining before transfer triggers
-    uint32 m_zoneTransferCooldown{0};      ///< ms remaining before another transfer allowed
+    uint32 m_zoneTransferCooldown{ZONE_TRANSFER_COOLDOWN_MS}; ///< starts with cooldown to block transfer on initial login
     static constexpr uint32 ZONE_TRANSFER_DWELL_MS    = 2000;  ///< 2s dwell before transfer
     static constexpr uint32 ZONE_TRANSFER_COOLDOWN_MS = 5000;  ///< 5s cooldown after transfer
     uint32 m_areaUpdateId;

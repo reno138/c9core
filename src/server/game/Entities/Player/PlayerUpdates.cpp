@@ -28,6 +28,7 @@
 #include "ProxyClient.h"
 #include "SharedPlayerCache.h"
 #include "ClientRedirect.h"
+#include <random>
 #include "Transport.h"
 #include "WorldPacket.h"
 #include "Guild.h"
@@ -523,6 +524,15 @@ void Player::Update(uint32 p_time)
         if (m_zoneTransferDwellTimer <= p_time)
         {
             m_zoneTransferDwellTimer = 0;
+
+            // If cooldown is still active, restart the dwell timer (wait for cooldown)
+            if (m_zoneTransferCooldown > 0)
+            {
+                m_zoneTransferDwellTimer = ZONE_TRANSFER_DWELL_MS;
+                // Don't clear dwellZone — keep waiting
+            }
+            else
+            {
             uint32 targetZone = m_zoneTransferDwellZone;
             m_zoneTransferDwellZone = 0;
 
@@ -539,8 +549,12 @@ void Player::Update(uint32 p_time)
                 // 2. Claim ownership on destination
                 sProxyClient.ClaimPlayer(GetGUID().GetRawValue());
 
-                // 3. Publish redirect token so dest node can validate
-                uint32 token = ClientRedirect::SuspendClient(GetSession());
+                // 3. Generate redirect token and publish to dest node
+                // NOTE: Do NOT send SMSG_SUSPEND_COMMS before SMSG_REDIRECT_CLIENT!
+                // Binary analysis shows the client checks the suspended flag (0x538) and
+                // skips the redirect entirely if it's set. Just send the redirect directly.
+                static std::mt19937 rng(std::random_device{}());
+                uint32 token = rng();
                 sProxyClient.PublishRedirectToken(GetSession()->GetAccountId(),
                                                   GetGUID().GetRawValue(), token, destNode->nodeId);
 
@@ -553,6 +567,7 @@ void Player::Update(uint32 p_time)
                 m_zoneTransferCooldown = ZONE_TRANSFER_COOLDOWN_MS;
                 return;
             }
+            } // end cooldown check
         }
         else
         {
@@ -1444,9 +1459,11 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
     // Cluster: zone-based transfer with hysteresis (dwell timer + cooldown)
+    // Start the dwell timer when entering a non-local zone. The cooldown check
+    // is done when the dwell EXPIRES (in Player::Update), not here — because
+    // UpdateZone only fires on zone change and won't retry if cooldown was active.
     if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
         && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
-        && m_zoneTransferCooldown == 0
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
         && !GetVehicle() && !IsBeingTeleportedFar())
     {
@@ -1455,8 +1472,8 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
             // Entered a new non-local zone — start dwell timer
             m_zoneTransferDwellZone = newZone;
             m_zoneTransferDwellTimer = ZONE_TRANSFER_DWELL_MS;
-            LOG_DEBUG("server.worldserver", "Player {} entered non-local zone {} — dwell timer started ({}ms)",
-                      GetName(), newZone, ZONE_TRANSFER_DWELL_MS);
+            LOG_INFO("server.worldserver", "Player {} entered non-local zone {} — dwell timer started ({}ms)",
+                     GetName(), newZone, ZONE_TRANSFER_DWELL_MS);
         }
         // Dwell timer is decremented in Player::Update; transfer triggers when it expires
     }

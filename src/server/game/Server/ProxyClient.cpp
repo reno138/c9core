@@ -333,6 +333,7 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         uint16 zoneCount = static_cast<uint16>(d[off]) | (static_cast<uint16>(d[off + 1]) << 8);
         off += 2;
         if (zoneCount > 128) zoneCount = 128;
+        LOG_INFO("server.worldserver", "ProxyClient: Announce from node {} — parsed {} zones", info.nodeId, zoneCount);
         if (n >= off + zoneCount * 4)
         {
             for (uint16 i = 0; i < zoneCount; ++i)

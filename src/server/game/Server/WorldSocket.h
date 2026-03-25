@@ -118,11 +118,14 @@ private:
     void HandleSendAuthSession();
     void HandleAuthSession(WorldPacket& recvPacket);
     void HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> authSession, PreparedQueryResult result);
+    void HandleRedirectionAuthProof(WorldPacket& recvPacket);
+    void HandleRedirectionAuthProofCallback(PreparedQueryResult result);
     void LoadSessionPermissionsCallback(PreparedQueryResult result);
     void SendAuthResponseError(uint8 code);
 
     bool HandlePing(WorldPacket& recvPacket);
 
+    std::string _redirectAccountName;  ///< stored between HandleRedirectionAuthProof and callback
     std::array<uint8, 4> _authSeed;
     AuthCrypt _authCrypt;
     SessionKey _sessionKey{};   ///< Stored after CMSG_AUTH_SESSION for ARC4 initialization

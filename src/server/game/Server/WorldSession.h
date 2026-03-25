@@ -466,6 +466,10 @@ public:
     void SetSessionKey(SessionKey const& key) { _clusterSessionKey = key; }
     SessionKey const& GetSessionKey() const { return _clusterSessionKey; }
 
+    /// Auth seed from SMSG_AUTH_CHALLENGE (4 bytes, used in redirect HMAC)
+    void SetAuthSeed(std::array<uint8, 4> const& seed) { _clusterAuthSeed = seed; }
+    std::array<uint8, 4> const& GetAuthSeed() const { return _clusterAuthSeed; }
+
 
     /// Session in auth.queue currently
     void SetInQueue(bool state) { m_inQueue = state; }
@@ -1232,6 +1236,7 @@ private:
     std::shared_ptr<WorldSocket> m_Socket;
     std::string m_Address;
     SessionKey _clusterSessionKey{};   ///< cached for SMSG_REDIRECT_CLIENT HMAC
+    std::array<uint8, 4> _clusterAuthSeed{}; ///< auth seed from SMSG_AUTH_CHALLENGE
 
     AccountTypes _security;
     bool _skipQueue;

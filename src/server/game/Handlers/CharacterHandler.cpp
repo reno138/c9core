@@ -51,6 +51,7 @@
 #include "SharedDefines.h"
 #include "ClusterMgr.h"
 #include "ClientRedirect.h"
+#include <random>
 #include "PlayerTransfer.h"
 #include "ProxyClient.h"
 #include "SharedPlayerCache.h"
@@ -825,41 +826,48 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         return;
     }
 
-    // Cluster: if the player's saved map is owned by a different node, redirect
-    // the client directly to the owning node via SMSG_REDIRECT_CLIENT.
-    // When the client reconnects to the correct node, HandlePlayerLoginFromDB runs
-    // again with IsMapLocal() == true and proceeds normally.
-    if (sClusterMgr.IsEnabled()
-        && !sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
+    // Cluster: if the player's saved map OR zone is owned by a different node,
+    // redirect the client directly to the owning node via SMSG_REDIRECT_CLIENT.
+    // Check zone first (more specific), then map.
+    if (sClusterMgr.IsEnabled())
     {
-        uint32 const mapId = pCurrChar->GetMapId();
-        uint64 const charGuid = pCurrChar->GetGUID().GetRawValue();
+        std::optional<ClusterNodeInfo> destNode;
+        std::string reason;
 
-        auto destNode = sClusterMgr.GetNodeForMap(mapId);
+        if (!sClusterMgr.IsMapLocal(pCurrChar->GetMapId()))
+        {
+            destNode = sClusterMgr.GetNodeForMap(pCurrChar->GetMapId());
+            reason = fmt::format("map {}", pCurrChar->GetMapId());
+        }
+        else if (!sClusterMgr.IsZoneLocal(pCurrChar->GetZoneId()))
+        {
+            destNode = sClusterMgr.GetNodeForZone(pCurrChar->GetZoneId());
+            reason = fmt::format("zone {}", pCurrChar->GetZoneId());
+        }
+
         if (destNode)
         {
-            LOG_INFO("server.worldserver", "Player {} on wrong node (map {}), redirecting to node {} ({}:{})",
-                     pCurrChar->GetName(), mapId, destNode->nodeId, destNode->address, destNode->port);
+            uint64 const charGuid = pCurrChar->GetGUID().GetRawValue();
+            LOG_INFO("server.worldserver", "Player {} on wrong node ({}), redirecting to node {} ({}:{})",
+                     pCurrChar->GetName(), reason, destNode->nodeId, destNode->address, destNode->port);
 
-            // Broadcast full state so dest node has it cached
-            sProxyClient.BroadcastPlayerStateFull(charGuid);
-
-            // Publish redirect token
-            uint32 token = ClientRedirect::SuspendClient(this);
+            // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
+            static std::mt19937 rng(std::random_device{}());
+            uint32 token = rng();
             sProxyClient.PublishRedirectToken(GetAccountId(), charGuid, token, destNode->nodeId);
 
             // Redirect client to destination node
             auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
                 destNode->nodeId, GetRemoteAddress());
             ClientRedirect::RedirectClient(this, redirectIp, redirectPort, token);
-        }
 
-        // Clean up — client will disconnect and reconnect to dest node
-        pCurrChar->RemoveAllAuras();
-        SetPlayer(nullptr);
-        delete pCurrChar;
-        m_playerLoading = false;
-        return;
+            // Clean up — client will disconnect and reconnect to dest node
+            pCurrChar->RemoveAllAuras();
+            SetPlayer(nullptr);
+            delete pCurrChar;
+            m_playerLoading = false;
+            return;
+        }
     }
 
     pCurrChar->GetMotionMaster()->Initialize();

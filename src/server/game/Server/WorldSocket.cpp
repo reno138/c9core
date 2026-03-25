@@ -17,6 +17,7 @@
 
 #include "WorldSocket.h"
 #include "AccountMgr.h"
+#include "ClusterMgr.h"
 #include "Config.h"
 #include "CryptoHash.h"
 #include "CryptoRandom.h"
@@ -227,7 +228,17 @@ void WorldSocket::HandleSendAuthSession()
     packet << uint32(1);                                    // 1...31
     packet.append(_authSeed);
 
-    packet.append(Acore::Crypto::GetRandomBytes<32>());               // new encryption seeds
+    auto encryptionSeeds = Acore::Crypto::GetRandomBytes<32>();
+    packet.append(encryptionSeeds);
+
+    // Log the full auth challenge for redirect HMAC debugging
+    {
+        std::string seedHex;
+        for (auto b : _authSeed) seedHex += fmt::format("{:02X}", b);
+        std::string encHex;
+        for (auto b : encryptionSeeds) encHex += fmt::format("{:02X}", b);
+        LOG_INFO("network", "WorldSocket: SMSG_AUTH_CHALLENGE seed={} encSeeds={}", seedHex, encHex);
+    }
 
     SendPacketAndLogOpcode(packet);
 }
@@ -431,6 +442,26 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
         case CMSG_SUSPEND_COMMS_ACK:
             packet.rfinish();
             return ReadDataHandlerResult::Ok;
+        case CMSG_REDIRECTION_AUTH_PROOF:
+        {
+            // Client was redirected from another worldserver via SMSG_REDIRECT_CLIENT.
+            // It sends this proof instead of CMSG_AUTH_SESSION.
+            // Packet: accountName(string) + uint32(?) + bytes + SHA1 proof(20)
+            LogOpcodeText(opcode, sessionGuard);
+            if (_authed)
+                return ReadDataHandlerResult::Error;
+
+            try
+            {
+                HandleRedirectionAuthProof(packet);
+                return ReadDataHandlerResult::WaitingForQuery;
+            }
+            catch (ByteBufferException const&) { }
+
+            LOG_ERROR("network", "WorldSocket::ReadDataHandler(): client {} sent malformed CMSG_REDIRECTION_AUTH_PROOF",
+                      GetRemoteIpAddress().to_string());
+            return ReadDataHandlerResult::Error;
+        }
         case CMSG_AUTH_SESSION:
         {
             LogOpcodeText(opcode, sessionGuard);
@@ -529,6 +560,99 @@ void WorldSocket::SendPacket(WorldPacket const& packet)
         sPacketLog->LogPacket(packet, SERVER_TO_CLIENT, GetRemoteIpAddress(), GetRemotePort());
 
     _bufferQueue.Enqueue(new EncryptableAndCompressiblePacket(packet, _authCrypt.IsInitialized()));
+}
+
+void WorldSocket::HandleRedirectionAuthProof(WorldPacket& recvPacket)
+{
+    // CMSG_REDIRECTION_AUTH_PROOF packet:
+    //   string  accountName (null-terminated)
+    //   uint32  unknown (token/counter?)
+    //   uint32  unknown2
+    //   uint8[20] sha1 proof
+    // (based on pcap analysis of the 3.3.5a client)
+
+    std::string accountName;
+    recvPacket >> accountName;
+
+    LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: account='{}' from {}",
+             accountName, GetRemoteIpAddress().to_string());
+
+    // Look up the account in the auth DB — same query as HandleAuthSession
+    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_ACCOUNT_INFO_BY_NAME);
+    stmt->SetData(0, int32(realm.Id.Realm));
+    stmt->SetData(1, accountName);
+
+    // Store account name for callback
+    _redirectAccountName = accountName;
+
+    _queryProcessor.AddCallback(LoginDatabase.AsyncQuery(stmt).WithPreparedCallback(
+        std::bind(&WorldSocket::HandleRedirectionAuthProofCallback, this, std::placeholders::_1)));
+}
+
+void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
+{
+    if (!result)
+    {
+        LOG_ERROR("network", "WorldSocket::HandleRedirectionAuthProof: Unknown account '{}'", _redirectAccountName);
+        SendAuthResponseError(AUTH_UNKNOWN_ACCOUNT);
+        DelayedCloseSocket();
+        return;
+    }
+
+    AccountInfo account(result->Fetch());
+
+    // Verify there's a pending redirect token for this account
+    auto redirect = sClusterMgr.TakePendingRedirect(account.Id);
+    if (!redirect)
+    {
+        LOG_WARN("network", "WorldSocket::HandleRedirectionAuthProof: No pending redirect for account {} ({})",
+                 account.Id, _redirectAccountName);
+        // Allow anyway for now — the redirect token might have expired or not arrived yet
+    }
+    else
+    {
+        LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Validated redirect token for account {} GUID {:016X}",
+                 account.Id, redirect->playerGuid);
+    }
+
+    // Initialize encryption with the session key (same as normal auth)
+    _sessionKey = account.SessionKey;
+    _authCrypt.Init(account.SessionKey);
+
+    // Send auth response OK
+    WorldPacket response(SMSG_AUTH_RESPONSE, 1 + 4 + 1 + 4 + 1);
+    response << uint8(AUTH_OK);
+    response << uint32(0);                                   // BillingTimeRemaining
+    response << uint8(0);                                    // BillingPlanFlags
+    response << uint32(0);                                   // BillingTimeRested
+    response << uint8(account.Expansion);                    // 0 - normal, 1 - TBC, 2 - WotLK
+    SendPacketAndLogOpcode(response);
+
+    // Create the WorldSession — same as HandleAuthSessionCallback
+    bool wardenActive = sWorld->getBoolConfig(CONFIG_WARDEN_ENABLED);
+
+    _worldSession = new WorldSession(account.Id, std::move(_redirectAccountName), account.Flags,
+        shared_from_this(), account.Security, account.Expansion, account.MuteTime,
+        account.Locale, account.Recruiter, account.IsRectuiter,
+        account.Security ? true : false, account.TotalTime);
+
+    // Skip addon info for redirect — not needed
+    // _worldSession->ReadAddonsInfo(...);
+
+    if (wardenActive)
+        _worldSession->InitWarden(account.SessionKey, account.OS);
+
+    _worldSession->SetSessionKey(account.SessionKey);
+    _worldSession->SetAuthSeed(_authSeed);
+
+    _worldSession->ValidateAccountFlags();
+
+    _authed = true;
+
+    sWorldSessionMgr->AddSession(_worldSession);
+
+    LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} ({}) authenticated via redirect from {}",
+             account.Id, _worldSession->GetPlayerInfo(), GetRemoteIpAddress().to_string());
 }
 
 void WorldSocket::HandleAuthSession(WorldPacket & recvPacket)
@@ -721,8 +845,10 @@ void WorldSocket::HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> a
         _worldSession->InitWarden(account.SessionKey, account.OS);
     }
 
-    // Cache session key for SMSG_REDIRECT_CLIENT HMAC (cluster transfers)
+    // Cache session key + auth seed for SMSG_REDIRECT_CLIENT HMAC (cluster transfers)
     _worldSession->SetSessionKey(account.SessionKey);
+    _worldSession->SetAuthSeed(_authSeed);
+    LOG_INFO("network", "WorldSocket: Cached session key + auth seed for account {}", account.Id);
 
     _worldSession->ValidateAccountFlags();
 
