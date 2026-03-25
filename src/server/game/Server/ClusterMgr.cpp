@@ -245,11 +245,24 @@ void ClusterMgr::LoadLocalMaps()
         return;
     }
 
-    // Mode 3: Empty — all maps local (standalone/dev mode)
+    // Mode 3: Empty maps — check if zones are configured.
+    // If zones exist, this node handles zones only (no full maps).
+    // If no zones either, treat as standalone (all maps local).
     if (raw.empty())
     {
-        LOG_INFO("server.worldserver", "ClusterMgr: ClusterServer.Maps is empty — all maps local");
-        return;
+        std::string zoneCheck = sConfigMgr->GetOption<std::string>("ClusterServer.Zones", "");
+        if (!zoneCheck.empty())
+        {
+            LOG_INFO("server.worldserver", "ClusterMgr: ClusterServer.Maps is empty but Zones configured — zones-only mode (no full maps)");
+            // _localMaps stays empty, _allMapsMode stays false → IsMapLocal returns false for everything
+            // Zones will be loaded below
+        }
+        else
+        {
+            _allMapsMode = true;
+            LOG_INFO("server.worldserver", "ClusterMgr: ClusterServer.Maps is empty, no zones — all maps local (standalone)");
+            return;
+        }
     }
 
     // Mode 4: Explicit comma-separated map ID list
@@ -315,7 +328,13 @@ bool ClusterMgr::IsMapLocal(uint32 mapId) const
     }
 
     if (_localMaps.empty())
+    {
+        // If we have local zones configured, we're a zones-only node — no full maps are local
+        if (!_localZones.empty())
+            return false;
+        // No maps AND no zones = standalone, everything is local
         return true;
+    }
 
     return _localMaps.count(mapId) > 0;
 }
