@@ -474,6 +474,11 @@ public:
     void SetRedirectAutoLoginGuid(uint64 guid) { _redirectAutoLoginGuid = guid; }
     uint64 GetRedirectAutoLoginGuid() const { return _redirectAutoLoginGuid; }
 
+    /// Mark this session as having redirected its player to another node.
+    /// Prevents full LogoutPlayer ceremony (no SaveToDB, no AnnounceOffline).
+    void SetRedirectedOut() { _redirectedOut = true; }
+    bool IsRedirectedOut() const { return _redirectedOut; }
+
 
     /// Session in auth.queue currently
     void SetInQueue(bool state) { m_inQueue = state; }
@@ -1242,6 +1247,7 @@ private:
     SessionKey _clusterSessionKey{};   ///< cached for SMSG_REDIRECT_CLIENT HMAC
     std::array<uint8, 4> _clusterAuthSeed{}; ///< auth seed from SMSG_AUTH_CHALLENGE
     uint64 _redirectAutoLoginGuid{0}; ///< GUID to auto-login after redirect
+    bool _redirectedOut{false};       ///< Player was redirected to another node — skip full logout
 
     AccountTypes _security;
     bool _skipQueue;

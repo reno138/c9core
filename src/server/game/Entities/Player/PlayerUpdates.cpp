@@ -567,7 +567,11 @@ void Player::Update(uint32 p_time)
                     destNode->nodeId, GetSession()->GetRemoteAddress());
                 ClientRedirect::RedirectClient(GetSession(), redirectIp, redirectPort, token);
 
-                // 5. Set cooldown — LogoutPlayer will run naturally when client disconnects
+                // 5. Mark session as redirected-out: this is a migration, not a logout.
+                //    Stops Player::Update via m_pendingZoneReroute, and tells
+                //    LogoutPlayer to skip SaveToDB/AnnounceOffline/social cleanup.
+                GetSession()->SetRedirectedOut();
+                m_pendingZoneReroute = true;
                 m_zoneTransferCooldown = ZONE_TRANSFER_COOLDOWN_MS;
                 return;
             }

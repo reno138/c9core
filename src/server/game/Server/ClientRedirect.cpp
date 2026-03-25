@@ -60,15 +60,19 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
         return;
     }
 
-    // Port in network byte order (big-endian)
-    uint16 portNetOrder = htons(destPort);
-
     // Build HMAC-SHA1 input: ip(4) || port(2) = 6 bytes ONLY.
-    // Binary analysis of Wow.exe confirmed: the client hashes ONLY the IP and port,
-    // NOT the token. The token is read from the packet but not included in the HMAC.
+    // Binary analysis of Wow.exe (0x632E30) confirmed:
+    //   - Client reads IP as LE uint32, port as LE uint16 from the packet
+    //   - Client feeds the raw memory bytes of those values into HMAC_Update
+    //   - So the HMAC input must use the SAME byte representation as the packet
+    //
+    // The packet writes: data << uint32(ipNetOrder) << uint16(destPort)
+    //   IP:   ipNetOrder stored as LE bytes in packet — same as memcpy(&ipNetOrder)
+    //   Port: destPort stored as LE bytes in packet — must use destPort, NOT htons(destPort)
     uint8 hmacInput[6];
     std::memcpy(hmacInput, &ipNetOrder, 4);
-    std::memcpy(hmacInput + 4, &portNetOrder, 2);
+    uint16 portRaw = destPort;
+    std::memcpy(hmacInput + 4, &portRaw, 2);
 
     // Compute HMAC-SHA1 with session key
     uint8 hmacResult[20];
@@ -97,9 +101,9 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
 
         LOG_INFO("server.worldserver", "ClientRedirect DEBUG:");
         LOG_INFO("server.worldserver", "  destIp={} destPort={} token=0x{:08X}", destIp, destPort, token);
-        LOG_INFO("server.worldserver", "  ipNetOrder=0x{:08X} portNetOrder=0x{:04X}", ipNetOrder, portNetOrder);
+        LOG_INFO("server.worldserver", "  ipNetOrder=0x{:08X} portRaw=0x{:04X}", ipNetOrder, portRaw);
         LOG_INFO("server.worldserver", "  sessionKey (first 8): {}", skHex);
-        LOG_INFO("server.worldserver", "  HMAC input (10 bytes): {}", inputHex);
+        LOG_INFO("server.worldserver", "  HMAC input (6 bytes): {}", inputHex);
         LOG_INFO("server.worldserver", "  HMAC result (20 bytes): {}", resultHex);
 
         // Log raw packet bytes we're about to send
@@ -107,7 +111,7 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
         // ip(4)
         for (int i = 0; i < 4; ++i) pktHex += fmt::format("{:02X} ", ((uint8*)&ipNetOrder)[i]);
         // port(2)
-        for (int i = 0; i < 2; ++i) pktHex += fmt::format("{:02X} ", ((uint8*)&portNetOrder)[i]);
+        for (int i = 0; i < 2; ++i) pktHex += fmt::format("{:02X} ", ((uint8*)&portRaw)[i]);
         // token(4)
         for (int i = 0; i < 4; ++i) pktHex += fmt::format("{:02X} ", ((uint8*)&token)[i]);
         // hmac(20)
@@ -170,7 +174,7 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
         // Also try HMAC with token included (ip+port+token = 10 bytes)
         uint8 hmacInputWithToken[10];
         std::memcpy(hmacInputWithToken, &ipNetOrder, 4);
-        std::memcpy(hmacInputWithToken + 4, &portNetOrder, 2);
+        std::memcpy(hmacInputWithToken + 4, &portRaw, 2);
         std::memcpy(hmacInputWithToken + 6, &token, 4);
         uint8 tokenHmac[20];
         unsigned int tokenLen = 20;
@@ -182,7 +186,7 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
 
         // And try with ip+port in SWAPPED byte order
         uint32 ipLE = ntohl(ipNetOrder);  // swap to LE/host order
-        uint16 portLE = ntohs(portNetOrder);
+        uint16 portLE = ntohs(portRaw);
         uint8 hmacSwapped[6];
         std::memcpy(hmacSwapped, &ipLE, 4);
         std::memcpy(hmacSwapped + 4, &portLE, 2);

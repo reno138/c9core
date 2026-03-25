@@ -896,10 +896,14 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             destNode = sClusterMgr.GetNodeForMap(checkMap);
             reason = fmt::format("map {}", checkMap);
         }
-        // Zone-level redirect is NOT done at login — let the in-game dwell timer
-        // handle it once the player is fully in-world. The login-path redirect
-        // for zones fails because the client isn't in a state to handle SMSG_REDIRECT_CLIENT
-        // during the login sequence.
+        else if (!sClusterMgr.IsZoneLocal(checkZone))
+        {
+            // Map is local but zone is owned by another node (e.g., Orgrimmar
+            // on a zones-only node). Route login directly to the zone owner —
+            // don't make the player load in here just to dwell-redirect 2s later.
+            destNode = sClusterMgr.GetNodeForZone(checkZone);
+            reason = fmt::format("zone {}", checkZone);
+        }
 
         if (destNode)
         {
@@ -921,7 +925,9 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                 destNode->nodeId, GetRemoteAddress());
             ClientRedirect::RedirectClient(this, redirectIp, redirectPort, token);
 
-            // Clean up — client will disconnect and reconnect to dest node
+            // Clean up — client will disconnect and reconnect to dest node.
+            // Mark as redirected so the session teardown skips AnnounceOffline/SaveToDB.
+            SetRedirectedOut();
             pCurrChar->RemoveAllAuras();
             SetPlayer(nullptr);
             delete pCurrChar;

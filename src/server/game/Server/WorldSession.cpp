@@ -179,7 +179,10 @@ WorldSession::~WorldSession()
     while (_recvQueue.next(packet))
         delete packet;
 
-    LoginDatabase.Execute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());     // One-time query
+    // Don't mark account offline if the player was redirected to another node —
+    // the destination's session will own the "online" flag.
+    if (!_redirectedOut)
+        LoginDatabase.Execute("UPDATE account SET online = 0 WHERE id = {};", GetAccountId());
 }
 
 void WorldSession::UpdateAccountFlag(uint32 flag, bool remove /*= flase*/)
@@ -612,6 +615,32 @@ bool WorldSession::IsSocketClosed() const
 /// %Log the player out
 void WorldSession::LogoutPlayer(bool save)
 {
+    // ── Redirect-out fast path ──────────────────────────────────────────────
+    // The player was redirected to another node. This is a session migration,
+    // NOT a logout. Skip the full ceremony: no SaveToDB (dest node has fresh
+    // state via NATS), no AnnounceOffline (player is still online on dest),
+    // no social cleanup, no guild notifications, no BG queue removal.
+    // Just tear down the local Player object and get out.
+    if (_redirectedOut && _player)
+    {
+        LOG_INFO("entities.player", "LogoutPlayer: Redirect-out cleanup for {} (GUID {:016X}) — skipping full logout",
+                 _player->GetName(), _player->GetGUID().GetRawValue());
+
+        _player->CleanupsBeforeDelete();
+        if (Map* _map = _player->FindMap())
+        {
+            _map->RemovePlayerFromMap(_player, true);
+            _map->AfterPlayerUnlinkFromMap();
+        }
+
+        SetPlayer(nullptr);
+        m_playerLogout = false;
+        m_playerSave = false;
+        m_playerRecentlyLogout = true;
+        SetLogoutStartTime(0);
+        return;
+    }
+
     // finish pending transfers before starting the logout
     // Cross-node reroute: if the far teleport destination is on another node,
     // HandleMoveWorldportAck() would fail (can't create the destination map locally).
@@ -1544,6 +1573,19 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
     SendAddonsInfo();
     SendClientCacheVersion(clientCacheVersion);
     SendTutorialsData();
+
+    // Cluster redirect auto-login: if this session was created by a redirect,
+    // queue CMSG_PLAYER_LOGIN now that the init packets have been sent.
+    // The client expects AUTH_OK + addon info + cache version + tutorials
+    // before it will accept login data.
+    uint64 redirectGuid = GetRedirectAutoLoginGuid();
+    if (redirectGuid != 0)
+    {
+        LOG_INFO("network", "WorldSession: Redirect auto-login for GUID {:016X} after session init", redirectGuid);
+        WorldPacket* loginPacket = new WorldPacket(CMSG_PLAYER_LOGIN, 8);
+        *loginPacket << ObjectGuid(redirectGuid);
+        QueuePacket(loginPacket);
+    }
 }
 
 void WorldSession::SetPacketLogging(bool state)
