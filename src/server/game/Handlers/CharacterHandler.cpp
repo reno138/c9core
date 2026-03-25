@@ -826,6 +826,15 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         return;
     }
 
+    // Cluster: immediately broadcast this player's full state to all nodes.
+    // Every node should know about every online player at all times.
+    // This must happen before redirect checks so the dest node has data if we redirect.
+    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+    {
+        sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
+        LOG_INFO("server.worldserver", "Cluster: Broadcast full state for {} to all nodes immediately after LoadFromDB", pCurrChar->GetName());
+    }
+
     // Cluster: apply shared cache position FIRST so zone checks use the real
     // position (not stale DB). During redirect, the player's DB position might
     // be in Durotar but the cache has them in Org (where they were when redirect fired).
@@ -898,6 +907,9 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             uint64 const charGuid = pCurrChar->GetGUID().GetRawValue();
             LOG_INFO("server.worldserver", "Player {} on wrong node ({}), redirecting to node {} ({}:{})",
                      pCurrChar->GetName(), reason, destNode->nodeId, destNode->address, destNode->port);
+
+            // Broadcast full player state so dest node has data before client arrives
+            sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
 
             // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
             static std::mt19937 rng(std::random_device{}());
