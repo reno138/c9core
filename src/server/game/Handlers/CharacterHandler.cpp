@@ -896,14 +896,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             destNode = sClusterMgr.GetNodeForMap(checkMap);
             reason = fmt::format("map {}", checkMap);
         }
-        else if (!sClusterMgr.IsZoneLocal(checkZone))
-        {
-            // Map is local but zone is owned by another node (e.g., Orgrimmar
-            // on a zones-only node). Route login directly to the zone owner —
-            // don't make the player load in here just to dwell-redirect 2s later.
-            destNode = sClusterMgr.GetNodeForZone(checkZone);
-            reason = fmt::format("zone {}", checkZone);
-        }
+        // Zone-level redirect is NOT done at login. The client can't handle
+        // SMSG_REDIRECT_CLIENT during the login sequence — it hangs. Let the
+        // player load on this node and the in-world dwell timer will handle
+        // zone routing after they enter the world.
 
         if (destNode)
         {
