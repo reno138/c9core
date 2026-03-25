@@ -621,22 +621,10 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
     _sessionKey = account.SessionKey;
     _authCrypt.Init(account.SessionKey);
 
-    // Create the WorldSession for the redirect.
-    // IMPORTANT: Send AUTH_OK + init packets IMMEDIATELY — do NOT go through
-    // InitializeSession's async DB query path. The client has a very short
-    // window after CMSG_REDIRECTION_AUTH_PROOF before it gives up. The async
-    // path worked for normal login (client waits patiently) but the redirect
-    // state machine in the client expects an immediate response.
-    _worldSession = new WorldSession(account.Id, std::move(_redirectAccountName), account.Flags,
-        shared_from_this(), account.Security, account.Expansion, account.MuteTime,
-        account.Locale, account.Recruiter, account.IsRectuiter,
-        account.Security ? true : false, account.TotalTime);
-
-    // Skip Warden — SMSG_WARDEN_DATA confuses the client during redirect.
-    _worldSession->SetSessionKey(account.SessionKey);
-    _worldSession->SetAuthSeed(_authSeed);
-
-    // Send AUTH_OK immediately (same format as SendAuthResponse(AUTH_OK, true))
+    // Send auth response OK — IMMEDIATELY, before creating session.
+    // This is the exact flow that was working at 2AM 2026-03-25.
+    // Do NOT send addon info, cache version, or tutorials — the original
+    // working version didn't, and adding them broke the redirect.
     WorldPacket response(SMSG_AUTH_RESPONSE, 1 + 4 + 1 + 4 + 1);
     response << uint8(AUTH_OK);
     response << uint32(0);                                   // BillingTimeRemaining
@@ -645,12 +633,29 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
     response << uint8(account.Expansion);                    // 0 - normal, 1 - TBC, 2 - WotLK
     SendPacketAndLogOpcode(response);
 
-    // Send addon info, cache version, tutorials immediately (no async)
-    _worldSession->SendAddonsInfo();
-    _worldSession->SendClientCacheVersion(sWorld->getIntConfig(CONFIG_CLIENTCACHE_VERSION));
-    _worldSession->SendTutorialsData();
+    // Create the WorldSession — same as HandleAuthSessionCallback
+    _worldSession = new WorldSession(account.Id, std::move(_redirectAccountName), account.Flags,
+        shared_from_this(), account.Security, account.Expansion, account.MuteTime,
+        account.Locale, account.Recruiter, account.IsRectuiter,
+        account.Security ? true : false, account.TotalTime);
 
-    // Populate legit characters and queue auto-login
+    // Skip addon info for redirect — not needed.
+    // Skip Warden — SMSG_WARDEN_DATA confuses the client in redirect state.
+
+    _worldSession->SetSessionKey(account.SessionKey);
+    _worldSession->SetAuthSeed(_authSeed);
+
+    _worldSession->ValidateAccountFlags();
+
+    _authed = true;
+
+    sWorldSessionMgr->AddSession(_worldSession);
+
+    LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} authenticated via redirect from {}",
+             account.Id, GetRemoteIpAddress().to_string());
+
+    // Auto-login: populate legit characters from shared cache and queue CMSG_PLAYER_LOGIN.
+    // The client after redirect does NOT send CMSG_CHAR_ENUM — the server must drive the login.
     if (redirectPlayerGuid != 0)
     {
         auto allPlayers = sSharedPlayerCache.GetAll();
@@ -668,15 +673,6 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
         *loginPacket << ObjectGuid(redirectPlayerGuid);
         _worldSession->QueuePacket(loginPacket);
     }
-
-    _worldSession->ValidateAccountFlags();
-
-    _authed = true;
-
-    sWorldSessionMgr->AddSession(_worldSession);
-
-    LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} authenticated via redirect from {}",
-             account.Id, GetRemoteIpAddress().to_string());
 
     AsyncRead();
 }
