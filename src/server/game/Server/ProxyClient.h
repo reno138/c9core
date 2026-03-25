@@ -386,12 +386,12 @@ private:
     static constexpr uint8 MSG_RA_COMMAND          = 0x21; ///< proxy -> all nodes: broadcast CLI command
     static constexpr uint8 MSG_RA_REPLY            = 0x22; ///< node -> proxy: CLI command output
     static constexpr uint8 MSG_SEAMLESS_REROUTE      = 0x23; ///< zone-based same-map reroute, no loading screen
-    static constexpr uint8 MSG_PLAYER_TRANSFER       = 0x24; ///< cross-node full player state transfer
-
-    static constexpr uint8 MSG_PLAYER_STATE_DELTA    = 0x25; ///< delta state update (broadcast)
-    static constexpr uint8 MSG_PLAYER_STATE_FULL     = 0x26; ///< full state sync (broadcast on login/transfer)
+    static constexpr uint8 MSG_PLAYER_TRANSFER       = 0x24; ///< actual transfer handoff to specific dest node ONLY
+    static constexpr uint8 MSG_PLAYER_STATE_DELTA    = 0x25; ///< delta state update (broadcast, 10Hz)
+    static constexpr uint8 MSG_PLAYER_STATE_FULL     = 0x26; ///< full SharedPlayerState sync (broadcast on login)
     static constexpr uint8 MSG_PLAYER_CLAIM          = 0x27; ///< ownership claim (broadcast)
     static constexpr uint8 MSG_PLAYER_RELEASE        = 0x28; ///< ownership release (broadcast)
+    static constexpr uint8 MSG_PLAYER_STATE_SYNC_V2  = 0x2A; ///< full v2 PlayerTransferData sync (broadcast, warm+cold)
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};

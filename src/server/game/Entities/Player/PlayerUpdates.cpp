@@ -543,13 +543,14 @@ void Player::Update(uint32 p_time)
                          "Player {} zone transfer: zone {} -> node {} ({}:{}) [dwell expired]",
                          GetName(), targetZone, destNode->nodeId, destNode->address, destNode->port);
 
-                // 1. Broadcast full state so dest node has latest
+                // 1. Send actual transfer data to SPECIFIC dest node (not broadcast)
+                sProxyClient.SendPlayerTransferSeamless(this, destNode->nodeId,
+                    destNode->address, destNode->port);
+
+                // 2. Broadcast state sync so all OTHER nodes update their cache
                 sProxyClient.BroadcastPlayerStateFull(GetGUID().GetRawValue());
 
-                // 1b. Broadcast full PlayerTransferData (includes transport entry, pet, auras with casters)
-                sProxyClient.BroadcastPlayerTransferFull(this);
-
-                // 2. Claim ownership on destination
+                // 3. Claim ownership on destination
                 sProxyClient.ClaimPlayer(GetGUID().GetRawValue());
 
                 // 3. Generate redirect token and publish to dest node

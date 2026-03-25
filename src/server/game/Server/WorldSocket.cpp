@@ -638,8 +638,8 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
         account.Locale, account.Recruiter, account.IsRectuiter,
         account.Security ? true : false, account.TotalTime);
 
-    // Skip addon info and Warden for redirect — client doesn't expect them after redirect auth.
-    // Warden sends SMSG_WARDEN_DATA immediately which the client can't process in redirect state.
+    // Skip addon info for redirect — not needed.
+    // Skip Warden — SMSG_WARDEN_DATA confuses the client in redirect state.
 
     _worldSession->SetSessionKey(account.SessionKey);
     _worldSession->SetAuthSeed(_authSeed);
@@ -653,8 +653,8 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
     LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} authenticated via redirect from {}",
              account.Id, GetRemoteIpAddress().to_string());
 
-    // Pre-populate legit characters so the client can send CMSG_CHAR_ENUM and CMSG_PLAYER_LOGIN.
-    // The client drives the flow: AUTH_OK -> client sends CHAR_ENUM -> server responds -> client sends PLAYER_LOGIN.
+    // Auto-login: populate legit characters from shared cache and queue CMSG_PLAYER_LOGIN.
+    // The client after redirect does NOT send CMSG_CHAR_ENUM — the server must drive the login.
     if (redirectPlayerGuid != 0)
     {
         auto allPlayers = sSharedPlayerCache.GetAll();
@@ -665,8 +665,12 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
         }
         _worldSession->AddLegitCharacter(ObjectGuid(redirectPlayerGuid));
 
-        LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Redirect auth OK for GUID {:016X}, waiting for client to drive login",
-                 redirectPlayerGuid);
+        LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Auto-login GUID {:016X} for account {}",
+                 redirectPlayerGuid, account.Id);
+
+        WorldPacket* loginPacket = new WorldPacket(CMSG_PLAYER_LOGIN, 8);
+        *loginPacket << ObjectGuid(redirectPlayerGuid);
+        _worldSession->QueuePacket(loginPacket);
     }
 
     AsyncRead();

@@ -563,6 +563,8 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
         }
         case MSG_PLAYER_TRANSFER:
         {
+            // Actual transfer handoff — only sent when a redirect is about to happen.
+            // Stores as pending transfer for the dest node's login handler.
             PlayerTransferData td;
             if (DeserializeTransfer(payload.data(), payload.size(), td))
             {
@@ -573,6 +575,51 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             }
             else
                 LOG_ERROR("server.worldserver", "ProxyClient: Failed to deserialize player transfer");
+            break;
+        }
+        case MSG_PLAYER_STATE_SYNC_V2:
+        {
+            // Continuous state sync — updates the shared cache, does NOT store as pending transfer.
+            // This keeps all nodes aware of all players without interfering with transfer handoffs.
+            PlayerTransferData td;
+            if (DeserializeTransfer(payload.data(), payload.size(), td))
+            {
+                // Update the shared player cache with the v2 data
+                SharedPlayerState state;
+                state.guid        = td.guid;
+                state.accountId   = td.accountId;
+                state.mapId       = td.mapId;
+                state.zoneId      = td.zoneId;
+                state.areaId      = td.areaId;
+                state.posX        = td.posX;
+                state.posY        = td.posY;
+                state.posZ        = td.posZ;
+                state.posO        = td.orientation;
+                state.health      = td.health;
+                state.maxHealth   = td.maxHealth;
+                state.powerType   = td.powerType;
+                state.power       = td.power;
+                state.maxPower    = td.maxPower;
+                state.level       = static_cast<uint8>(td.level);
+                state.active      = true;
+                if (td.transport.onTransport)
+                {
+                    state.transportEntry = td.transport.entry;
+                    state.transOffX = td.transport.offsetX;
+                    state.transOffY = td.transport.offsetY;
+                    state.transOffZ = td.transport.offsetZ;
+                    state.transOffO = td.transport.offsetO;
+                }
+                if (td.pet.hasPet)
+                {
+                    state.petEntry  = td.pet.entry;
+                    state.petHealth = td.pet.health;
+                    state.petMana   = td.pet.mana;
+                    state.petName   = td.pet.name;
+                }
+                state.lastUpdateMs = getMSTime();
+                sSharedPlayerCache.StoreFullState(std::move(state));
+            }
             break;
         }
         case MSG_PLAYER_STATE_DELTA:
@@ -1616,8 +1663,8 @@ void ProxyClient::SendPlayerTransferSeamless(Player const* player, uint8 destNod
 {
     if (!_nc || !_connected) return;
 
-    // 1. Snapshot and serialize player state
-    PlayerTransferData td = SnapshotPlayer(player);
+    // 1. Snapshot full v2 state and serialize
+    PlayerTransferData td = SnapshotPlayerFull(player);
     std::vector<uint8_t> payload = SerializeTransfer(td);
 
     // 2. Send transfer data to destination node via NATS
@@ -1640,15 +1687,14 @@ void ProxyClient::BroadcastPlayerTransferFull(Player const* player)
     PlayerTransferData td = SnapshotPlayerFull(player);
     std::vector<uint8_t> payload = SerializeTransfer(td);
 
-    // Broadcast to all nodes via cluster.broadcast with MSG_PLAYER_TRANSFER
-    PublishBroadcast(MSG_PLAYER_TRANSFER,
+    // Broadcast state sync to all nodes — NOT MSG_PLAYER_TRANSFER.
+    // MSG_PLAYER_TRANSFER is reserved for actual transfer handoffs to a specific dest node.
+    // This sync updates the cache on all nodes so they have current data.
+    PublishBroadcast(MSG_PLAYER_STATE_SYNC_V2,
                      payload.data(), static_cast<int>(payload.size()));
 
-    // Also store locally so this node has the latest
-    sClusterMgr.StorePendingTransfer(player->GetGUID().GetRawValue(), std::move(td));
-
-    LOG_INFO("server.worldserver",
-             "ProxyClient: Broadcast full v2 transfer for {} ({} bytes)",
+    LOG_DEBUG("server.worldserver",
+             "ProxyClient: Broadcast v2 state sync for {} ({} bytes)",
              player->GetName(), payload.size());
 }
 

@@ -907,8 +907,9 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             LOG_INFO("server.worldserver", "Player {} on wrong node ({}), redirecting to node {} ({}:{})",
                      pCurrChar->GetName(), reason, destNode->nodeId, destNode->address, destNode->port);
 
-            // Broadcast full player state so dest node has data before client arrives
-            sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
+            // Send transfer data to SPECIFIC dest node (not broadcast)
+            sProxyClient.SendPlayerTransferSeamless(pCurrChar, destNode->nodeId,
+                destNode->address, destNode->port);
 
             // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
             static std::mt19937 rng(std::random_device{}());
