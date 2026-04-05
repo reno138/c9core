@@ -319,7 +319,8 @@ int main(int argc, char** argv)
         // Read port from config directly — sWorld->getIntConfig(CONFIG_PORT_WORLD) isn't
         // populated until SetInitialWorldSettings() runs below.
         uint16 gamePort = static_cast<uint16>(
-            sConfigMgr->GetOption<int32>("WorldServerPort", 8085));
+            sConfigMgr->GetOption<int32>("ClusterServer.GamePort",
+                sConfigMgr->GetOption<int32>("WorldServerPort", 8085)));
         uint8 serverType = (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false) ||
                             sConfigMgr->GetOption<bool>("InstanceServer.Enable", false)) ? 1 : 0;
         sProxyClient.Initialize(natsUrl, serverType, gamePort, gameAddress);

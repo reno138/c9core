@@ -1574,9 +1574,19 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
     SendClientCacheVersion(clientCacheVersion);
     SendTutorialsData();
 
-    // No auto-login here. After redirect, the client drives the flow:
-    // CMSG_CHAR_ENUM → CMSG_PLAYER_LOGIN. This was the working behavior
-    // from the 2026-03-24 session (commit c5d77d7b8).
+    // Auto-login for redirect transfers: fire CMSG_PLAYER_LOGIN internally
+    // so the client never sees the character select screen.
+    if (_redirectAutoLoginGuid != 0)
+    {
+        LOG_INFO("server.worldserver",
+                 "WorldSession: Auto-login after redirect for GUID {:016X}",
+                 _redirectAutoLoginGuid);
+
+        WorldPacket data(CMSG_PLAYER_LOGIN, 8);
+        data << uint64(_redirectAutoLoginGuid);
+        HandlePlayerLoginOpcode(data);
+        _redirectAutoLoginGuid = 0;
+    }
 }
 
 void WorldSession::SetPacketLogging(bool state)

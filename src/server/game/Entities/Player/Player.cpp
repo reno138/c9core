@@ -41,6 +41,8 @@
 #include "Config.h"
 #include "ClusterMgr.h"
 #include "ProxyClient.h"
+#include "ClientRedirect.h"
+#include <random>
 #include "CreatureAI.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
@@ -1574,32 +1576,18 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             // if the player is saved before worldportack (at logout for example)
             // this will be used instead of the current location in SaveToDB
 
-            // Cross-node teleport: ask the proxy to reroute this client to the destination
-            // worldserver node.  The proxy sends SMSG_TRANSFER_PENDING + SMSG_NEW_WORLD to the
-            // client (native WoW map-transfer flow), then switches the backend connection.
+            // Cross-node teleport: redirect client directly to the destination
+            // worldserver node via SMSG_REDIRECT_CLIENT.  The client disconnects
+            // and reconnects to the destination, which does LoadFromDB.
+            LOG_INFO("server.worldserver",
+                     "TeleportTo far: player={} mapid={} IsMapLocal={} ProxyConnected={} PlayerLogout={}",
+                     GetName(), mapid, sClusterMgr.IsMapLocal(mapid),
+                     sProxyClient.IsConnected(), GetSession()->PlayerLogout());
             if (!GetSession()->PlayerLogout()
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // Synchronous position update: write the teleport destination to DB
-                // before sending the reroute.  SaveToDB() can't be used here because
-                // SetSemaphoreTeleportFar makes it bail out (DELAYED_SAVE_PLAYER), and
-                // even without the semaphore it would save the *current* position, not
-                // teleportStore_dest.  A targeted UPDATE is both correct and fast.
-                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
-                {
-                    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
-                    stmt->SetData(0, teleportStore_dest.GetPositionX());
-                    stmt->SetData(1, teleportStore_dest.GetPositionY());
-                    stmt->SetData(2, teleportStore_dest.GetPositionZ());
-                    stmt->SetData(3, teleportStore_dest.GetOrientation());
-                    stmt->SetData(4, (uint16)teleportStore_dest.GetMapId());
-                    stmt->SetData(5, (uint32)0);  // zone — will be resolved on load
-                    stmt->SetData(6, GetGUID().GetCounter());
-                    CharacterDatabase.DirectExecute(stmt);
-                }
-
-                // Detach from transport AFTER saving so this node cleans up cleanly.
+                // Detach from transport before saving.
                 if (m_transport)
                 {
                     m_transport->RemovePassenger(this);
@@ -1608,18 +1596,57 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
                 }
 
-                // Tell the proxy to reroute this player's TCP connection to the destination node.
-                // mapId/x/y/z/ori enable native SMSG_NEW_WORLD from the proxy.
+                // Write destination position+map synchronously via DirectExecute.
+                // CommitTransaction is async — the dest node may LoadFromDB before it commits.
+                // DirectExecute guarantees the row is updated before we send the redirect.
+                {
+                    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
+                    stmt->SetData(0, teleportStore_dest.GetPositionX());
+                    stmt->SetData(1, teleportStore_dest.GetPositionY());
+                    stmt->SetData(2, teleportStore_dest.GetPositionZ());
+                    stmt->SetData(3, teleportStore_dest.GetOrientation());
+                    stmt->SetData(4, (uint16)mapid);
+                    stmt->SetData(5, (uint32)0);  // zone — resolved on load
+                    stmt->SetData(6, GetGUID().GetCounter());
+                    CharacterDatabase.DirectExecute(stmt);
+                }
+                // Async full save for health/auras/cooldowns — best effort
+                SaveToDB(false, false);
+
+                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
+
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
                 if (destNode)
                 {
-                    sProxyClient.SendReroute(GetGUID().GetRawValue(),
-                                             destNode->address, destNode->port,
-                                             mapid,
-                                             teleportStore_dest.m_positionX,
-                                             teleportStore_dest.m_positionY,
-                                             teleportStore_dest.m_positionZ,
-                                             teleportStore_dest.m_orientation);
+                    // Send redirect token to destination node via NATS (no SUSPEND_COMMS)
+                    static std::mt19937 rng(std::random_device{}());
+                    uint32 token = rng();
+                    sProxyClient.PublishRedirectToken(
+                        GetSession()->GetAccountId(),
+                        GetGUID().GetRawValue(),
+                        token,
+                        destNode->nodeId);
+
+                    // Resolve address (handles NAT if configured)
+                    auto [redirectIp, redirectPort] = ClientRedirect::ResolveRedirectAddress(
+                        GetSession()->GetRemoteAddress(),
+                        destNode->address, destNode->port,
+                        sClusterMgr.GetExternalAddress(), sClusterMgr.GetExternalPort());
+
+                    // Send SMSG_NEW_WORLD to put client into loading screen state
+                    // (same as proxy does before backend switch)
+                    {
+                        WorldPacket data(SMSG_NEW_WORLD, 20);
+                        data << uint32(mapid);
+                        data << float(teleportStore_dest.GetPositionX());
+                        data << float(teleportStore_dest.GetPositionY());
+                        data << float(teleportStore_dest.GetPositionZ());
+                        data << float(teleportStore_dest.GetOrientation());
+                        GetSession()->SendPacket(&data);
+                    }
+
+                    // Send SMSG_REDIRECT_CLIENT — client disconnects and reconnects to dest
+                    ClientRedirect::RedirectClient(GetSession(), redirectIp, redirectPort, token);
                 }
                 else
                 {

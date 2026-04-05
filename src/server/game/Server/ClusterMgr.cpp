@@ -309,7 +309,8 @@ void ClusterMgr::LoadLocalMaps()
 
     // Load NAT/redirect config
     _gameAddress = sConfigMgr->GetOption<std::string>("ClusterServer.GameAddress", "127.0.0.1");
-    _gamePort = sConfigMgr->GetOption<uint16>("WorldServerPort", 8085);
+    _gamePort = sConfigMgr->GetOption<uint16>("ClusterServer.GamePort",
+                    sConfigMgr->GetOption<uint16>("WorldServerPort", 8085));
     _externalAddress = sConfigMgr->GetOption<std::string>("ClusterServer.ExternalAddress", "");
     _externalPort = sConfigMgr->GetOption<uint16>("ClusterServer.ExternalPort", 0);
     _nodeId = sConfigMgr->GetOption<uint8>("ClusterServer.NodeId", 1);
