@@ -675,8 +675,11 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
         account.Security ? true : false, account.TotalTime);
 
     // Skip Warden — SMSG_WARDEN_DATA confuses the client during redirect.
-    // Addon info will be sent by InitializeSession (with defaults, since we have
-    // no addon data from the client — ReadAddonsInfo is not called).
+
+    // Apply addon list from the source session (carried via NATS redirect token)
+    // so SendAddonsInfo sends correct per-addon responses instead of an empty list.
+    if (redirect && !redirect->addons.empty())
+        _worldSession->SetAddonsList(redirect->addons);
 
     _worldSession->SetSessionKey(account.SessionKey);
     _worldSession->SetAuthSeed(_authSeed);

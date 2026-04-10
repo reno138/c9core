@@ -18,6 +18,7 @@
 #ifndef ClusterMgr_h__
 #define ClusterMgr_h__
 
+#include "AddonMgr.h"
 #include "Define.h"
 #include "PlayerTransfer.h"
 #include <atomic>
@@ -273,6 +274,7 @@ public:
         uint64 playerGuid{ 0 };
         uint8  sourceNodeId{ 0 };
         uint32 timestampMs{ 0 };   ///< getMSTime() for expiry (30s)
+        std::list<AddonInfo> addons; ///< addon list from source session
     };
 
     void StorePendingRedirect(uint32 accountId, PendingRedirect&& redirect);

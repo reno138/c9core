@@ -1352,7 +1352,9 @@ void WorldSession::SendAddonsInfo()
         }
     }
 
-    m_addonsList.clear();
+    // Keep m_addonsList — needed for cross-node redirect addon transfer.
+    // The list was an optimization clear; in cluster mode it must persist
+    // for the session lifetime so PublishRedirectToken can carry it via NATS.
 
     AddonMgr::BannedAddonList const* bannedAddons = AddonMgr::GetBannedAddons();
     data << uint32(bannedAddons->size());

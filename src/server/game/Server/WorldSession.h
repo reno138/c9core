@@ -474,6 +474,10 @@ public:
     void SetRedirectAutoLoginGuid(uint64 guid) { _redirectAutoLoginGuid = guid; }
     uint64 GetRedirectAutoLoginGuid() const { return _redirectAutoLoginGuid; }
 
+    /// Addon list accessors for cross-node redirect transfer.
+    std::list<AddonInfo> const& GetAddonsList() const { return m_addonsList; }
+    void SetAddonsList(std::list<AddonInfo> const& addons) { m_addonsList = addons; }
+
     /// Mark this session as having redirected its player to another node.
     /// Prevents full LogoutPlayer ceremony (no SaveToDB, no AnnounceOffline).
     void SetRedirectedOut() { _redirectedOut = true; }

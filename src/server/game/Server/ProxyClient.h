@@ -40,6 +40,7 @@ class Player;
 class WorldPacket;
 class WorldLocation;
 
+#include "AddonMgr.h"
 #include "PlayerTransfer.h"
 
 /**
@@ -265,7 +266,8 @@ public:
                                         WorldLocation const& destLoc);
 
     /// Publish redirect token to destination node for validation on reconnect.
-    void PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token, uint8 destNodeId);
+    void PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token,
+                              uint8 destNodeId, std::list<AddonInfo> const& addons = {});
 
     static constexpr uint8 MSG_REDIRECT_TOKEN         = 0x29;  ///< redirect token for proxy-less transfer
 

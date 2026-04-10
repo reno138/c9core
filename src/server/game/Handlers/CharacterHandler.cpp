@@ -883,7 +883,8 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
             static std::mt19937 rng(std::random_device{}());
             uint32 token = rng();
-            sProxyClient.PublishRedirectToken(GetAccountId(), charGuid, token, destNode->nodeId);
+            sProxyClient.PublishRedirectToken(GetAccountId(), charGuid, token,
+                                              destNode->nodeId, GetAddonsList());
 
             // Redirect client to destination node
             auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(

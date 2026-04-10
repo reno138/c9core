@@ -1636,7 +1636,8 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                         GetSession()->GetAccountId(),
                         GetGUID().GetRawValue(),
                         token,
-                        destNode->nodeId);
+                        destNode->nodeId,
+                        GetSession()->GetAddonsList());
 
                     // Ship full player state to the destination via NATS.
                     // The position fields are overridden with the teleport

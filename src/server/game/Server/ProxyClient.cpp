@@ -702,6 +702,27 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
                 pr.sourceNodeId = payload[16];
                 pr.timestampMs = getMSTime();
 
+                // Deserialize addon list if present
+                if (payload.size() >= 19)
+                {
+                    size_t off = 17;
+                    uint16 cnt = payload[off] | (uint16(payload[off+1]) << 8);
+                    off += 2;
+                    for (uint16 i = 0; i < cnt && off < payload.size(); ++i)
+                    {
+                        uint8 nLen = payload[off++];
+                        if (off + nLen + 7 > payload.size()) break;
+                        std::string name(reinterpret_cast<char const*>(payload.data() + off), nLen);
+                        off += nLen;
+                        uint8 enabled = payload[off++];
+                        uint32 crc = 0;
+                        std::memcpy(&crc, payload.data() + off, 4); off += 4;
+                        uint8 state = payload[off++];
+                        bool usePK = payload[off++] != 0;
+                        pr.addons.emplace_back(std::move(name), enabled, crc, state, usePK);
+                    }
+                }
+
                 sClusterMgr.StorePendingRedirect(pr.accountId, std::move(pr));
             }
             break;
@@ -860,24 +881,46 @@ void ProxyClient::ReleasePlayer(uint64 guid)
     LOG_INFO("server.worldserver", "ProxyClient: Releasing ownership of GUID {:016X} from node {}", guid, _nodeId);
 }
 
-void ProxyClient::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token, uint8 destNodeId)
+void ProxyClient::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token,
+                                        uint8 destNodeId, std::list<AddonInfo> const& addons)
 {
     if (!_nc || !_connected) return;
 
-    // Wire: [accountId:4][token:4][guid:8][sourceNodeId:1] = 17 bytes
-    uint8 payload[17];
-    std::memcpy(payload, &accountId, 4);
-    std::memcpy(payload + 4, &token, 4);
-    for (int i = 0; i < 8; ++i) payload[8 + i] = static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF);
+    // Wire: [accountId:4][token:4][guid:8][sourceNodeId:1] = 17 base
+    //   + [addonCount:2] + per-addon: [nameLen:1][name][enabled:1][crc:4][state:1][usePubKey:1]
+    std::vector<uint8> payload;
+    payload.resize(17);
+    std::memcpy(payload.data(), &accountId, 4);
+    std::memcpy(payload.data() + 4, &token, 4);
+    for (int i = 0; i < 8; ++i)
+        payload[8 + i] = static_cast<uint8>((playerGuid >> (i * 8)) & 0xFF);
     payload[16] = _nodeId;
 
-    // Send to destination node specifically
-    PublishToNode(destNodeId, MSG_REDIRECT_TOKEN, payload, 17);
-    // Also broadcast so all nodes know about the pending redirect
-    PublishBroadcast(MSG_REDIRECT_TOKEN, payload, 17);
+    uint16 addonCount = static_cast<uint16>(addons.size());
+    payload.push_back(static_cast<uint8>(addonCount & 0xFF));
+    payload.push_back(static_cast<uint8>(addonCount >> 8));
+    for (auto const& a : addons)
+    {
+        uint8 nameLen = static_cast<uint8>(std::min<size_t>(a.Name.size(), 255));
+        payload.push_back(nameLen);
+        payload.insert(payload.end(), a.Name.begin(), a.Name.begin() + nameLen);
+        payload.push_back(a.Enabled);
+        uint32 crc = a.CRC;
+        payload.insert(payload.end(), reinterpret_cast<uint8*>(&crc),
+                       reinterpret_cast<uint8*>(&crc) + 4);
+        payload.push_back(a.State);
+        payload.push_back(a.UsePublicKeyOrCRC ? 1 : 0);
+    }
 
-    LOG_INFO("server.worldserver", "ProxyClient: Published redirect token for account {} GUID {:016X} -> node {} (token=0x{:08X})",
-             accountId, playerGuid, destNodeId, token);
+    PublishToNode(destNodeId, MSG_REDIRECT_TOKEN,
+                  payload.data(), static_cast<int>(payload.size()));
+    PublishBroadcast(MSG_REDIRECT_TOKEN,
+                     payload.data(), static_cast<int>(payload.size()));
+
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Published redirect token for account {} GUID {:016X} -> node {} "
+             "(token=0x{:08X}, {} addons)",
+             accountId, playerGuid, destNodeId, token, addonCount);
 }
 
 void ProxyClient::Update()
