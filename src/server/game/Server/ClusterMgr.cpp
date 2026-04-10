@@ -223,8 +223,24 @@ bool ClusterMgr::IsEnabled() const
     return !_allMapsMode && (_instanceServerMode || !_localMaps.empty() || !_localZones.empty());
 }
 
+void ClusterMgr::RefreshPacketTraceConfig()
+{
+    // Cached so the PT_* macros in PacketTrace.h cost one atomic load
+    // per trace point instead of a sConfigMgr map lookup per packet.
+    bool const enabled = sConfigMgr->GetOption<bool>("ClusterServer.PacketTrace.Enable", false);
+    _packetTraceEnabled.store(enabled, std::memory_order_relaxed);
+
+    LOG_INFO("server.worldserver",
+             "ClusterMgr: PacketTrace.Enable = {} (trace output -> 'cluster.packettrace' logger)",
+             enabled ? "ENABLED" : "disabled");
+}
+
 void ClusterMgr::LoadLocalMaps()
 {
+    // Refresh diagnostic flags first so any subsequent LOG_* call in this
+    // init path is subject to the same trace gating the runtime will use.
+    RefreshPacketTraceConfig();
+
     std::lock_guard<std::mutex> lock(_localMapsMutex);
     _localMaps.clear();
     _instanceServerMode = false;

@@ -20,6 +20,7 @@
 
 #include "Define.h"
 #include "PlayerTransfer.h"
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -288,6 +289,16 @@ public:
     uint16 GetExternalPort() const;
     uint8 GetNodeId() const;
 
+    /// @return true if verbose packet + state trace logging is currently
+    ///         enabled via the ClusterServer.PacketTrace.Enable config option.
+    /// Hot-path-safe: single atomic load + branch. Used by the PT_* macros
+    /// in PacketTrace.h to gate every trace point.
+    bool IsPacketTraceEnabled() const { return _packetTraceEnabled.load(std::memory_order_relaxed); }
+
+    /// Refresh the cached PacketTrace flag from the live config. Called at
+    /// init time (from LoadLocalMaps) and safe to call again on config reload.
+    void RefreshPacketTraceConfig();
+
 private:
     ClusterMgr() = default;
 
@@ -340,6 +351,12 @@ private:
     std::string _externalAddress;
     uint16 _externalPort{ 0 };
     uint8 _nodeId{ 0 };
+
+    // ── Packet tracing (diagnostic, see PacketTrace.h) ───────────────────
+    /// Cached snapshot of ClusterServer.PacketTrace.Enable. Refreshed on
+    /// init and on config reload via RefreshPacketTraceConfig().
+    /// Atomic so the hot-path IsPacketTraceEnabled() accessor is lock-free.
+    std::atomic<bool> _packetTraceEnabled{ false };
 };
 
 #define sClusterMgr ClusterMgr::Instance()

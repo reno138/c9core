@@ -29,6 +29,7 @@
 #include "IPLocation.h"
 #include "Opcodes.h"
 #include "PacketLog.h"
+#include "PacketTrace.h"
 #include "Random.h"
 #include "Realm.h"
 #include "ScriptMgr.h"
@@ -121,7 +122,7 @@ void EncryptableAndCompressiblePacket::CompressIfNeeded()
 }
 
 WorldSocket::WorldSocket(IoContextTcpSocket&& socket)
-    : Socket(std::move(socket)), _OverSpeedPings(0), _worldSession(nullptr), _authed(false), _sendBufferSize(4096), _loggingPackets(false)
+    : Socket(std::move(socket)), _OverSpeedPings(0), _worldSession(nullptr), _authed(false), _isRedirectConn(false), _sendBufferSize(4096), _loggingPackets(false)
 {
     Acore::Crypto::GetRandomBytes(_authSeed);
     _headerBuffer.Resize(sizeof(ClientPktHeader));
@@ -176,36 +177,44 @@ bool WorldSocket::Update()
         do
         {
             queued->CompressIfNeeded();
-            ServerPktHeader header(queued->size() + 2, queued->GetOpcode());
-            if (queued->NeedsEncryption())
-                _authCrypt.EncryptSend(header.header, header.getHeaderLength());
 
-            currentPacketSize = queued->size() + header.getHeaderLength();
-
-            if (buffer.GetRemainingSpace() < currentPacketSize)
+            // Both normal and redirect use the same ServerPktHeader format:
+            //   [uint16_be size][uint16_le opcode]  (4 bytes, or 5 for large)
+            // The redirect connection uses different ARC4 keys (InitRedirect)
+            // but the same header structure and the same 4-byte encrypt scope.
+            // The key difference is in AuthCrypt::InitRedirect which swaps
+            // the HMAC seed halves to match the client's direction=1 derivation.
+            ServerPktHeader pktHdr(queued->size() + 2, queued->GetOpcode());
+            uint8 hdrLen = pktHdr.getHeaderLength();
             {
-                QueuePacket(std::move(buffer));
-                buffer.Resize(_sendBufferSize);
-            }
+                uint8 hdrBuf[5];
+                std::memcpy(hdrBuf, pktHdr.header, hdrLen);
+                if (queued->NeedsEncryption())
+                    _authCrypt.EncryptSend(hdrBuf, hdrLen);
 
-            if (buffer.GetRemainingSpace() >= currentPacketSize)
-            {
-                buffer.Write(header.header, header.getHeaderLength());
-                if (!queued->empty())
-                    buffer.Write(queued->contents(), queued->size());
-            }
-            else    // Single packet larger than current buffer size
-            {
-                // Resize buffer to fit current packet
-                buffer.Resize(currentPacketSize);
+                currentPacketSize = queued->size() + hdrLen;
 
-                // Grow future buffers to current packet size if still below limit
-                if (currentPacketSize <= 65536)
-                    _sendBufferSize = currentPacketSize;
+                if (buffer.GetRemainingSpace() < currentPacketSize)
+                {
+                    QueuePacket(std::move(buffer));
+                    buffer.Resize(_sendBufferSize);
+                }
 
-                buffer.Write(header.header, header.getHeaderLength());
-                if (!queued->empty())
-                    buffer.Write(queued->contents(), queued->size());
+                if (buffer.GetRemainingSpace() >= currentPacketSize)
+                {
+                    buffer.Write(hdrBuf, hdrLen);
+                    if (!queued->empty())
+                        buffer.Write(queued->contents(), queued->size());
+                }
+                else
+                {
+                    buffer.Resize(currentPacketSize);
+                    if (currentPacketSize <= 65536)
+                        _sendBufferSize = currentPacketSize;
+                    buffer.Write(hdrBuf, hdrLen);
+                    if (!queued->empty())
+                        buffer.Write(queued->contents(), queued->size());
+                }
             }
 
             delete queued;
@@ -229,15 +238,15 @@ void WorldSocket::HandleSendAuthSession()
     packet << uint32(1);                                    // 1...31
     packet.append(_authSeed);
 
-    auto encryptionSeeds = Acore::Crypto::GetRandomBytes<32>();
-    packet.append(encryptionSeeds);
+    _encryptionSeeds = Acore::Crypto::GetRandomBytes<32>();
+    packet.append(_encryptionSeeds);
 
     // Log the full auth challenge for redirect HMAC debugging
     {
         std::string seedHex;
         for (auto b : _authSeed) seedHex += fmt::format("{:02X}", b);
         std::string encHex;
-        for (auto b : encryptionSeeds) encHex += fmt::format("{:02X}", b);
+        for (auto b : _encryptionSeeds) encHex += fmt::format("{:02X}", b);
         LOG_INFO("network", "WorldSocket: SMSG_AUTH_CHALLENGE seed={} encSeeds={}", seedHex, encHex);
     }
 
@@ -423,6 +432,16 @@ WorldSocket::ReadDataHandlerResult WorldSocket::ReadDataHandler()
     if (sPacketLog->CanLogPacket() && IsLoggingPackets())
         sPacketLog->LogPacket(packet, CLIENT_TO_SERVER, GetRemoteIpAddress(), GetRemotePort());
 
+    if (PT_ENABLED())
+    {
+        std::string who = GetRemoteIpAddress().to_string();
+        std::uint32_t const op = static_cast<std::uint32_t>(opcode);
+        if (Acore::PacketTrace::IsCriticalOpcodeForTrace(op))
+            PT_OPCODE_HEX("C>S", op, packet.contents(), packet.size(), who, 256);
+        else
+            PT_OPCODE("C>S", op, packet.size(), who);
+    }
+
     std::unique_lock<std::mutex> sessionGuard(_worldSessionLock, std::defer_lock);
 
     switch (opcode)
@@ -560,6 +579,16 @@ void WorldSocket::SendPacket(WorldPacket const& packet)
     if (sPacketLog->CanLogPacket() && IsLoggingPackets())
         sPacketLog->LogPacket(packet, SERVER_TO_CLIENT, GetRemoteIpAddress(), GetRemotePort());
 
+    if (PT_ENABLED())
+    {
+        std::string who = GetRemoteIpAddress().to_string();
+        std::uint32_t const op = static_cast<std::uint32_t>(packet.GetOpcode());
+        if (Acore::PacketTrace::IsCriticalOpcodeForTrace(op))
+            PT_OPCODE_HEX("S>C", op, packet.contents(), packet.size(), who, 256);
+        else
+            PT_OPCODE("S>C", op, packet.size(), who);
+    }
+
     _bufferQueue.Enqueue(new EncryptableAndCompressiblePacket(packet, _authCrypt.IsInitialized()));
 }
 
@@ -617,9 +646,24 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
                  account.Id, redirectPlayerGuid);
     }
 
-    // Initialize encryption with the session key (same as normal auth)
+    // Initialize encryption with redirect-specific key derivation.
     _sessionKey = account.SessionKey;
-    _authCrypt.Init(account.SessionKey);
+    _authCrypt.InitRedirect(account.SessionKey, _encryptionSeeds);
+    _isRedirectConn = true;
+
+    // Send SMSG_FORCE_SEND_QUEUED_PACKETS (0x511) to complete the redirect.
+    // This tells the client to switch the redirect connection to become the
+    // main connection, clear the suspend flag, and flush queued messages.
+    // NOTE: 0x50F (SMSG_SUSPEND_COMMS) was already sent by the SOURCE node
+    // on the old connection — it MUST NOT be sent here (the client's 0x50F
+    // handler at 0x633020 rejects packets from non-main connections).
+    {
+        WorldPacket redirectDone(SMSG_FORCE_SEND_QUEUED_PACKETS, 0);
+        SendPacketAndLogOpcode(redirectDone);
+        LOG_INFO("network",
+                 "WorldSocket::HandleRedirectionAuthProofCallback: "
+                 "Sent 0x511 (redirect done) to {}", GetRemoteIpAddress().to_string());
+    }
 
     // Create the WorldSession — same flow as normal auth.
     // Do NOT send SMSG_AUTH_RESPONSE here — let InitializeSession handle it

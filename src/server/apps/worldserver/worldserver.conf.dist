@@ -4919,4 +4919,34 @@ ClusterServer.MgmtStatusInterval = 5
 ClusterServer.MgmtPlayersInterval = 3
 
 #
+#    ClusterServer.PacketTrace.Enable
+#        Description: Enables verbose packet + state trace logging for cluster
+#                     login and redirect flows.  When enabled, every inbound
+#                     and outbound opcode is logged at the WorldSocket layer,
+#                     plus state-transition markers at the key code points in
+#                     HandlePlayerLoginOpcode, HandlePlayerLoginFromDB,
+#                     HandleRedirectionAuthProof, Player::TeleportTo, and
+#                     InitializeSessionCallback.  A small set of "critical"
+#                     packets (SMSG_REDIRECT_CLIENT, SMSG_NEW_WORLD,
+#                     SMSG_LOGIN_VERIFY_WORLD, SMSG_AUTH_RESPONSE,
+#                     CMSG_REDIRECTION_AUTH_PROOF, CMSG_REDIRECTION_FAILED,
+#                     CMSG_PLAYER_LOGIN) are dumped in full hex so their
+#                     payload can be compared bit-for-bit across nodes.
+#
+#                     Output is routed to the logger named
+#                     "cluster.packettrace".  To send it to a dedicated file,
+#                     configure an appender for that logger — a suggested
+#                     pair of config lines is:
+#
+#                         Appender.PacketTrace=2,5,0,PacketTrace.log,w,1
+#                         Logger.cluster.packettrace=5,PacketTrace
+#
+#                     Leave disabled in production — the trace is extremely
+#                     verbose and is intended only for debugging sessions.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+ClusterServer.PacketTrace.Enable = 0
+
+#
 ###################################################################################################

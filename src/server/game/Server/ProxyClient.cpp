@@ -27,6 +27,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "ClusterMgr.h"
+#include "Position.h"
 #include "PlayerTransfer.h"
 #include "SharedPlayerCache.h"
 #include "PlayerStateSync.h"
@@ -1699,6 +1700,40 @@ void ProxyClient::BroadcastPlayerTransferFull(Player const* player)
     LOG_DEBUG("server.worldserver",
              "ProxyClient: Broadcast v2 state sync for {} ({} bytes)",
              player->GetName(), payload.size());
+}
+
+void ProxyClient::SendPlayerTransferForRedirect(Player const* player,
+                                                 uint8 destNodeId,
+                                                 WorldLocation const& destLoc)
+{
+    if (!_nc || !_connected || !player) return;
+
+    // Snapshot the full v2 state from current in-memory player (auras,
+    // cooldowns, quests, spells, equipment, pet, transport, vitals, etc.).
+    // The snapshot captures the SOURCE position because the player hasn't
+    // physically moved yet.
+    PlayerTransferData td = SnapshotPlayerFull(player);
+
+    // Override position/map with the teleport DESTINATION so the receiving
+    // node spawns the player at the correct coordinates, not the stale
+    // source location.
+    td.mapId       = destLoc.GetMapId();
+    td.posX        = destLoc.GetPositionX();
+    td.posY        = destLoc.GetPositionY();
+    td.posZ        = destLoc.GetPositionZ();
+    td.orientation = destLoc.GetOrientation();
+
+    std::vector<uint8_t> payload = SerializeTransfer(td);
+
+    // Targeted publish — only the destination node needs this.
+    PublishToNode(destNodeId, MSG_PLAYER_TRANSFER,
+                  payload.data(), static_cast<int>(payload.size()));
+
+    LOG_INFO("server.worldserver",
+             "ProxyClient: Sent redirect transfer for {} (GUID {:016X}) to node {} "
+             "dest map={} pos=({:.1f},{:.1f},{:.1f}) ({} bytes)",
+             player->GetName(), player->GetGUID().GetRawValue(), destNodeId,
+             td.mapId, td.posX, td.posY, td.posZ, payload.size());
 }
 
 void ProxyClient::AnnounceOnline(Player const* player)

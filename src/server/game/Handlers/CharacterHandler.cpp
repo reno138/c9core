@@ -866,9 +866,19 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             LOG_INFO("server.worldserver", "Player {} on wrong node ({}), redirecting to node {} ({}:{})",
                      pCurrChar->GetName(), reason, destNode->nodeId, destNode->address, destNode->port);
 
-            // Send transfer data to SPECIFIC dest node (not broadcast)
-            sProxyClient.SendPlayerTransferSeamless(pCurrChar, destNode->nodeId,
-                destNode->address, destNode->port);
+            // Send full player state to the SPECIFIC dest node via NATS.
+            // Use the redirect variant which overrides position fields with
+            // the character's DB-loaded position (which IS the destination
+            // for cold-login — the character was saved there).
+            {
+                WorldLocation destLoc(pCurrChar->GetMapId(),
+                                      pCurrChar->GetPositionX(),
+                                      pCurrChar->GetPositionY(),
+                                      pCurrChar->GetPositionZ(),
+                                      pCurrChar->GetOrientation());
+                sProxyClient.SendPlayerTransferForRedirect(
+                    pCurrChar, destNode->nodeId, destLoc);
+            }
 
             // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
             static std::mt19937 rng(std::random_device{}());
@@ -879,6 +889,11 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
                 destNode->nodeId, GetRemoteAddress());
             ClientRedirect::RedirectClient(this, redirectIp, redirectPort, token);
+
+            // Suspend the client on this (source) connection.  The client's
+            // 0x50F handler (0x633020) requires the packet on the MAIN
+            // connection — it checks [this+0x2E38] and drops non-main.
+            ClientRedirect::SuspendClient(this);
 
             // Clean up — client will disconnect and reconnect to dest node.
             // Mark as redirected so the session teardown skips AnnounceOffline/SaveToDB.

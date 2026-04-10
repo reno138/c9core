@@ -38,6 +38,7 @@ typedef struct __natsMsg          natsMsg;
 
 class Player;
 class WorldPacket;
+class WorldLocation;
 
 #include "PlayerTransfer.h"
 
@@ -247,6 +248,21 @@ public:
 
     /// Broadcast a full PlayerTransferData v2 snapshot to all nodes.
     void BroadcastPlayerTransferFull(Player const* player);
+
+    /// Targeted full-state transfer for a cross-node map-to-map teleport.
+    ///
+    /// Captures the player's full v2 state then OVERRIDES the position fields
+    /// with @p destLoc so the destination node spawns the player at the teleport
+    /// target rather than the stale source coordinates.  Published as
+    /// MSG_PLAYER_TRANSFER so the destination's HandlePlayerLoginFromDB picks
+    /// it up via TakePendingTransfer.
+    ///
+    /// Distinct from SendPlayerTransferSeamless — that helper also calls
+    /// SendSeamlessReroute (proxy-era zone-to-zone path).  This function is
+    /// for direct SMSG_REDIRECT_CLIENT map-to-map teleports with no proxy.
+    void SendPlayerTransferForRedirect(Player const* player,
+                                        uint8 destNodeId,
+                                        WorldLocation const& destLoc);
 
     /// Publish redirect token to destination node for validation on reconnect.
     void PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token, uint8 destNodeId);

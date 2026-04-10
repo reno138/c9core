@@ -1596,6 +1596,18 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
                 }
 
+                // CRITICAL ORDER: set the teleport-far semaphore BEFORE any DB
+                // write or SaveToDB call.  Player::SaveToDB has an early-return
+                // at PlayerStorage.cpp:7140 if IsBeingTeleportedFar() — it
+                // reschedules the save for after the teleport completes.
+                // Without this, any SaveToDB (explicit or periodic) that runs
+                // between DirectExecute and here would queue an async UPDATE
+                // with the player's CURRENT (source) position, racing against
+                // DirectExecute and potentially overwriting the destination row
+                // before the destination node runs LoadFromDB.  The symptom is
+                // a redirect loop: dest reads map=source, bounces client back.
+                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
+
                 // Write destination position+map synchronously via DirectExecute.
                 // CommitTransaction is async — the dest node may LoadFromDB before it commits.
                 // DirectExecute guarantees the row is updated before we send the redirect.
@@ -1610,15 +1622,14 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     stmt->SetData(6, GetGUID().GetCounter());
                     CharacterDatabase.DirectExecute(stmt);
                 }
-                // Async full save for health/auras/cooldowns — best effort
-                SaveToDB(false, false);
-
-                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
+                // No SaveToDB here.  With the teleport-far semaphore set above,
+                // SaveToDB would early-return anyway (reschedules via
+                // DELAYED_SAVE_PLAYER, which never fires because the session
+                // dies on this node).  Full player state is carried via NATS.
 
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
                 if (destNode)
                 {
-                    // Send redirect token to destination node via NATS (no SUSPEND_COMMS)
                     static std::mt19937 rng(std::random_device{}());
                     uint32 token = rng();
                     sProxyClient.PublishRedirectToken(
@@ -1627,6 +1638,15 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                         token,
                         destNode->nodeId);
 
+                    // Ship full player state to the destination via NATS.
+                    // The position fields are overridden with the teleport
+                    // destination so the dest node spawns at the target, not
+                    // the stale source coordinates.  Must be published BEFORE
+                    // SMSG_REDIRECT_CLIENT so the NATS message is in flight
+                    // (or already received) by the time the client reconnects.
+                    sProxyClient.SendPlayerTransferForRedirect(
+                        this, destNode->nodeId, teleportStore_dest);
+
                     // Resolve address (handles NAT if configured)
                     auto [redirectIp, redirectPort] = ClientRedirect::ResolveRedirectAddress(
                         GetSession()->GetRemoteAddress(),
@@ -1634,7 +1654,6 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                         sClusterMgr.GetExternalAddress(), sClusterMgr.GetExternalPort());
 
                     // Send SMSG_NEW_WORLD to put client into loading screen state
-                    // (same as proxy does before backend switch)
                     {
                         WorldPacket data(SMSG_NEW_WORLD, 20);
                         data << uint32(mapid);
@@ -1645,8 +1664,15 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                         GetSession()->SendPacket(&data);
                     }
 
-                    // Send SMSG_REDIRECT_CLIENT — client disconnects and reconnects to dest
+                    // Send SMSG_REDIRECT_CLIENT — client opens second connection to dest
                     ClientRedirect::RedirectClient(GetSession(), redirectIp, redirectPort, token);
+
+                    // Send SMSG_SUSPEND_COMMS (0x50F) on the SOURCE (current) connection.
+                    // RE of Wow.exe 12340 at 0x633020 confirmed: the client's 0x50F
+                    // handler REQUIRES the packet on the MAIN connection — it checks
+                    // [this+0x2E38] and drops non-main.  The DESTINATION node sends
+                    // only SMSG_FORCE_SEND_QUEUED_PACKETS (0x511) to complete the switch.
+                    ClientRedirect::SuspendClient(GetSession());
                 }
                 else
                 {

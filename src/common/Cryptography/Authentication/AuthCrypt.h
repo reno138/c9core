@@ -27,6 +27,9 @@ public:
     AuthCrypt() = default;
 
     void Init(SessionKey const& K);
+    /// Initialize for a redirect connection using challenge encryption seeds.
+    /// The 32-byte seed is split in half; direction is swapped vs normal auth.
+    void InitRedirect(SessionKey const& K, std::array<uint8, 32> const& encryptionSeeds);
     void DecryptRecv(uint8* data, std::size_t len);
     void EncryptSend(uint8* data, std::size_t len);
 

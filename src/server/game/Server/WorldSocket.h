@@ -127,6 +127,7 @@ private:
 
     std::string _redirectAccountName;  ///< stored between HandleRedirectionAuthProof and callback
     std::array<uint8, 4> _authSeed;
+    std::array<uint8, 32> _encryptionSeeds{}; ///< random seeds from SMSG_AUTH_CHALLENGE for redirect ARC4
     AuthCrypt _authCrypt;
     SessionKey _sessionKey{};   ///< Stored after CMSG_AUTH_SESSION for ARC4 initialization
 
@@ -136,6 +137,7 @@ private:
     std::mutex _worldSessionLock;
     WorldSession* _worldSession;
     bool _authed;
+    bool _isRedirectConn{ false };
 
     MessageBuffer _headerBuffer;
     MessageBuffer _packetBuffer;
