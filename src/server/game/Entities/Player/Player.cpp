@@ -1587,14 +1587,16 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 && sProxyClient.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
-                // Detach from transport before saving.
-                if (m_transport)
-                {
-                    m_transport->RemovePassenger(this);
-                    m_transport = nullptr;
-                    m_movementInfo.transport.Reset();
-                    m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
-                }
+                // NOTE: transport detach is deferred to the end of this
+                // branch (just before `return true;`).  SnapshotPlayerFull,
+                // invoked by SendPlayerTransferForRedirect below, reads
+                // player->GetTransport() to populate d.transport.{entry,
+                // offsetX/Y/Z/O} in the NATS payload; the destination node
+                // reattaches the arriving passenger in Block 1 of
+                // HandlePlayerLoginFromDB.  Continent transports share a
+                // deterministic DB guid across all nodes via
+                // `transports.guid`, so the same ObjectGuid resolves locally
+                // on the destination.
 
                 // CRITICAL ORDER: set the teleport-far semaphore BEFORE any DB
                 // write or SaveToDB call.  Player::SaveToDB has an early-return
@@ -1699,6 +1701,21 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                                                  ProxyClient::GROUP_INNER_REROUTE_TO_MAP,
                                                  payload);
                     }
+                }
+
+                // Detach from the source transport AFTER the snapshot and
+                // client-facing packets have been sent.  SMSG_SUSPEND_COMMS
+                // has already stopped main-connection packet processing on
+                // the client, so no detach-triggered state change is visible
+                // to it.  RemovePassenger() erases `this` from the transport's
+                // _passengers set, preventing a use-after-free on the next
+                // Transport::Update tick once the session is torn down.
+                if (m_transport)
+                {
+                    m_transport->RemovePassenger(this);
+                    m_transport = nullptr;
+                    m_movementInfo.transport.Reset();
+                    m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
                 }
 
                 return true;
