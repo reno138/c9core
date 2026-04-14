@@ -1567,10 +1567,12 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 SendDirectMessage(&data);
             }
 
-            // remove from old map now
-            if (oldmap)
-                oldmap->RemovePlayerFromMap(this, false);
-
+            // Set teleport destination BEFORE removing from old map so that
+            // the cross-node snapshot (below) can read m_transport while it is
+            // still valid.  RemovePlayerFromMap → CleanupsBeforeDelete calls
+            // SetTransport(nullptr), which would make SnapshotPlayerFull see
+            // GetTransport()==nullptr and emit onTransport=false, losing the
+            // passenger's seat offset on the destination node.
             teleportStore_dest = WorldLocation(mapid, x, y, z, orientation);
             SetFallInformation(GameTime::GetGameTime().count(), z);
             // if the player is saved before worldportack (at logout for example)
@@ -1579,6 +1581,13 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             // Cross-node teleport: redirect client directly to the destination
             // worldserver node via SMSG_REDIRECT_CLIENT.  The client disconnects
             // and reconnects to the destination, which does LoadFromDB.
+            //
+            // CRITICAL: this block must appear BEFORE RemovePlayerFromMap so
+            // that m_transport is still set when SnapshotPlayerFull runs.
+            // For cross-node redirects, the player stays in the old map until
+            // the source session closes (SMSG_SUSPEND_COMMS → disconnect →
+            // LogoutPlayer → RemovePlayerFromMap).  We do NOT call
+            // RemovePlayerFromMap here for the cross-node path.
             LOG_INFO("server.worldserver",
                      "TeleportTo far: player={} mapid={} IsMapLocal={} ProxyConnected={} PlayerLogout={}",
                      GetName(), mapid, sClusterMgr.IsMapLocal(mapid),
@@ -1704,22 +1713,38 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 }
 
                 // Detach from the source transport AFTER the snapshot and
-                // client-facing packets have been sent.  SMSG_SUSPEND_COMMS
-                // has already stopped main-connection packet processing on
-                // the client, so no detach-triggered state change is visible
-                // to it.  RemovePassenger() erases `this` from the transport's
+                // client-facing packets have been sent.
+                //
+                // RemovePassenger() removes `this` from the transport's
                 // _passengers set, preventing a use-after-free on the next
                 // Transport::Update tick once the session is torn down.
+                //
+                // CRITICAL: do NOT null m_transport here.
+                // Map::RemoveFromMap<Transport> — called moments later when
+                // DelayedTeleportTransport moves the transport to the new map
+                // — sends SMSG_DESTROY_OBJECT to every player on this map
+                // whose GetTransport() != this_transport.  That skip exists
+                // precisely for passengers.  If we null m_transport first,
+                // GetTransport() returns nullptr, the skip is bypassed, and
+                // the client receives DESTROY_OBJECT mid-redirect, causing a
+                // 0xC0000005 access violation.  Keeping m_transport set until
+                // Unit::CleanupsBeforeDelete (which calls SetTransport(nullptr))
+                // preserves the skip and eliminates the crash.
                 if (m_transport)
                 {
                     m_transport->RemovePassenger(this);
-                    m_transport = nullptr;
+                    // m_transport intentionally NOT nulled here — see comment above.
                     m_movementInfo.transport.Reset();
                     m_movementInfo.RemoveMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
                 }
 
                 return true;
             }
+
+            // Same-node far teleport: remove player from old map now that
+            // we know this is not a cross-node redirect.
+            if (oldmap)
+                oldmap->RemovePlayerFromMap(this, false);
 
             if (!GetSession()->PlayerLogout())
             {
