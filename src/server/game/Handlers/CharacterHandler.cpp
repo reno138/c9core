@@ -912,11 +912,16 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     // Cluster: apply pending NATS transfer state if this login was triggered
     // by a cross-node reroute. The transfer has fresher HP/mana/position/buffs
     // than the DB (which may have stale async-saved data).
+    // Track whether Block 1 consumed a transfer so Block 2 (shared cache) can
+    // be skipped — Block 2's Relocate would overwrite the transport position
+    // that Block 1 just calculated, causing the passenger to fall off the transport.
+    bool hadNatsTransfer = false;
     if (sClusterMgr.IsEnabled())
     {
         auto transfer = sClusterMgr.TakePendingTransfer(playerGuid.GetRawValue());
         if (transfer)
         {
+            hadNatsTransfer = true;
             LOG_INFO("server.worldserver",
                      "Applying NATS transfer for {} from map {} pos ({:.1f},{:.1f},{:.1f})",
                      pCurrChar->GetName(), transfer->mapId, transfer->posX, transfer->posY, transfer->posZ);
@@ -985,7 +990,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 
     // Cluster: activate player from shared cache if this is a transfer login.
     // The cache has real-time state from the source node — fresher than DB.
-    if (sClusterMgr.IsEnabled())
+    // Skip if Block 1 already applied a pending NATS transfer: that transfer
+    // carries the correct transport position; applying the shared cache on top
+    // would Relocate the player to non-transport world coords, causing a fall.
+    if (sClusterMgr.IsEnabled() && !hadNatsTransfer)
     {
         auto cachedState = sSharedPlayerCache.Get(playerGuid.GetRawValue());
         if (cachedState && cachedState->ownerNodeId != sProxyClient.GetNodeId())

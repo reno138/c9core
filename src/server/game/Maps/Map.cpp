@@ -752,7 +752,7 @@ void Map::RemoveFromMap(Transport* obj, bool remove)
         WorldPacket packet;
         data.BuildPacket(packet);
         for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
-            if (itr->GetSource()->GetTransport() != obj)
+            if (itr->GetSource()->GetTransport() != obj && !itr->GetSource()->IsBeingTeleportedFar())
                 itr->GetSource()->SendDirectMessage(&packet);
     }
 
