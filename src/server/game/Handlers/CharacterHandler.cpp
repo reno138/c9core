@@ -962,6 +962,8 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                     float tz = transfer->transport.offsetZ;
                     float to = transfer->transport.offsetO;
                     foundTransport->AddPassenger(pCurrChar, false);
+                    pCurrChar->SetTransport(foundTransport);
+                    pCurrChar->AddUnitState(UNIT_STATE_IGNORE_PATHFINDING);
                     pCurrChar->m_movementInfo.transport.guid = foundTransport->GetGUID();
                     pCurrChar->m_movementInfo.transport.pos.Relocate(tx, ty, tz, to);
                     pCurrChar->m_movementInfo.AddMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
