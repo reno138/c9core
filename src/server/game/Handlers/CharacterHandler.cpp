@@ -1181,6 +1181,22 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         pCurrChar->GetSession()->SendNameQueryOpcode(pCurrChar->GetGUID());
     }
 
+    // Cross-node redirect: if the player is on a transport, pre-send the transport's
+    // CREATE_OBJECT to the client before SendInitialPacketsAfterAddToMap triggers
+    // UpdateVisibilityForPlayer.  The visibility pass visits nearby cell objects
+    // (including the player's own CREATE_OBJECT2 with MOVEMENTFLAG_ONTRANSPORT) before
+    // VisitFarVisibleObjects reaches the transport.  Without this pre-send, the client
+    // processes the player's transport reference before the transport is in its scene,
+    // ignores the anchor, and applies gravity — dropping the player from transport altitude.
+    if (Transport* t = pCurrChar->GetTransport())
+    {
+        UpdateData transportUpdate;
+        t->BuildCreateUpdateBlockForPlayer(&transportUpdate, pCurrChar);
+        WorldPacket transportPacket;
+        transportUpdate.BuildPacket(transportPacket);
+        pCurrChar->SendDirectMessage(&transportPacket);
+    }
+
     pCurrChar->SendInitialPacketsAfterAddToMap();
 
     // Cross-node teleport arrival: clear SemaphoreTeleportFar that the source node set.
