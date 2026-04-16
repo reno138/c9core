@@ -935,6 +935,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                 pCurrChar->SetPower(Powers(transfer->powerType), transfer->power);
 
             // Transport - find matching transport on this node and attach
+            LOG_INFO("server.worldserver",
+                     "Block1 transport check: onTransport={} entry={} offset=({:.2f},{:.2f},{:.2f})",
+                     transfer->transport.onTransport, transfer->transport.entry,
+                     transfer->transport.offsetX, transfer->transport.offsetY, transfer->transport.offsetZ);
             if (transfer->transport.onTransport && transfer->transport.entry != 0)
             {
                 // Iterate motion transports to find one with matching GO entry
@@ -951,7 +955,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                         }
                     }
                 }
-                if (foundTransport)
+                if (foundTransport && foundTransport->GetMapId() == transfer->mapId)
                 {
                     float tx = transfer->transport.offsetX;
                     float ty = transfer->transport.offsetY;
@@ -965,6 +969,19 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                     float wx = tx, wy = ty, wz = tz, wo = to;
                     foundTransport->CalculatePassengerPosition(wx, wy, wz, &wo);
                     pCurrChar->Relocate(wx, wy, wz, wo);
+                    LOG_INFO("server.worldserver",
+                             "Block1 transport reattach OK: entry={} map={} worldPos=({:.1f},{:.1f},{:.1f})",
+                             foundTransport->GetEntry(), foundTransport->GetMapId(), wx, wy, wz);
+                }
+                else
+                {
+                    LOG_WARN("server.worldserver",
+                             "Block1 transport reattach SKIPPED: entry={} {}",
+                             transfer->transport.entry,
+                             foundTransport
+                                 ? fmt::format("found but on map={} not map={}", foundTransport->GetMapId(), transfer->mapId)
+                                 : "not found on this node");
+                    // Player lands at the NATS world position (dock area) — safe fallback
                 }
             }
 

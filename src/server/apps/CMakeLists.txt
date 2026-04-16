@@ -131,11 +131,6 @@ foreach(APPLICATION_NAME ${APPLICATIONS_BUILD_LIST})
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC
         shared)
-  elseif(${APP_PROJECT_NAME} MATCHES "proxyserver")
-    target_link_libraries(${APP_PROJECT_NAME}
-      PUBLIC
-        shared
-        nats_static)
   elseif(${APP_PROJECT_NAME} MATCHES "nodemgr")
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC
