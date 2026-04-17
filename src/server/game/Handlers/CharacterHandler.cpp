@@ -983,7 +983,19 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                              foundTransport
                                  ? fmt::format("found but on map={} not map={}", foundTransport->GetMapId(), transfer->mapId)
                                  : "not found on this node");
-                    // Player lands at the NATS world position (dock area) — safe fallback
+                    // Transport not yet on this map (timing race): queue deferred reattach.
+                    // Player::Update will retry every 200ms for up to 2.5s.
+                    if (!foundTransport)
+                    {
+                        WorldSession::PendingTransportAttach pa;
+                        pa.entry   = transfer->transport.entry;
+                        pa.mapId   = transfer->mapId;
+                        pa.offsetX = transfer->transport.offsetX;
+                        pa.offsetY = transfer->transport.offsetY;
+                        pa.offsetZ = transfer->transport.offsetZ;
+                        pa.offsetO = transfer->transport.offsetO;
+                        SetPendingTransportAttach(pa);
+                    }
                 }
             }
 
@@ -1181,22 +1193,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         pCurrChar->GetSession()->SendNameQueryOpcode(pCurrChar->GetGUID());
     }
 
-    // Cross-node redirect: if the player is on a transport, pre-send the transport's
-    // CREATE_OBJECT to the client before SendInitialPacketsAfterAddToMap triggers
-    // UpdateVisibilityForPlayer.  The visibility pass visits nearby cell objects
-    // (including the player's own CREATE_OBJECT2 with MOVEMENTFLAG_ONTRANSPORT) before
-    // VisitFarVisibleObjects reaches the transport.  Without this pre-send, the client
-    // processes the player's transport reference before the transport is in its scene,
-    // ignores the anchor, and applies gravity — dropping the player from transport altitude.
-    if (Transport* t = pCurrChar->GetTransport())
-    {
-        UpdateData transportUpdate;
-        t->BuildCreateUpdateBlockForPlayer(&transportUpdate, pCurrChar);
-        WorldPacket transportPacket;
-        transportUpdate.BuildPacket(transportPacket);
-        pCurrChar->SendDirectMessage(&transportPacket);
-    }
-
+    // Note: Map::SendInitSelf (called inside AddPlayerToMap above) already sends the
+    // transport CREATE_OBJECT before the player's own CREATE_OBJECT2 when GetTransport()
+    // is non-null.  No manual pre-send needed here — that caused a triple-send which
+    // destroyed the transport sound emitter on the client.
     pCurrChar->SendInitialPacketsAfterAddToMap();
 
     // Cross-node teleport arrival: clear SemaphoreTeleportFar that the source node set.

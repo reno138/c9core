@@ -28,6 +28,7 @@
 #include "ProxyClient.h"
 #include "SharedPlayerCache.h"
 #include "ClientRedirect.h"
+#include "ObjectAccessor.h"
 #include <random>
 #include "Transport.h"
 #include "WorldPacket.h"
@@ -68,6 +69,56 @@ void Player::Update(uint32 p_time)
 
     if (!IsInWorld())
         return;
+
+    // Cluster: deferred transport reattach — fires when Block 1 in HandlePlayerLoginFromDB
+    // couldn't find the transport because it hadn't crossed to this map yet (timing race).
+    // Retries every 200ms for up to 2.5s; on success snaps the player onto the deck.
+    if (sClusterMgr.IsEnabled() && GetSession() && GetSession()->HasPendingTransportAttach() && !GetTransport())
+    {
+        constexpr uint32 RETRY_INTERVAL_MS = 200;
+        constexpr uint32 RETRY_TIMEOUT_MS  = 2500;
+
+        m_transportReattachTimer += p_time;
+
+        if (m_transportReattachTimer >= RETRY_TIMEOUT_MS)
+        {
+            LOG_WARN("server.worldserver",
+                "Cross-node transport reattach timed out for {} (entry={}) — giving up after {}ms",
+                GetName(), GetSession()->GetPendingTransportAttach().entry, m_transportReattachTimer);
+            GetSession()->ClearPendingTransportAttach();
+            m_transportReattachTimer = 0;
+        }
+        else if (m_transportReattachTimer % RETRY_INTERVAL_MS < uint32(p_time))
+        {
+            auto const& pa = GetSession()->GetPendingTransportAttach();
+            MotionTransport* t = nullptr;
+            {
+                auto& container = HashMapHolder<MotionTransport>::GetContainer();
+                std::shared_lock lock(*HashMapHolder<MotionTransport>::GetLock());
+                for (auto const& pair : container)
+                    if (pair.second->GetEntry() == pa.entry && pair.second->GetMapId() == pa.mapId)
+                    { t = pair.second; break; }
+            }
+            if (t)
+            {
+                float tx = pa.offsetX, ty = pa.offsetY, tz = pa.offsetZ, to = pa.offsetO;
+                t->AddPassenger(this, false);
+                SetTransport(t);
+                AddUnitState(UNIT_STATE_IGNORE_PATHFINDING);
+                m_movementInfo.transport.guid = t->GetGUID();
+                m_movementInfo.transport.pos.Relocate(tx, ty, tz, to);
+                m_movementInfo.AddMovementFlag(MOVEMENTFLAG_ONTRANSPORT);
+                float wx = tx, wy = ty, wz = tz, wo = to;
+                t->CalculatePassengerPosition(wx, wy, wz, &wo);
+                NearTeleportTo(wx, wy, wz, wo);
+                LOG_INFO("server.worldserver",
+                    "Cross-node transport reattach deferred OK for {} entry={} at {}ms",
+                    GetName(), pa.entry, m_transportReattachTimer);
+                GetSession()->ClearPendingTransportAttach();
+                m_transportReattachTimer = 0;
+            }
+        }
+    }
 
     sScriptMgr->OnPlayerBeforeUpdate(this, p_time);
 

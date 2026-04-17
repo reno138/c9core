@@ -2922,6 +2922,9 @@ protected:
     static constexpr uint32 ZONE_TRANSFER_DWELL_MS    = 2000;  ///< 2s dwell before transfer
     static constexpr uint32 ZONE_TRANSFER_COOLDOWN_MS = 5000;  ///< 5s cooldown after transfer
 
+    // Cluster: deferred transport reattach retry timer (ms since pending attach was stored)
+    uint32 m_transportReattachTimer{0};
+
     // Cluster: periodic full state refresh (cold tier)
     uint32 m_clusterFullRefreshTimer{0};
     static constexpr uint32 CLUSTER_FULL_REFRESH_MS = 120000;  ///< 2 minutes

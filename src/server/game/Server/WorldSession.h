@@ -1307,6 +1307,25 @@ private:
 public:
     TransferPetInfo const& GetPendingPetTransfer() const { return _pendingPetTransfer; }
     void ClearPendingPetTransfer() { _pendingPetTransfer = {}; }
+
+    // Cluster: deferred transport reattach — used when Block 1 misses the transport due
+    // to the race between the player's cross-node login and the transport's map crossing.
+    struct PendingTransportAttach
+    {
+        uint32 entry   = 0;
+        uint32 mapId   = 0;
+        float  offsetX = 0.f;
+        float  offsetY = 0.f;
+        float  offsetZ = 0.f;
+        float  offsetO = 0.f;
+    };
+private:
+    PendingTransportAttach _pendingTransportAttach{};
+public:
+    bool HasPendingTransportAttach() const { return _pendingTransportAttach.entry != 0; }
+    PendingTransportAttach const& GetPendingTransportAttach() const { return _pendingTransportAttach; }
+    void SetPendingTransportAttach(PendingTransportAttach const& pa) { _pendingTransportAttach = pa; }
+    void ClearPendingTransportAttach() { _pendingTransportAttach = {}; }
 private:
 
     WorldSession(WorldSession const& right) = delete;
