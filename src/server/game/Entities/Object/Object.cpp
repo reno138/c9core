@@ -1757,6 +1757,33 @@ bool WorldObject::CanSeeOrDetect(WorldObject const* obj, bool ignoreStealth, boo
     if (obj->IsAlwaysVisibleFor(this) || CanAlwaysSee(obj))
         return true;
 
+    // Creature scripts
+    if (Creature const* cObj = obj->ToCreature())
+    {
+        if (Player const* player = ToPlayer())
+        {
+            if (cObj->IsAIEnabled && !cObj->AI()->CanBeSeen(player))
+                return false;
+
+            if (!player->CanSeeObjectByVisibilityConditions(obj))
+                return false;
+        }
+    }
+
+    // Gameobject scripts
+    if (GameObject const* goObj = obj->ToGameObject())
+    {
+        if (Player const* player = ToPlayer())
+        {
+            if (!goObj->AI()->CanBeSeen(player))
+                return false;
+
+            if (!player->CanSeeObjectByVisibilityConditions(obj))
+                return false;
+        }
+    }
+
+
     // pussywizard: arena spectator
     if (obj->IsPlayer())
         if (((Player const*)obj)->IsSpectator() && ((Player const*)obj)->FindMap() && ((Player const*)obj)->FindMap()->IsBattleArena())
