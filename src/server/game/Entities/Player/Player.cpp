@@ -1611,13 +1611,16 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 // money, XP, quests, skills, glyphs, achievements, etc.) to DB so
                 // the destination node's LoadFromDB gets a complete picture.
                 //
-                // We must do this BEFORE SetSemaphoreTeleportFar because SaveToDB
-                // early-returns when IsBeingTeleportedFar() is true.
+                // Must run BEFORE SetSemaphoreTeleportFar — SaveToDB early-returns
+                // when IsBeingTeleportedFar() is true.
                 //
-                // The destination position is appended to the same transaction and
-                // overwrites the source position that _SaveCharacter just wrote —
-                // both land atomically via DirectCommitTransaction so the dest node
-                // always sees the correct spawn coordinates.
+                // The destination position is the LAST statement in the transaction
+                // so it overwrites the source position that _SaveCharacter wrote.
+                // CommitTransaction is async (avoids blocking the map thread and
+                // avoids the sync-connection prepared-statement gap that caused
+                // DirectCommitTransaction to fail). In practice the async queue
+                // drains in < 20ms — well before the dest node's LoadFromDB fires
+                // after the loading screen round-trip (~100ms+).
                 {
                     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
                     SaveToDB(trans, false, false);
@@ -1632,11 +1635,11 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     stmt->SetData(6, GetGUID().GetCounter());
                     trans->Append(stmt);
 
-                    CharacterDatabase.DirectCommitTransaction(trans);
+                    CharacterDatabase.CommitTransaction(trans);
                 }
 
-                // Semaphore goes up after the commit: prevents any periodic save
-                // on this node from racing and overwriting the destination position.
+                // Semaphore up immediately after queuing the commit — blocks any
+                // periodic SaveToDB from racing the async transaction.
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
 
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
