@@ -165,9 +165,9 @@ StrictVersionCheck = 0
 
 #
 #    SourceDirectory
-#        Description: The path to your AzerothCore source directory.
+#        Description: The path to your c9core source directory.
 #                     If the path is left empty, the built-in CMAKE_SOURCE_DIR is used.
-#        Example:     "../AzerothCore"
+#        Example:     "../c9core"
 #        Default:     ""
 #
 

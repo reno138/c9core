@@ -1,5 +1,5 @@
 #
-# This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+# This file is part of the c9core Project. See AUTHORS file for Copyright information
 #
 # This file is free software; as a special exception the author gives
 # unlimited permission to copy and/or distribute it, with or without
@@ -198,7 +198,7 @@ if(BUILD_SHARED_LIBS)
     message("")
     message(" *** Dynamic linking was enforced through a dynamic script module!")
   endif()
-  add_definitions(-DACORE_API_USE_DYNAMIC_LINKING)
+  add_definitions(-DC9CORE_API_USE_DYNAMIC_LINKING)
 
   WarnAboutSpacesInBuildPath()
 endif()

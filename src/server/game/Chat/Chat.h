@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@ class WorldObject;
 
 struct GameTele;
 
-class AC_GAME_API ChatHandler
+class C9_GAME_API ChatHandler
 {
 public:
     explicit ChatHandler(WorldSession* session) : m_session(session), sentErrorMessage(false) {}
@@ -251,7 +251,7 @@ private:
     bool sentErrorMessage;
 };
 
-class AC_GAME_API CliHandler : public ChatHandler
+class C9_GAME_API CliHandler : public ChatHandler
 {
 public:
     using Print = void(void*, std::string_view);
@@ -274,7 +274,7 @@ private:
     Print* m_print;
 };
 
-class AC_GAME_API AddonChannelCommandHandler : public ChatHandler
+class C9_GAME_API AddonChannelCommandHandler : public ChatHandler
 {
     public:
         using ChatHandler::ChatHandler;

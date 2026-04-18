@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,7 +41,7 @@ class WorldPacket;
 namespace ArenaSpectator
 {
     template<class T>
-    AC_GAME_API void SendPacketTo(const T* object, std::string&& message);
+    C9_GAME_API void SendPacketTo(const T* object, std::string&& message);
 
     template<class T, typename Format, typename... Args>
     inline void SendCommand(T* o, Format&& fmt, Args&& ... args)
@@ -107,11 +107,11 @@ namespace ArenaSpectator
         SendCommand(o, "%s0x%016llX;%s=%u,%u,%i,%i,%u,%u,%u,0x%016llX;", SPECTATOR_ADDON_PREFIX, targetGUID.GetRawValue(), prefix, remove ? 1 : 0, stack, dur, maxdur, id, dispel, isDebuff ? 1 : 0, caster.GetRawValue());
     }
 
-    AC_GAME_API bool HandleSpectatorSpectateCommand(ChatHandler* handler, std::string const& name);
-    AC_GAME_API bool HandleSpectatorWatchCommand(ChatHandler* handler, std::string const& name);
-    AC_GAME_API void CreatePacket(WorldPacket& data, std::string const& message);
-    AC_GAME_API void HandleResetCommand(Player* player);
-    AC_GAME_API bool ShouldSendAura(Aura* aura, uint8 effMask, ObjectGuid targetGUID, bool remove);
+    C9_GAME_API bool HandleSpectatorSpectateCommand(ChatHandler* handler, std::string const& name);
+    C9_GAME_API bool HandleSpectatorWatchCommand(ChatHandler* handler, std::string const& name);
+    C9_GAME_API void CreatePacket(WorldPacket& data, std::string const& message);
+    C9_GAME_API void HandleResetCommand(Player* player);
+    C9_GAME_API bool ShouldSendAura(Aura* aura, uint8 effMask, ObjectGuid targetGUID, bool remove);
 }
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,7 +54,7 @@ enum ScoreType
     SCORE_DESTROYED_WALL
 };
 
-struct AC_GAME_API BattlegroundScore
+struct C9_GAME_API BattlegroundScore
 {
     friend class Arena;
     friend class Battleground;

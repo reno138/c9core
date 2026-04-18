@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,7 +37,7 @@
 #include <thread>
 #include <vector>
 
-#ifdef ACORE_DEBUG
+#ifdef C9CORE_DEBUG
 #include <boost/stacktrace.hpp>
 #include <sstream>
 #endif
@@ -258,7 +258,7 @@ SQLTransaction<T> DatabaseWorkerPool<T>::BeginTransaction()
 template <class T>
 void DatabaseWorkerPool<T>::CommitTransaction(SQLTransaction<T> transaction)
 {
-#ifdef ACORE_DEBUG
+#ifdef C9CORE_DEBUG
     //! Only analyze transaction weaknesses in Debug mode.
     //! Ideally we catch the faults in Debug mode and then correct them,
     //! so there's no need to waste these CPU cycles in Release mode.
@@ -273,7 +273,7 @@ void DatabaseWorkerPool<T>::CommitTransaction(SQLTransaction<T> transaction)
     default:
         break;
     }
-#endif // ACORE_DEBUG
+#endif // C9CORE_DEBUG
 
     Enqueue(new TransactionTask(transaction));
 }
@@ -281,7 +281,7 @@ void DatabaseWorkerPool<T>::CommitTransaction(SQLTransaction<T> transaction)
 template <class T>
 TransactionCallback DatabaseWorkerPool<T>::AsyncCommitTransaction(SQLTransaction<T> transaction)
 {
-#ifdef ACORE_DEBUG
+#ifdef C9CORE_DEBUG
     //! Only analyze transaction weaknesses in Debug mode.
     //! Ideally we catch the faults in Debug mode and then correct them,
     //! so there's no need to waste these CPU cycles in Release mode.
@@ -296,7 +296,7 @@ TransactionCallback DatabaseWorkerPool<T>::AsyncCommitTransaction(SQLTransaction
         default:
             break;
     }
-#endif // ACORE_DEBUG
+#endif // C9CORE_DEBUG
 
     TransactionWithResultTask* task = new TransactionWithResultTask(transaction);
     TransactionFuture result = task->GetFuture();
@@ -490,7 +490,7 @@ std::size_t DatabaseWorkerPool<T>::QueueSize() const
 template <class T>
 T* DatabaseWorkerPool<T>::GetFreeConnection()
 {
-#ifdef ACORE_DEBUG
+#ifdef C9CORE_DEBUG
     if (_warnSyncQueries)
     {
         std::ostringstream ss;
@@ -582,6 +582,6 @@ void DatabaseWorkerPool<T>::ExecuteOrAppend(SQLTransaction<T>& trans, PreparedSt
         trans->Append(stmt);
 }
 
-template class AC_DATABASE_API DatabaseWorkerPool<LoginDatabaseConnection>;
-template class AC_DATABASE_API DatabaseWorkerPool<WorldDatabaseConnection>;
-template class AC_DATABASE_API DatabaseWorkerPool<CharacterDatabaseConnection>;
+template class C9_DATABASE_API DatabaseWorkerPool<LoginDatabaseConnection>;
+template class C9_DATABASE_API DatabaseWorkerPool<WorldDatabaseConnection>;
+template class C9_DATABASE_API DatabaseWorkerPool<CharacterDatabaseConnection>;

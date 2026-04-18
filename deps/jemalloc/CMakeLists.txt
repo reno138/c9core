@@ -1,5 +1,5 @@
 #
-# This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+# This file is part of the c9core Project. See AUTHORS file for Copyright information
 #
 # This file is free software; as a special exception the author gives
 # unlimited permission to copy and/or distribute it, with or without
@@ -30,7 +30,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "Linux" AND NOT NOJEM)
     set(JEM_MADFREE_DEF "#undef")
   endif()
 
-  if(ACORE_SYSTEM_PROCESSOR MATCHES "arm")
+  if(C9_SYSTEM_PROCESSOR MATCHES "arm")
     set(JEM_CPU_SPINWAIT "")
     set(JEM_HAVE_CPU_SPINWAIT 0)
   else()

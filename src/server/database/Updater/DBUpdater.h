@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,7 +35,7 @@ namespace boost
     }
 }
 
-class AC_DATABASE_API UpdateException : public std::exception
+class C9_DATABASE_API UpdateException : public std::exception
 {
 public:
     UpdateException(std::string const& msg) : _msg(msg) { }
@@ -53,7 +53,7 @@ enum BaseLocation
     LOCATION_DOWNLOAD
 };
 
-class AC_DATABASE_API DBUpdaterUtil
+class C9_DATABASE_API DBUpdaterUtil
 {
 public:
     static std::string GetCorrectedMySQLExecutable();
@@ -65,7 +65,7 @@ private:
 };
 
 template <class T>
-class AC_DATABASE_API DBUpdater
+class C9_DATABASE_API DBUpdater
 {
 public:
     using Path = std::filesystem::path;

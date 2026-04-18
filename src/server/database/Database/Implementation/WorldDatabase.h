@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -121,7 +121,7 @@ enum WorldDatabaseStatements : uint32
     MAX_WORLDDATABASE_STATEMENTS
 };
 
-class AC_DATABASE_API WorldDatabaseConnection : public MySQLConnection
+class C9_DATABASE_API WorldDatabaseConnection : public MySQLConnection
 {
 public:
     typedef WorldDatabaseStatements Statements;

@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information.
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information.
  *
  * Portions of this file are derived from systemd, licensed under:
  * - GPL-2.0-or-later (if the original systemd file was GPL-2.0+)

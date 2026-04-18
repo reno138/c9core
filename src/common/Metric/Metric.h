@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -56,7 +56,7 @@ struct MetricData
     std::string Text;
 };
 
-class AC_COMMON_API Metric
+class C9_COMMON_API Metric
 {
 private:
     std::iostream& GetDataStream() { return *_dataStream; }
@@ -174,7 +174,7 @@ MetricStopWatch<LoggerType> MakeMetricStopWatch(LoggerType&& loggerFunc)
 #define METRIC_DETAILED_TIMER(category, ...) ((void)0)
 #define METRIC_DETAILED_NO_THRESHOLD_TIMER(category, ...) ((void)0)
 #else
-#if AC_PLATFORM != AC_PLATFORM_WINDOWS
+#if C9_PLATFORM != C9_PLATFORM_WINDOWS
 #define METRIC_EVENT(category, title, description)                  \
         do {                                                           \
             if (sMetric->IsEnabled())                                  \

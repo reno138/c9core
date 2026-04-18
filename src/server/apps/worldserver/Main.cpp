@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -63,7 +63,7 @@
 #include <openssl/crypto.h>
 #include <openssl/opensslv.h>
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
 #include "ServiceWin32.h"
 char serviceName[] = "worldserver";
 char serviceLongName[] = "C9Core world service";
@@ -134,7 +134,7 @@ int main(int argc, char** argv)
     if (vm.count("help") || vm.count("version"))
         return 0;
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     if (configService.compare("install") == 0)
         return WinServiceInstall() == true ? 0 : 1;
     else if (configService.compare("uninstall") == 0)
@@ -230,7 +230,7 @@ int main(int argc, char** argv)
 
     // Set signal handlers (this must be done before starting IoContext threads, because otherwise they would unblock and exit)
     boost::asio::signal_set signals(*ioContext, SIGINT, SIGTERM);
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     signals.add(SIGBREAK);
 #endif
     signals.async_wait(SignalHandler);
@@ -304,7 +304,7 @@ int main(int argc, char** argv)
         sMetric->Unload();
     });
 
-    Acore::Module::SetEnableModulesList(AC_MODULES_LIST);
+    Acore::Module::SetEnableModulesList(C9_MODULES_LIST);
 
     // Connect to NATS cluster bus BEFORE loading the world so that
     // SpawnContinentTransports() can query peer transport PathProgress values
@@ -411,7 +411,7 @@ int main(int argc, char** argv)
 
     // Launch CliRunnable thread
     std::shared_ptr<std::thread> cliThread;
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     if (sConfigMgr->GetOption<bool>("Console.Enable", true) && (m_ServiceStatus == -1)/* need disable console in service mode*/)
 #else
     if (sConfigMgr->GetOption<bool>("Console.Enable", true))
@@ -448,7 +448,7 @@ bool StartDB()
     MySQL::Library_Init();
 
     // Load databases
-    DatabaseLoader loader("server.worldserver", DatabaseLoader::DATABASE_MASK_ALL, AC_MODULES_LIST);
+    DatabaseLoader loader("server.worldserver", DatabaseLoader::DATABASE_MASK_ALL, C9_MODULES_LIST);
     loader
         .AddDatabase(LoginDatabase, "Login")
         .AddDatabase(CharacterDatabase, "Character")
@@ -738,7 +738,7 @@ variables_map GetConsoleArguments(int argc, char** argv, fs::path& configFile, [
         ("config,c", value<fs::path>(&configFile)->default_value(fs::path(sConfigMgr->GetConfigPath() + std::string(_ACORE_CORE_CONFIG))), "use <arg> as configuration file")
         ("config-policy", value<std::string>()->value_name("policy"), "override config severity policy (e.g. default=skip,critical_option=fatal)");
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     options_description win("Windows platform specific options");
     win.add_options()
         ("service,s", value<std::string>(&configService)->default_value(""), "Windows service options: [install | uninstall]");

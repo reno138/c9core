@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,7 +30,7 @@ namespace Acore::TimeDiff // in us
 }
 
 template<>
-AC_COMMON_API uint32 Acore::Time::TimeStringTo<Seconds>(std::string_view timestring)
+C9_COMMON_API uint32 Acore::Time::TimeStringTo<Seconds>(std::string_view timestring)
 {
     uint32 secs = 0;
     uint32 buffer = 0;
@@ -73,7 +73,7 @@ AC_COMMON_API uint32 Acore::Time::TimeStringTo<Seconds>(std::string_view timestr
 }
 
 template<>
-AC_COMMON_API std::string Acore::Time::ToTimeString<Microseconds>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
+C9_COMMON_API std::string Acore::Time::ToTimeString<Microseconds>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
 {
     uint64 microsecs = durationTime % 1000;
     uint64 millisecs = (durationTime / TimeDiff::MILLISECONDS) % 1000;
@@ -194,25 +194,25 @@ AC_COMMON_API std::string Acore::Time::ToTimeString<Microseconds>(uint64 duratio
 }
 
 template<>
-AC_COMMON_API std::string Acore::Time::ToTimeString<Milliseconds>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
+C9_COMMON_API std::string Acore::Time::ToTimeString<Milliseconds>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
 {
     return ToTimeString<Microseconds>(durationTime * TimeDiff::MILLISECONDS, timeOutput, timeFormat);
 }
 
 template<>
-AC_COMMON_API std::string Acore::Time::ToTimeString<Seconds>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
+C9_COMMON_API std::string Acore::Time::ToTimeString<Seconds>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
 {
     return ToTimeString<Microseconds>(durationTime * TimeDiff::SECONDS, timeOutput, timeFormat);
 }
 
 template<>
-AC_COMMON_API std::string Acore::Time::ToTimeString<Minutes>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
+C9_COMMON_API std::string Acore::Time::ToTimeString<Minutes>(uint64 durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
 {
     return ToTimeString<Microseconds>(durationTime * TimeDiff::MINUTES, timeOutput, timeFormat);
 }
 
 template<>
-AC_COMMON_API std::string Acore::Time::ToTimeString<Seconds>(std::string_view durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
+C9_COMMON_API std::string Acore::Time::ToTimeString<Seconds>(std::string_view durationTime, TimeOutput timeOutput /*= TimeOutput::Seconds*/, TimeFormat timeFormat /*= TimeFormat::ShortText*/)
 {
     return ToTimeString<Seconds>(TimeStringTo<Seconds>(durationTime), timeOutput, timeFormat);
 }
@@ -222,7 +222,7 @@ std::string Acore::Time::ToTimeString(Microseconds durationTime, TimeOutput time
     return ToTimeString<Microseconds>(durationTime.count(), timeOutput, timeFormat);
 }
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
 struct tm* localtime_r(time_t const* time, struct tm* result)
 {
     localtime_s(result, time);
@@ -244,7 +244,7 @@ std::tm Acore::Time::TimeBreakdown(time_t time /*= 0*/)
 
 time_t Acore::Time::LocalTimeToUTCTime(time_t time)
 {
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     return time + _timezone;
 #else
     return time + timezone;

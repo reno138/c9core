@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 #include "SharedDefines.h"
 #include "StringFormat.h"
 
-struct AC_GAME_API ArenaScore : public BattlegroundScore
+struct C9_GAME_API ArenaScore : public BattlegroundScore
 {
     friend class Arena;
 
@@ -42,7 +42,7 @@ protected:
     uint8 PvPTeamId;
 };
 
-struct AC_GAME_API ArenaTeamScore
+struct C9_GAME_API ArenaTeamScore
 {
     friend class Arena;
     friend class Battleground;

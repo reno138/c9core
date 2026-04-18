@@ -1,5 +1,5 @@
 /*
- * Originally written by Rochet2 - Copyright (C) 2018+ AzerothCore <www.azerothcore.org>
+ * Originally written by Rochet2 - Copyright (C) 2018+ c9core <github.com/reno138/c9core>
  */
 
 #ifndef _DATA_MAP_H_

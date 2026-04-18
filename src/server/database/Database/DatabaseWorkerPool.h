@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -208,7 +208,7 @@ public:
 
     void WarnAboutSyncQueries([[maybe_unused]] bool warn)
     {
-#ifdef ACORE_DEBUG
+#ifdef C9CORE_DEBUG
         _warnSyncQueries = warn;
 #endif
     }
@@ -234,7 +234,7 @@ private:
     std::unique_ptr<MySQLConnectionInfo> _connectionInfo;
     std::vector<uint8> _preparedStatementSize;
     uint8 _async_threads, _synch_threads;
-#ifdef ACORE_DEBUG
+#ifdef C9CORE_DEBUG
     static inline thread_local bool _warnSyncQueries = false;
 #endif
 };

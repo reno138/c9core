@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -77,7 +77,7 @@ protected:
 TEST_F(ConfigEnvTest, NestedInt)
 {
     EXPECT_EQ(sConfigMgr->GetOption<int32>("Int.Nested", 10), 4242);
-    setenv("AC_INT_NESTED", "8080", 1);
+    setenv("C9_INT_NESTED", "8080", 1);
     EXPECT_EQ(sConfigMgr->OverrideWithEnvVariablesIfAny().empty(), false);
     EXPECT_EQ(sConfigMgr->GetOption<int32>("Int.Nested", 10), 8080);
 }
@@ -85,7 +85,7 @@ TEST_F(ConfigEnvTest, NestedInt)
 TEST_F(ConfigEnvTest, SimpleLowerString)
 {
     EXPECT_EQ(sConfigMgr->GetOption<std::string>("lower", ""), "simpleString");
-    setenv("AC_LOWER", "envstring", 1);
+    setenv("C9_LOWER", "envstring", 1);
     EXPECT_EQ(sConfigMgr->OverrideWithEnvVariablesIfAny().empty(), false);
     EXPECT_EQ(sConfigMgr->GetOption<std::string>("lower", ""), "envstring");
 }
@@ -93,7 +93,7 @@ TEST_F(ConfigEnvTest, SimpleLowerString)
 TEST_F(ConfigEnvTest, SimpleUpperString)
 {
     EXPECT_EQ(sConfigMgr->GetOption<std::string>("UPPER", ""), "simpleString");
-    setenv("AC_UPPER", "envupperstring", 1);
+    setenv("C9_UPPER", "envupperstring", 1);
     EXPECT_EQ(sConfigMgr->OverrideWithEnvVariablesIfAny().empty(), false);
     EXPECT_EQ(sConfigMgr->GetOption<std::string>("UPPER", ""), "envupperstring");
 }
@@ -109,20 +109,20 @@ TEST_F(ConfigEnvTest, LongNestedNameWithNumber)
 TEST_F(ConfigEnvTest, ValueWithSeveralUpperlLaters)
 {
     EXPECT_EQ(sConfigMgr->GetOption<int>("GM.InGMList.Level", 1), 50);
-    setenv("AC_GM_IN_GMLIST_LEVEL", "42", 1);
+    setenv("C9_GM_IN_GMLIST_LEVEL", "42", 1);
     EXPECT_EQ(sConfigMgr->OverrideWithEnvVariablesIfAny().empty(), false);
     EXPECT_EQ(sConfigMgr->GetOption<int>("GM.InGMList.Level", 0), 42);
 }
 
 TEST_F(ConfigEnvTest, StringThatNotExistInConfig)
 {
-    setenv("AC_UNIQUE_STRING", "somevalue", 1);
+    setenv("C9_UNIQUE_STRING", "somevalue", 1);
     EXPECT_EQ(sConfigMgr->GetOption<std::string>("Unique.String", ""), "somevalue");
 }
 
 TEST_F(ConfigEnvTest, IntThatNotExistInConfig)
 {
-    setenv("AC_UNIQUE_INT", "100", 1);
+    setenv("C9_UNIQUE_INT", "100", 1);
     EXPECT_EQ(sConfigMgr->GetOption<int>("Unique.Int", 1), 100);
 }
 

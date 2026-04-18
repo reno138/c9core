@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -250,11 +250,11 @@ namespace Acore::ChatCommands
         std::variant<InvokerEntry, SubCommandEntry> _data;
     };
 
-    AC_GAME_API void LoadCommandMap();
-    AC_GAME_API void InvalidateCommandMap();
-    AC_GAME_API bool TryExecuteCommand(ChatHandler& handler, std::string_view cmd);
-    AC_GAME_API void SendCommandHelpFor(ChatHandler& handler, std::string_view cmd);
-    AC_GAME_API std::vector<std::string> GetAutoCompletionsFor(ChatHandler const& handler, std::string_view cmd);
+    C9_GAME_API void LoadCommandMap();
+    C9_GAME_API void InvalidateCommandMap();
+    C9_GAME_API bool TryExecuteCommand(ChatHandler& handler, std::string_view cmd);
+    C9_GAME_API void SendCommandHelpFor(ChatHandler& handler, std::string_view cmd);
+    C9_GAME_API std::vector<std::string> GetAutoCompletionsFor(ChatHandler const& handler, std::string_view cmd);
 }
 
 // backwards compatibility with old patches

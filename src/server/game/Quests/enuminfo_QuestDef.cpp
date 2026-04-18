@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@ namespace Acore::Impl::EnumUtilsImpl
 |* data for enum 'QuestFailedReason' in 'QuestDef.h' auto-generated *|
 \********************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<QuestFailedReason>::ToString(QuestFailedReason value)
+C9_API_EXPORT EnumText EnumUtils<QuestFailedReason>::ToString(QuestFailedReason value)
 {
     switch (value)
     {
@@ -49,10 +49,10 @@ AC_API_EXPORT EnumText EnumUtils<QuestFailedReason>::ToString(QuestFailedReason 
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<QuestFailedReason>::Count() { return 13; }
+C9_API_EXPORT std::size_t EnumUtils<QuestFailedReason>::Count() { return 13; }
 
 template <>
-AC_API_EXPORT QuestFailedReason EnumUtils<QuestFailedReason>::FromIndex(std::size_t index)
+C9_API_EXPORT QuestFailedReason EnumUtils<QuestFailedReason>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -74,7 +74,7 @@ AC_API_EXPORT QuestFailedReason EnumUtils<QuestFailedReason>::FromIndex(std::siz
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<QuestFailedReason>::ToIndex(QuestFailedReason value)
+C9_API_EXPORT std::size_t EnumUtils<QuestFailedReason>::ToIndex(QuestFailedReason value)
 {
     switch (value)
     {
@@ -99,7 +99,7 @@ AC_API_EXPORT std::size_t EnumUtils<QuestFailedReason>::ToIndex(QuestFailedReaso
 |* data for enum 'QuestShareMessages' in 'QuestDef.h' auto-generated *|
 \*********************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<QuestShareMessages>::ToString(QuestShareMessages value)
+C9_API_EXPORT EnumText EnumUtils<QuestShareMessages>::ToString(QuestShareMessages value)
 {
     switch (value)
     {
@@ -119,10 +119,10 @@ AC_API_EXPORT EnumText EnumUtils<QuestShareMessages>::ToString(QuestShareMessage
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<QuestShareMessages>::Count() { return 11; }
+C9_API_EXPORT std::size_t EnumUtils<QuestShareMessages>::Count() { return 11; }
 
 template <>
-AC_API_EXPORT QuestShareMessages EnumUtils<QuestShareMessages>::FromIndex(std::size_t index)
+C9_API_EXPORT QuestShareMessages EnumUtils<QuestShareMessages>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -142,7 +142,7 @@ AC_API_EXPORT QuestShareMessages EnumUtils<QuestShareMessages>::FromIndex(std::s
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<QuestShareMessages>::ToIndex(QuestShareMessages value)
+C9_API_EXPORT std::size_t EnumUtils<QuestShareMessages>::ToIndex(QuestShareMessages value)
 {
     switch (value)
     {

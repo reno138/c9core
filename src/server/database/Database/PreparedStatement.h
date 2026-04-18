@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -64,7 +64,7 @@ struct PreparedStatementData
 };
 
 //- Upper-level class that is used in code
-class AC_DATABASE_API PreparedStatementBase
+class C9_DATABASE_API PreparedStatementBase
 {
 friend class PreparedStatementTask;
 
@@ -166,7 +166,7 @@ private:
 };
 
 //- Lower-level class, enqueuable operation
-class AC_DATABASE_API PreparedStatementTask : public SQLOperation
+class C9_DATABASE_API PreparedStatementTask : public SQLOperation
 {
 public:
     PreparedStatementTask(PreparedStatementBase* stmt, bool async = false);

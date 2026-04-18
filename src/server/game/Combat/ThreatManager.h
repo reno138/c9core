@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -86,7 +86,7 @@ struct CompareThreatLessThan
     bool operator()(ThreatReference const* a, ThreatReference const* b) const;
 };
 
-class AC_GAME_API ThreatManager
+class C9_GAME_API ThreatManager
 {
 public:
     class Heap;
@@ -263,7 +263,7 @@ public:
     friend class debug_commandscript;
 };
 
-class AC_GAME_API ThreatReference
+class C9_GAME_API ThreatReference
 {
 public:
     enum TauntState : uint32 { TAUNT_STATE_DETAUNT = 0, TAUNT_STATE_NONE = 1, TAUNT_STATE_TAUNT = 2 };

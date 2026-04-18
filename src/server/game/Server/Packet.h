@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,7 @@
 
 namespace WorldPackets
 {
-    class AC_GAME_API Packet
+    class C9_GAME_API Packet
     {
     public:
         Packet(WorldPacket&& worldPacket);
@@ -42,7 +42,7 @@ namespace WorldPackets
         WorldPacket _worldPacket;
     };
 
-    class AC_GAME_API ServerPacket : public Packet
+    class C9_GAME_API ServerPacket : public Packet
     {
     public:
         ServerPacket(OpcodeServer opcode, std::size_t initialSize = 200);
@@ -56,7 +56,7 @@ namespace WorldPackets
         [[nodiscard]] OpcodeServer GetOpcode() const { return OpcodeServer(_worldPacket.GetOpcode()); }
     };
 
-    class AC_GAME_API ClientPacket : public Packet
+    class C9_GAME_API ClientPacket : public Packet
     {
     public:
         ClientPacket(WorldPacket&& packet);

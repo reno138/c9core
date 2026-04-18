@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,17 +45,17 @@ public:
         Player* player = handler->GetPlayer();
 
         PlayerSetting setting;
-        setting = player->GetPlayerSetting(AzerothcorePSSource, SETTING_ANNOUNCER_FLAGS);
+        setting = player->GetPlayerSetting(C9PSSource, SETTING_ANNOUNCER_FLAGS);
 
         if (type == "bg")
         {
             on ? setting.RemoveFlag(ANNOUNCER_FLAG_DISABLE_BG_QUEUE) : setting.AddFlag(ANNOUNCER_FLAG_DISABLE_BG_QUEUE);
-            player->UpdatePlayerSetting(AzerothcorePSSource, SETTING_ANNOUNCER_FLAGS, setting.value);
+            player->UpdatePlayerSetting(C9PSSource, SETTING_ANNOUNCER_FLAGS, setting.value);
         }
         else if (type == "arena")
         {
             on ? setting.RemoveFlag(ANNOUNCER_FLAG_DISABLE_ARENA_QUEUE) : setting.AddFlag(ANNOUNCER_FLAG_DISABLE_ARENA_QUEUE);
-            player->UpdatePlayerSetting(AzerothcorePSSource, SETTING_ANNOUNCER_FLAGS, setting.value);
+            player->UpdatePlayerSetting(C9PSSource, SETTING_ANNOUNCER_FLAGS, setting.value);
         }
         else if (type == "autobroadcast")
         {
@@ -66,7 +66,7 @@ public:
             }
 
             on ? setting.RemoveFlag(ANNOUNCER_FLAG_DISABLE_AUTOBROADCAST) : setting.AddFlag(ANNOUNCER_FLAG_DISABLE_AUTOBROADCAST);
-            player->UpdatePlayerSetting(AzerothcorePSSource, SETTING_ANNOUNCER_FLAGS, setting.value);
+            player->UpdatePlayerSetting(C9PSSource, SETTING_ANNOUNCER_FLAGS, setting.value);
         }
 
         handler->SetSentErrorMessage(false);

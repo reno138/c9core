@@ -1,5 +1,5 @@
 #
-# This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+# This file is part of the c9core Project. See AUTHORS file for Copyright information
 #
 # This file is free software; as a special exception the author gives
 # unlimited permission to copy and/or distribute it, with or without
@@ -12,7 +12,7 @@
 
 file(GLOB_RECURSE sources *.c)
 
-if(ACORE_SYSTEM_PROCESSOR MATCHES "x86|amd64")
+if(C9_SYSTEM_PROCESSOR MATCHES "x86|amd64")
   list(REMOVE_ITEM sources
     ${CMAKE_CURRENT_SOURCE_DIR}/argon2/ref.c)
 else()

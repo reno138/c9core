@@ -1,7 +1,7 @@
 #ifndef _WHEATYEXCEPTIONREPORT_
 #define _WHEATYEXCEPTIONREPORT_
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS && !defined(__MINGW32__)
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS && !defined(__MINGW32__)
 
 #include <dbghelp.h>
 #include <mutex>

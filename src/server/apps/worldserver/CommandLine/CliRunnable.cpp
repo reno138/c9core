@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +25,7 @@
 #include "World.h"
 #include <fmt/core.h>
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
 #include <windows.h>
 #include <iostream>
 #else
@@ -43,7 +43,7 @@ static inline void PrintCliPrefix()
     fmt::print(CLI_PREFIX);
 }
 
-#if AC_PLATFORM != AC_PLATFORM_WINDOWS
+#if C9_PLATFORM != C9_PLATFORM_WINDOWS
 namespace Acore::Impl::Readline
 {
     static std::vector<std::string> vec;
@@ -76,7 +76,7 @@ namespace Acore::Impl::Readline
 
 void utf8print(void* /*arg*/, std::string_view str)
 {
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     fmt::print(str);
 #else
 {
@@ -110,7 +110,7 @@ int kb_hit_return()
 /// %Thread start
 void CliThread()
 {
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     // Set console code pages to UTF-8
     SetConsoleCP(CP_UTF8);
     SetConsoleOutputCP(CP_UTF8);
@@ -130,7 +130,7 @@ void CliThread()
     if (sConfigMgr->GetOption<bool>("BeepAtStart", true))
         printf("\a"); // \a = Alert
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     if (sConfigMgr->GetOption<bool>("FlashAtStart", true))
     {
         FLASHWINFO fInfo;
@@ -158,7 +158,7 @@ void CliThread()
 
         std::string command;
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
 
         static bool checkedConsole = false;
         static bool isRealConsole = false;
@@ -218,7 +218,7 @@ void CliThread()
             {
                 if (nextLineIndex == 0)
                 {
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
                     PrintCliPrefix();
 #endif
                     continue;
@@ -229,7 +229,7 @@ void CliThread()
 
             fflush(stdout);
             sWorld->QueueCliCommand(new CliCommandHolder(nullptr, command.c_str(), &utf8print, &commandFinished));
-#if AC_PLATFORM != AC_PLATFORM_WINDOWS
+#if C9_PLATFORM != C9_PLATFORM_WINDOWS
             add_history(command.c_str());
 #endif
         }

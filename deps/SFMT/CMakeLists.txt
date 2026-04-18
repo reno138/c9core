@@ -1,5 +1,5 @@
 #
-# This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+# This file is part of the c9core Project. See AUTHORS file for Copyright information
 #
 # This file is free software; as a special exception the author gives
 # unlimited permission to copy and/or distribute it, with or without
@@ -44,23 +44,23 @@ include(CheckCXXCompilerFlag)
 
 # MSVC does not have any flags to check
 if (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-  if (ACORE_SYSTEM_PROCESSOR MATCHES "^arm")
+  if (C9_SYSTEM_PROCESSOR MATCHES "^arm")
     set(HAVE_NEON 1)
   else ()
     set(HAVE_SSE2 1)
   endif ()
 else ()
-  if (ACORE_SYSTEM_PROCESSOR STREQUAL "arm")
+  if (C9_SYSTEM_PROCESSOR STREQUAL "arm")
     check_cxx_compiler_flag(-mfpu=neon HAVE_NEON)
     if (HAVE_NEON)
       target_compile_options(sfmt PRIVATE -mfpu=neon -ftree-vectorize)
     endif()
-  elseif (ACORE_SYSTEM_PROCESSOR STREQUAL "arm64")
+  elseif (C9_SYSTEM_PROCESSOR STREQUAL "arm64")
     check_cxx_compiler_flag(-march=armv8-a+simd HAVE_NEON)
     if (HAVE_NEON)
       target_compile_options(sfmt PRIVATE -ftree-vectorize)
     endif ()
-  elseif (ACORE_SYSTEM_PROCESSOR MATCHES "x86|amd64")
+  elseif (C9_SYSTEM_PROCESSOR MATCHES "x86|amd64")
     #SSE2 is always available
     set(HAVE_SSE2 1)
     target_compile_options(sfmt PRIVATE -msse2)

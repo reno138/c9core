@@ -1,5 +1,5 @@
 #
-# This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+# This file is part of the c9core Project. See AUTHORS file for Copyright information
 #
 # This file is free software; as a special exception the author gives
 # unlimited permission to copy and/or distribute it, with or without
@@ -26,7 +26,7 @@ if(PLATFORM EQUAL 32)
       -mfpmath=sse)
 endif()
 
-if(ACORE_SYSTEM_PROCESSOR MATCHES "x86|amd64")
+if(C9_SYSTEM_PROCESSOR MATCHES "x86|amd64")
   target_compile_definitions(acore-compile-option-interface
     INTERFACE
       -DHAVE_SSE2
@@ -65,7 +65,7 @@ if(BUILD_SHARED_LIBS)
     INTERFACE
       -fvisibility=hidden)
 
-  # Should break the build when there are ACORE_*_API macros missing
+  # Should break the build when there are C9_*_API macros missing
   # but it complains about missing references in precompiled headers.
   # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,--no-undefined")
   # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--no-undefined")

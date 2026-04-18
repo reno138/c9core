@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,8 +15,8 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef AC_SCRIPT_OBJECT_FWD_H_
-#define AC_SCRIPT_OBJECT_FWD_H_
+#ifndef C9_SCRIPT_OBJECT_FWD_H_
+#define C9_SCRIPT_OBJECT_FWD_H_
 
 #include "Define.h"
 

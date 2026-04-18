@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -94,7 +94,7 @@ public:
                 return false;
             }
 
-#if AC_PLATFORM != AC_PLATFORM_WINDOWS
+#if C9_PLATFORM != C9_PLATFORM_WINDOWS
             _acceptor.set_option(boost::asio::ip::tcp::acceptor::reuse_address(true), errorCode);
             if (errorCode)
             {

@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,7 +35,7 @@ enum RealmFlags
     REALM_FLAG_FULL             = 0x80
 };
 
-struct AC_SHARED_API RealmHandle
+struct C9_SHARED_API RealmHandle
 {
     RealmHandle()  = default;
     RealmHandle(uint32 index) : Realm(index) { }
@@ -64,7 +64,7 @@ enum RealmType
 };
 
 // Storage object for a realm
-struct AC_SHARED_API Realm
+struct C9_SHARED_API Realm
 {
     RealmHandle Id;
     uint32 Build;

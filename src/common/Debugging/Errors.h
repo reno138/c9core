@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,36 +23,36 @@
 namespace Acore
 {
     // Default function
-    [[noreturn]] AC_COMMON_API void Assert(std::string_view file, uint32 line, std::string_view function, std::string_view debugInfo, std::string_view message, std::string_view fmtMessage = {});
-    [[noreturn]] AC_COMMON_API void Fatal(std::string_view file, uint32 line, std::string_view function, std::string_view message, std::string_view fmtMessage = {});
-    [[noreturn]] AC_COMMON_API void Error(std::string_view file, uint32 line, std::string_view function, std::string_view message);
-    [[noreturn]] AC_COMMON_API void Abort(std::string_view file, uint32 line, std::string_view function, std::string_view fmtMessage = {});
+    [[noreturn]] C9_COMMON_API void Assert(std::string_view file, uint32 line, std::string_view function, std::string_view debugInfo, std::string_view message, std::string_view fmtMessage = {});
+    [[noreturn]] C9_COMMON_API void Fatal(std::string_view file, uint32 line, std::string_view function, std::string_view message, std::string_view fmtMessage = {});
+    [[noreturn]] C9_COMMON_API void Error(std::string_view file, uint32 line, std::string_view function, std::string_view message);
+    [[noreturn]] C9_COMMON_API void Abort(std::string_view file, uint32 line, std::string_view function, std::string_view fmtMessage = {});
 
     template<typename... Args>
-    AC_COMMON_API inline void Assert(std::string_view file, uint32 line, std::string_view function, std::string_view debugInfo, std::string_view message, std::string_view fmt, Args&&... args)
+    C9_COMMON_API inline void Assert(std::string_view file, uint32 line, std::string_view function, std::string_view debugInfo, std::string_view message, std::string_view fmt, Args&&... args)
     {
         Assert(file, line, function, debugInfo, message, StringFormat(fmt, std::forward<Args>(args)...));
     }
 
     template<typename... Args>
-    AC_COMMON_API inline void Fatal(std::string_view file, uint32 line, std::string_view function, std::string_view message, std::string_view fmt, Args&&... args)
+    C9_COMMON_API inline void Fatal(std::string_view file, uint32 line, std::string_view function, std::string_view message, std::string_view fmt, Args&&... args)
     {
         Fatal(file, line, function, message, StringFormat(fmt, std::forward<Args>(args)...));
     }
 
     template<typename... Args>
-    AC_COMMON_API inline void Abort(std::string_view file, uint32 line, std::string_view function, std::string_view fmt, Args&&... args)
+    C9_COMMON_API inline void Abort(std::string_view file, uint32 line, std::string_view function, std::string_view fmt, Args&&... args)
     {
         Abort(file, line, function, StringFormat(fmt, std::forward<Args>(args)...));
     }
 
-    AC_COMMON_API void Warning(std::string_view file, uint32 line, std::string_view function, std::string_view message);
+    C9_COMMON_API void Warning(std::string_view file, uint32 line, std::string_view function, std::string_view message);
 
-    [[noreturn]] AC_COMMON_API void AbortHandler(int sigval);
+    [[noreturn]] C9_COMMON_API void AbortHandler(int sigval);
 
 } // namespace Acore
 
-AC_COMMON_API std::string GetDebugInfo();
+C9_COMMON_API std::string GetDebugInfo();
 
 #define WPAssert(cond, ...) do { if (!(cond)) Acore::Assert(__FILE__, __LINE__, __FUNCTION__, GetDebugInfo(), #cond, ##__VA_ARGS__); } while(0)
 #define WPAssert_NODEBUGINFO(cond) do { if (!(cond)) Acore::Assert(__FILE__, __LINE__, __FUNCTION__, "", #cond); } while(0)
@@ -69,7 +69,7 @@ AC_COMMON_API std::string GetDebugInfo();
 #define ASSERT_NODEBUGINFO WPAssert_NODEBUGINFO
 #endif
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
 #define EXCEPTION_ASSERTION_FAILURE 0xC0000420L
 #endif
 

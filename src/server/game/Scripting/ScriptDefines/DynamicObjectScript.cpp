@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,4 +34,4 @@ DynamicObjectScript::DynamicObjectScript(const char* name)
     ScriptRegistry<DynamicObjectScript>::AddScript(this);
 }
 
-template class AC_GAME_API ScriptRegistry<DynamicObjectScript>;
+template class C9_GAME_API ScriptRegistry<DynamicObjectScript>;

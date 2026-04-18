@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@ namespace Acore::Impl::EnumUtilsImpl
 |* data for enum 'CreatureAI::EvadeReason' in 'CreatureAI.h' auto-generated *|
 \****************************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<CreatureAI::EvadeReason>::ToString(CreatureAI::EvadeReason value)
+C9_API_EXPORT EnumText EnumUtils<CreatureAI::EvadeReason>::ToString(CreatureAI::EvadeReason value)
 {
     switch (value)
     {
@@ -40,10 +40,10 @@ AC_API_EXPORT EnumText EnumUtils<CreatureAI::EvadeReason>::ToString(CreatureAI::
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<CreatureAI::EvadeReason>::Count() { return 4; }
+C9_API_EXPORT std::size_t EnumUtils<CreatureAI::EvadeReason>::Count() { return 4; }
 
 template <>
-AC_API_EXPORT CreatureAI::EvadeReason EnumUtils<CreatureAI::EvadeReason>::FromIndex(std::size_t index)
+C9_API_EXPORT CreatureAI::EvadeReason EnumUtils<CreatureAI::EvadeReason>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -56,7 +56,7 @@ AC_API_EXPORT CreatureAI::EvadeReason EnumUtils<CreatureAI::EvadeReason>::FromIn
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<CreatureAI::EvadeReason>::ToIndex(CreatureAI::EvadeReason value)
+C9_API_EXPORT std::size_t EnumUtils<CreatureAI::EvadeReason>::ToIndex(CreatureAI::EvadeReason value)
 {
     switch (value)
     {

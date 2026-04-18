@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,9 +22,9 @@
 
 namespace MySQL
 {
-    AC_DATABASE_API void Library_Init();
-    AC_DATABASE_API void Library_End();
-    AC_DATABASE_API uint32 GetLibraryVersion();
+    C9_DATABASE_API void Library_Init();
+    C9_DATABASE_API void Library_End();
+    C9_DATABASE_API uint32 GetLibraryVersion();
 }
 
 #endif

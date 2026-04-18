@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +24,7 @@
 
 constexpr auto AVG_DIFF_COUNT = 500;
 
-class AC_GAME_API UpdateTime
+class C9_GAME_API UpdateTime
 {
 using DiffTableArray = std::array<uint32, AVG_DIFF_COUNT>;
 
@@ -61,7 +61,7 @@ private:
     Milliseconds _recordedTime;
 };
 
-class AC_GAME_API WorldUpdateTime : public UpdateTime
+class C9_GAME_API WorldUpdateTime : public UpdateTime
 {
 public:
     WorldUpdateTime() : UpdateTime(), _recordUpdateTimeInverval(0), _recordUpdateTimeMin(0), _lastRecordTime(0) { }
@@ -76,6 +76,6 @@ private:
     Milliseconds _lastRecordTime;
 };
 
-AC_GAME_API extern WorldUpdateTime sWorldUpdateTime;
+C9_GAME_API extern WorldUpdateTime sWorldUpdateTime;
 
 #endif

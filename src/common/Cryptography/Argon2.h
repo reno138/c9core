@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@
 
 namespace Acore::Crypto
 {
-    struct AC_COMMON_API Argon2
+    struct C9_COMMON_API Argon2
     {
         static constexpr uint32 HASH_LEN = 16;                    // 128 bits, in bytes
         static constexpr uint32 ENCODED_HASH_LEN = 100;           // in chars

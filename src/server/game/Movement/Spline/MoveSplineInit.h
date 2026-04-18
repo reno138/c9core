@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,8 +15,8 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef AC_MOVESPLINEINIT_H
-#define AC_MOVESPLINEINIT_H
+#ifndef C9_MOVESPLINEINIT_H
+#define C9_MOVESPLINEINIT_H
 
 #include "MoveSplineInitArgs.h"
 #include "PathGenerator.h"
@@ -202,4 +202,4 @@ namespace Movement
 
     inline void MoveSplineInit::DisableTransportPathTransformations() { args.TransformForTransport = false; }
 }
-#endif // AC_MOVESPLINEINIT_H
+#endif // C9_MOVESPLINEINIT_H

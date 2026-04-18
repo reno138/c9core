@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -140,10 +140,10 @@ namespace Acore::ChatCommands
     {
         using value_type = std::string;
 
-        AC_GAME_API ChatCommandResult TryConsume(ChatHandler const* handler, std::string_view args);
+        C9_GAME_API ChatCommandResult TryConsume(ChatHandler const* handler, std::string_view args);
     };
 
-    struct AC_GAME_API AccountIdentifier : Acore::Impl::ChatCommands::ContainerTag
+    struct C9_GAME_API AccountIdentifier : Acore::Impl::ChatCommands::ContainerTag
     {
         using value_type = uint32;
 
@@ -161,7 +161,7 @@ namespace Acore::ChatCommands
             std::string _name;
     };
 
-    struct AC_GAME_API PlayerIdentifier : Acore::Impl::ChatCommands::ContainerTag
+    struct C9_GAME_API PlayerIdentifier : Acore::Impl::ChatCommands::ContainerTag
     {
         using value_type = Player*;
 

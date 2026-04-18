@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -56,7 +56,7 @@ enum EvadeState : uint8
  *  - Adding threat will also create a combat reference between the units if one doesn't exist yet.                                                     *
 \********************************************************************************************************************************************************/
 
-struct AC_GAME_API CombatReference
+struct C9_GAME_API CombatReference
 {
     Unit* const first;
     Unit* const second;
@@ -85,7 +85,7 @@ protected:
     friend class CombatManager;
 };
 
-struct AC_GAME_API PvPCombatReference : public CombatReference
+struct C9_GAME_API PvPCombatReference : public CombatReference
 {
     static const uint32 PVP_COMBAT_TIMEOUT = 5 * IN_MILLISECONDS;
 
@@ -100,7 +100,7 @@ private:
     friend class CombatManager;
 };
 
-class AC_GAME_API CombatManager
+class C9_GAME_API CombatManager
 {
 public:
     static bool CanBeginCombat(Unit const* a, Unit const* b);

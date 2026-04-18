@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -302,7 +302,7 @@ bool ArenaSpectator::ShouldSendAura(Aura* aura, uint8 effMask, ObjectGuid target
 }
 
 template<>
-AC_GAME_API void ArenaSpectator::SendPacketTo(Player const* player, std::string&& message)
+C9_GAME_API void ArenaSpectator::SendPacketTo(Player const* player, std::string&& message)
 {
     WorldPacket data;
     CreatePacket(data, message);
@@ -310,7 +310,7 @@ AC_GAME_API void ArenaSpectator::SendPacketTo(Player const* player, std::string&
 }
 
 template<>
-AC_GAME_API void ArenaSpectator::SendPacketTo(const Map* map, std::string&& message)
+C9_GAME_API void ArenaSpectator::SendPacketTo(const Map* map, std::string&& message)
 {
     if (!map->IsBattleArena())
         return;

@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,36 +41,36 @@ enum class TimeOutput : uint8
 namespace Acore::Time
 {
     template <class T>
-    AC_COMMON_API uint32 TimeStringTo(std::string_view timeString);
+    C9_COMMON_API uint32 TimeStringTo(std::string_view timeString);
 
     template<class T>
-    AC_COMMON_API std::string ToTimeString(uint64 durationTime, TimeOutput timeOutput = TimeOutput::Seconds, TimeFormat timeFormat = TimeFormat::ShortText);
+    C9_COMMON_API std::string ToTimeString(uint64 durationTime, TimeOutput timeOutput = TimeOutput::Seconds, TimeFormat timeFormat = TimeFormat::ShortText);
 
     template<class T>
-    AC_COMMON_API std::string ToTimeString(std::string_view durationTime, TimeOutput timeOutput = TimeOutput::Seconds, TimeFormat timeFormat = TimeFormat::ShortText);
+    C9_COMMON_API std::string ToTimeString(std::string_view durationTime, TimeOutput timeOutput = TimeOutput::Seconds, TimeFormat timeFormat = TimeFormat::ShortText);
 
-    AC_COMMON_API std::string ToTimeString(Microseconds durationTime, TimeOutput timeOutput = TimeOutput::Seconds, TimeFormat timeFormat = TimeFormat::ShortText);
+    C9_COMMON_API std::string ToTimeString(Microseconds durationTime, TimeOutput timeOutput = TimeOutput::Seconds, TimeFormat timeFormat = TimeFormat::ShortText);
 
-    AC_COMMON_API time_t LocalTimeToUTCTime(time_t time);
-    AC_COMMON_API time_t GetLocalHourTimestamp(time_t time, uint8 hour, bool onlyAfterTime = true);
-    AC_COMMON_API std::tm TimeBreakdown(time_t t = 0);
-    AC_COMMON_API std::string TimeToTimestampStr(Seconds time = 0s, std::string_view fmt = {});
-    AC_COMMON_API std::string TimeToHumanReadable(Seconds time = 0s, std::string_view fmt = {});
+    C9_COMMON_API time_t LocalTimeToUTCTime(time_t time);
+    C9_COMMON_API time_t GetLocalHourTimestamp(time_t time, uint8 hour, bool onlyAfterTime = true);
+    C9_COMMON_API std::tm TimeBreakdown(time_t t = 0);
+    C9_COMMON_API std::string TimeToTimestampStr(Seconds time = 0s, std::string_view fmt = {});
+    C9_COMMON_API std::string TimeToHumanReadable(Seconds time = 0s, std::string_view fmt = {});
 
-    AC_COMMON_API time_t GetNextTimeWithDayAndHour(int8 dayOfWeek, int8 hour); // int8 dayOfWeek: 0 (sunday) to 6 (saturday)
-    AC_COMMON_API time_t GetNextTimeWithMonthAndHour(int8 month, int8 hour); // int8 month: 0 (january) to 11 (december)
+    C9_COMMON_API time_t GetNextTimeWithDayAndHour(int8 dayOfWeek, int8 hour); // int8 dayOfWeek: 0 (sunday) to 6 (saturday)
+    C9_COMMON_API time_t GetNextTimeWithMonthAndHour(int8 month, int8 hour); // int8 month: 0 (january) to 11 (december)
 
-    AC_COMMON_API uint32 GetSeconds(Seconds time = 0s);      // seconds after the minute - [0, 60]
-    AC_COMMON_API uint32 GetMinutes(Seconds time = 0s);      // minutes after the hour - [0, 59]
-    AC_COMMON_API uint32 GetHours(Seconds time = 0s);        // hours since midnight - [0, 23]
-    AC_COMMON_API uint32 GetDayInWeek(Seconds time = 0s);    // days since Sunday - [0, 6]
-    AC_COMMON_API uint32 GetDayInMonth(Seconds time = 0s);   // day of the month - [1, 31]
-    AC_COMMON_API uint32 GetDayInYear(Seconds time = 0s);    // days since January 1 - [0, 365]
-    AC_COMMON_API uint32 GetMonth(Seconds time = 0s);        // months since January - [0, 11]
-    AC_COMMON_API uint32 GetYear(Seconds time = 0s);         // years since 1900
+    C9_COMMON_API uint32 GetSeconds(Seconds time = 0s);      // seconds after the minute - [0, 60]
+    C9_COMMON_API uint32 GetMinutes(Seconds time = 0s);      // minutes after the hour - [0, 59]
+    C9_COMMON_API uint32 GetHours(Seconds time = 0s);        // hours since midnight - [0, 23]
+    C9_COMMON_API uint32 GetDayInWeek(Seconds time = 0s);    // days since Sunday - [0, 6]
+    C9_COMMON_API uint32 GetDayInMonth(Seconds time = 0s);   // day of the month - [1, 31]
+    C9_COMMON_API uint32 GetDayInYear(Seconds time = 0s);    // days since January 1 - [0, 365]
+    C9_COMMON_API uint32 GetMonth(Seconds time = 0s);        // months since January - [0, 11]
+    C9_COMMON_API uint32 GetYear(Seconds time = 0s);         // years since 1900
 }
 
-AC_COMMON_API struct tm* localtime_r(time_t const* time, struct tm* result);
+C9_COMMON_API struct tm* localtime_r(time_t const* time, struct tm* result);
 
 inline TimePoint GetApplicationStartTime()
 {

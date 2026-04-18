@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -175,7 +175,7 @@ bool DBUpdater<T>::Create(DatabaseWorkerPool<T>& pool)
 {
     LOG_WARN("sql.updates", "Database \"{}\" does not exist", pool.GetConnectionInfo()->database);
 
-    const char* disableInteractive = std::getenv("AC_DISABLE_INTERACTIVE");
+    const char* disableInteractive = std::getenv("C9_DISABLE_INTERACTIVE");
 
     if (!sConfigMgr->isDryRun() && (disableInteractive == nullptr || std::strcmp(disableInteractive, "1") != 0))
     {
@@ -540,6 +540,6 @@ void DBUpdater<T>::ApplyFile(DatabaseWorkerPool<T>& pool, std::string const& hos
     }
 }
 
-template class AC_DATABASE_API DBUpdater<LoginDatabaseConnection>;
-template class AC_DATABASE_API DBUpdater<WorldDatabaseConnection>;
-template class AC_DATABASE_API DBUpdater<CharacterDatabaseConnection>;
+template class C9_DATABASE_API DBUpdater<LoginDatabaseConnection>;
+template class C9_DATABASE_API DBUpdater<WorldDatabaseConnection>;
+template class C9_DATABASE_API DBUpdater<CharacterDatabaseConnection>;

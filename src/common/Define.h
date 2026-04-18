@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,83 +15,83 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef ACORE_DEFINE_H
-#define ACORE_DEFINE_H
+#ifndef C9CORE_DEFINE_H
+#define C9CORE_DEFINE_H
 
 #include "CompilerDefs.h"
 #include <cinttypes>
 #include <climits>
 
-#define ACORE_LITTLEENDIAN 0
-#define ACORE_BIGENDIAN    1
+#define C9CORE_LITTLEENDIAN 0
+#define C9CORE_BIGENDIAN    1
 
-#if !defined(ACORE_ENDIAN)
+#if !defined(C9CORE_ENDIAN)
 #  if defined (BOOST_BIG_ENDIAN)
-#    define ACORE_ENDIAN ACORE_BIGENDIAN
+#    define C9CORE_ENDIAN C9CORE_BIGENDIAN
 #  else
-#    define ACORE_ENDIAN ACORE_LITTLEENDIAN
+#    define C9CORE_ENDIAN C9CORE_LITTLEENDIAN
 #  endif
 #endif
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
-#  define ACORE_PATH_MAX MAX_PATH
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
+#  define C9CORE_PATH_MAX MAX_PATH
 #  define _USE_MATH_DEFINES
-#else //AC_PLATFORM != AC_PLATFORM_WINDOWS
-#  define ACORE_PATH_MAX PATH_MAX
-#endif //AC_PLATFORM
+#else //C9_PLATFORM != C9_PLATFORM_WINDOWS
+#  define C9CORE_PATH_MAX PATH_MAX
+#endif //C9_PLATFORM
 
 #if !defined(COREDEBUG)
-#  define ACORE_INLINE inline
+#  define C9CORE_INLINE inline
 #else //COREDEBUG
-#  if !defined(ACORE_DEBUG)
-#    define ACORE_DEBUG
-#  endif //ACORE_DEBUG
-#  define ACORE_INLINE
+#  if !defined(C9CORE_DEBUG)
+#    define C9CORE_DEBUG
+#  endif //C9CORE_DEBUG
+#  define C9CORE_INLINE
 #endif //!COREDEBUG
 
-#if AC_COMPILER == AC_COMPILER_GNU
+#if C9_COMPILER == C9_COMPILER_GNU
 #  define ATTR_PRINTF(F, V) __attribute__ ((format (printf, F, V)))
-#else //AC_COMPILER != AC_COMPILER_GNU
+#else //C9_COMPILER != C9_COMPILER_GNU
 #  define ATTR_PRINTF(F, V)
-#endif //AC_COMPILER == AC_COMPILER_GNU
+#endif //C9_COMPILER == C9_COMPILER_GNU
 
-#ifdef ACORE_API_USE_DYNAMIC_LINKING
-#  if AC_COMPILER == AC_COMPILER_MICROSOFT
-#    define AC_API_EXPORT __declspec(dllexport)
-#    define AC_API_IMPORT __declspec(dllimport)
-#  elif AC_COMPILER == AC_COMPILER_GNU
-#    define AC_API_EXPORT __attribute__((visibility("default")))
-#    define AC_API_IMPORT
+#ifdef C9CORE_API_USE_DYNAMIC_LINKING
+#  if C9_COMPILER == C9_COMPILER_MICROSOFT
+#    define C9_API_EXPORT __declspec(dllexport)
+#    define C9_API_IMPORT __declspec(dllimport)
+#  elif C9_COMPILER == C9_COMPILER_GNU
+#    define C9_API_EXPORT __attribute__((visibility("default")))
+#    define C9_API_IMPORT
 #  else
 #    error compiler not supported!
 #  endif
 #else
-#  define AC_API_EXPORT
-#  define AC_API_IMPORT
+#  define C9_API_EXPORT
+#  define C9_API_IMPORT
 #endif
 
-#ifdef ACORE_API_EXPORT_COMMON
-#  define AC_COMMON_API AC_API_EXPORT
+#ifdef C9CORE_API_EXPORT_COMMON
+#  define C9_COMMON_API C9_API_EXPORT
 #else
-#  define AC_COMMON_API AC_API_IMPORT
+#  define C9_COMMON_API C9_API_IMPORT
 #endif
 
-#ifdef ACORE_API_EXPORT_DATABASE
-#  define AC_DATABASE_API AC_API_EXPORT
+#ifdef C9CORE_API_EXPORT_DATABASE
+#  define C9_DATABASE_API C9_API_EXPORT
 #else
-#  define AC_DATABASE_API AC_API_IMPORT
+#  define C9_DATABASE_API C9_API_IMPORT
 #endif
 
-#ifdef ACORE_API_EXPORT_SHARED
-#  define AC_SHARED_API AC_API_EXPORT
+#ifdef C9CORE_API_EXPORT_SHARED
+#  define C9_SHARED_API C9_API_EXPORT
 #else
-#  define AC_SHARED_API AC_API_IMPORT
+#  define C9_SHARED_API C9_API_IMPORT
 #endif
 
-#ifdef ACORE_API_EXPORT_GAME
-#  define AC_GAME_API AC_API_EXPORT
+#ifdef C9CORE_API_EXPORT_GAME
+#  define C9_GAME_API C9_API_EXPORT
 #else
-#  define AC_GAME_API AC_API_IMPORT
+#  define C9_GAME_API C9_API_IMPORT
 #endif
 
 #define UI64LIT(N) UINT64_C(N)
@@ -108,4 +108,4 @@ typedef std::uint32_t uint32;
 typedef std::uint16_t uint16;
 typedef std::uint8_t uint8;
 
-#endif //ACORE_DEFINE_H
+#endif //C9CORE_DEFINE_H

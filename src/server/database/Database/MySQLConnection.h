@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -39,7 +39,7 @@ enum ConnectionFlags
     CONNECTION_BOTH = CONNECTION_ASYNC | CONNECTION_SYNCH
 };
 
-struct AC_DATABASE_API MySQLConnectionInfo
+struct C9_DATABASE_API MySQLConnectionInfo
 {
     explicit MySQLConnectionInfo(std::string_view infoString);
 
@@ -51,7 +51,7 @@ struct AC_DATABASE_API MySQLConnectionInfo
     std::string ssl;
 };
 
-class AC_DATABASE_API MySQLConnection
+class C9_DATABASE_API MySQLConnection
 {
 template <class T>
 friend class DatabaseWorkerPool;

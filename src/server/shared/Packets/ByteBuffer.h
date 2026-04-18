@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@
 class MessageBuffer;
 
 // Root of ByteBuffer exception hierarchy
-class AC_SHARED_API ByteBufferException : public std::exception
+class C9_SHARED_API ByteBufferException : public std::exception
 {
 public:
     ~ByteBufferException() noexcept override = default;
@@ -42,7 +42,7 @@ private:
     std::string msg_;
 };
 
-class AC_SHARED_API ByteBufferPositionException : public ByteBufferException
+class C9_SHARED_API ByteBufferPositionException : public ByteBufferException
 {
 public:
     ByteBufferPositionException(bool add, std::size_t pos, std::size_t size, std::size_t valueSize);
@@ -50,7 +50,7 @@ public:
     ~ByteBufferPositionException() noexcept override = default;
 };
 
-class AC_SHARED_API ByteBufferSourceException : public ByteBufferException
+class C9_SHARED_API ByteBufferSourceException : public ByteBufferException
 {
 public:
     ByteBufferSourceException(std::size_t pos, std::size_t size, std::size_t valueSize);
@@ -58,7 +58,7 @@ public:
     ~ByteBufferSourceException() noexcept override = default;
 };
 
-class AC_SHARED_API ByteBufferInvalidValueException : public ByteBufferException
+class C9_SHARED_API ByteBufferInvalidValueException : public ByteBufferException
 {
 public:
     ByteBufferInvalidValueException(char const* type, char const* value);
@@ -66,7 +66,7 @@ public:
     ~ByteBufferInvalidValueException() noexcept override = default;
 };
 
-class AC_SHARED_API ByteBuffer
+class C9_SHARED_API ByteBuffer
 {
 public:
     constexpr static std::size_t DEFAULT_SIZE = 0x1000;

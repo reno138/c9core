@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,7 +38,7 @@ struct SQLElementData
 
 class MySQLConnection;
 
-class AC_DATABASE_API SQLOperation
+class C9_DATABASE_API SQLOperation
 {
 public:
     SQLOperation() = default;

@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,20 +22,20 @@
 
 namespace GitRevision
 {
-    AC_COMMON_API char const* GetHash();
-    AC_COMMON_API char const* GetDate();
-    AC_COMMON_API char const* GetBranch();
-    AC_COMMON_API char const* GetCMakeCommand();
-    AC_COMMON_API char const* GetCMakeVersion();
-    AC_COMMON_API char const* GetHostOSVersion();
-    AC_COMMON_API char const* GetBuildDirectory();
-    AC_COMMON_API char const* GetSourceDirectory();
-    AC_COMMON_API char const* GetMySQLExecutable();
-    AC_COMMON_API char const* GetFullVersion();
-    AC_COMMON_API char const* GetCompanyNameStr();
-    AC_COMMON_API char const* GetLegalCopyrightStr();
-    AC_COMMON_API char const* GetFileVersionStr();
-    AC_COMMON_API char const* GetProductVersionStr();
+    C9_COMMON_API char const* GetHash();
+    C9_COMMON_API char const* GetDate();
+    C9_COMMON_API char const* GetBranch();
+    C9_COMMON_API char const* GetCMakeCommand();
+    C9_COMMON_API char const* GetCMakeVersion();
+    C9_COMMON_API char const* GetHostOSVersion();
+    C9_COMMON_API char const* GetBuildDirectory();
+    C9_COMMON_API char const* GetSourceDirectory();
+    C9_COMMON_API char const* GetMySQLExecutable();
+    C9_COMMON_API char const* GetFullVersion();
+    C9_COMMON_API char const* GetCompanyNameStr();
+    C9_COMMON_API char const* GetLegalCopyrightStr();
+    C9_COMMON_API char const* GetFileVersionStr();
+    C9_COMMON_API char const* GetProductVersionStr();
 }
 
 #endif

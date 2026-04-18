@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@ namespace Acore::Impl::EnumUtilsImpl
 |* data for enum 'ArenaTeamTypes' in 'ArenaTeam.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<ArenaTeamTypes>::ToString(ArenaTeamTypes value)
+C9_API_EXPORT EnumText EnumUtils<ArenaTeamTypes>::ToString(ArenaTeamTypes value)
 {
     switch (value)
     {
@@ -39,10 +39,10 @@ AC_API_EXPORT EnumText EnumUtils<ArenaTeamTypes>::ToString(ArenaTeamTypes value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<ArenaTeamTypes>::Count() { return 3; }
+C9_API_EXPORT std::size_t EnumUtils<ArenaTeamTypes>::Count() { return 3; }
 
 template <>
-AC_API_EXPORT ArenaTeamTypes EnumUtils<ArenaTeamTypes>::FromIndex(std::size_t index)
+C9_API_EXPORT ArenaTeamTypes EnumUtils<ArenaTeamTypes>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -54,7 +54,7 @@ AC_API_EXPORT ArenaTeamTypes EnumUtils<ArenaTeamTypes>::FromIndex(std::size_t in
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<ArenaTeamTypes>::ToIndex(ArenaTeamTypes value)
+C9_API_EXPORT std::size_t EnumUtils<ArenaTeamTypes>::ToIndex(ArenaTeamTypes value)
 {
     switch (value)
     {

@@ -1,5 +1,5 @@
 /*
-# Copyright (C) 2016+ AzerothCore <www.azerothcore.org>
+# Copyright (C) 2016+ c9core <github.com/reno138/c9core>
  *
  * This file was based on
  * https://embeddedartistry.com/blog/2017/05/17/creating-a-circular-buffer-in-c-and-c/

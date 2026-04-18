@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,10 +27,10 @@
 namespace OpenSSLCrypto
 {
     /// Needs to be called before threads using openssl are spawned
-    AC_COMMON_API void threadsSetup();
+    C9_COMMON_API void threadsSetup();
 
     /// Needs to be called after threads using openssl are despawned
-    AC_COMMON_API void threadsCleanup();
+    C9_COMMON_API void threadsCleanup();
 }
 
 #endif

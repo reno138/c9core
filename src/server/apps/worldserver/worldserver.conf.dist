@@ -178,7 +178,7 @@ Database.Reconnect.Attempts = 20
 #    DataDir
 #        Description: Data directory setting.
 #        Important:   DataDir needs to be quoted, as the string might contain space characters.
-#        Example:     "@prefix@\home\youruser\azerothcore\data"
+#        Example:     "@prefix@\home\youruser\c9core\data"
 #        Default:     "."
 
 DataDir = "."
@@ -188,7 +188,7 @@ DataDir = "."
 #        Description: Logs directory setting.
 #        Important:   LogsDir needs to be quoted, as the string might contain space characters.
 #                     Logs directory must exists, or log file creation will be disabled.
-#        Example:     "/home/youruser/azerothcore/logs"
+#        Example:     "/home/youruser/c9core/logs"
 #        Default:     "" - (Log files will be stored in the current path)
 
 LogsDir = ""
@@ -198,7 +198,7 @@ LogsDir = ""
 #        Description: Temp directory setting.
 #        Important:   TempDir needs to be quoted, as the string might contain space characters.
 #                     TempDir directory must exists, or the server can't work properly
-#        Example:     "/home/youruser/azerothcore/temp"
+#        Example:     "/home/youruser/c9core/temp"
 #        Default:     "" - (Temp files will be stored in the current path)
 
 TempDir = ""
@@ -217,16 +217,16 @@ CMakeCommand = ""
 #    BuildDirectory
 #        Description: The path to your build directory.
 #                     If the path is left empty, the built-in CMAKE_BINARY_DIR is used.
-#        Example:     "../AzerothCore"
+#        Example:     "../c9core"
 #        Default:     ""
 
 BuildDirectory = ""
 
 #
 #    SourceDirectory
-#        Description: The path to your AzerothCore source directory.
+#        Description: The path to your c9core source directory.
 #                     If the path is left empty, the built-in CMAKE_SOURCE_DIR is used.
-#        Example:     "../azerothcore-wotlk"
+#        Example:     "../c9core"
 #        Default:     ""
 
 SourceDirectory = ""

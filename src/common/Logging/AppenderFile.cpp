@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -87,8 +87,8 @@ void AppenderFile::_write(LogMessage const* message)
 
     if (_dynamicName)
     {
-        char namebuf[ACORE_PATH_MAX];
-        snprintf(namebuf, ACORE_PATH_MAX, _fileName.c_str(), message->param1.c_str());
+        char namebuf[C9CORE_PATH_MAX];
+        snprintf(namebuf, C9CORE_PATH_MAX, _fileName.c_str(), message->param1.c_str());
 
         // always use "a" with dynamic name otherwise it could delete the log we wrote in last _write() call
         FILE* file = OpenFile(namebuf, "a", _backup || exceedMaxSize);

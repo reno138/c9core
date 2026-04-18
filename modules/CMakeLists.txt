@@ -356,7 +356,7 @@ endforeach()
 # Define modules list
 target_compile_options(modules
   INTERFACE
-    -DAC_MODULES_LIST=$<1:"${MODULE_LIST}">)
+    -DC9_MODULES_LIST=$<1:"${MODULE_LIST}">)
 
 # Define modules config list
 target_compile_options(modules

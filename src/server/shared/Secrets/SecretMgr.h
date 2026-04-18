@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,7 +33,7 @@ enum Secrets : uint32
     NUM_SECRETS
 };
 
-class AC_SHARED_API SecretMgr
+class C9_SHARED_API SecretMgr
 {
 private:
     SecretMgr() = default;

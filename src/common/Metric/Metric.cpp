@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -365,11 +365,11 @@ std::string Metric::FormatInfluxDBValue(std::chrono::nanoseconds value)
     return FormatInfluxDBValue(std::chrono::duration_cast<Milliseconds>(value).count());
 }
 
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(int8);
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(uint8);
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(int16);
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(uint16);
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(int32);
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(uint32);
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(int64);
-template AC_COMMON_API std::string Metric::FormatInfluxDBValue(uint64);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(int8);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(uint8);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(int16);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(uint16);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(int32);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(uint32);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(int64);
+template C9_COMMON_API std::string Metric::FormatInfluxDBValue(uint64);

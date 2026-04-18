@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -77,7 +77,7 @@ namespace Acore
         std::string const& logger, std::string const& input,
         bool secure)
     {
-#if AC_COMPILER == AC_COMPILER_MICROSOFT
+#if C9_COMPILER == C9_COMPILER_MICROSOFT
 #pragma warning(push)
 #pragma warning(disable:4297)
 /*
@@ -90,7 +90,7 @@ namespace Acore
 #endif
         ipstream outStream;
         ipstream errStream;
-#if AC_COMPILER == AC_COMPILER_MICROSOFT
+#if C9_COMPILER == C9_COMPILER_MICROSOFT
 #pragma warning(pop)
 #endif
 

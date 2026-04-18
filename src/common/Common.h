@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,13 +21,13 @@
 #include "Define.h"
 #include <string>
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
 #include <ws2tcpip.h>
-#if AC_COMPILER == AC_COMPILER_INTEL
+#if C9_COMPILER == C9_COMPILER_INTEL
 #    if !defined(BOOST_ASIO_HAS_MOVE)
 #      define BOOST_ASIO_HAS_MOVE
 #    endif // !defined(BOOST_ASIO_HAS_MOVE)
-#  endif // if AC_COMPILER == AC_COMPILER_INTEL
+#  endif // if C9_COMPILER == C9_COMPILER_INTEL
 #else
 #include <cstdlib>
 #include <netdb.h>
@@ -133,12 +133,12 @@ enum LocaleConstant
 #define MAX_LOCALES 8
 #define MAX_ACCOUNT_TUTORIAL_VALUES 8
 
-AC_COMMON_API extern char const* localeNames[TOTAL_LOCALES];
+C9_COMMON_API extern char const* localeNames[TOTAL_LOCALES];
 
-AC_COMMON_API bool IsLocaleValid(std::string const& locale);
-AC_COMMON_API LocaleConstant GetLocaleByName(const std::string& name);
-AC_COMMON_API const std::string GetNameByLocaleConstant(LocaleConstant localeConstant);
-AC_COMMON_API void CleanStringForMysqlQuery(std::string& str);
+C9_COMMON_API bool IsLocaleValid(std::string const& locale);
+C9_COMMON_API LocaleConstant GetLocaleByName(const std::string& name);
+C9_COMMON_API const std::string GetNameByLocaleConstant(LocaleConstant localeConstant);
+C9_COMMON_API void CleanStringForMysqlQuery(std::string& str);
 
 #define MAX_QUERY_LEN 32*1024
 

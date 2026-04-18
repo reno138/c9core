@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,7 +29,7 @@ class DatabaseWorkerPool;
 
 // A helper class to initiate all database worker pools,
 // handles updating, delays preparing of statements and cleans up on failure.
-class AC_DATABASE_API DatabaseLoader
+class C9_DATABASE_API DatabaseLoader
 {
 public:
     DatabaseLoader(std::string const& logger, uint32 const defaultUpdateMask = 7, std::string_view modulesList = {});

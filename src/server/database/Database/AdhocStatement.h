@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,7 @@
 #include "SQLOperation.h"
 
 /*! Raw, ad-hoc query. */
-class AC_DATABASE_API BasicStatementTask : public SQLOperation
+class C9_DATABASE_API BasicStatementTask : public SQLOperation
 {
 public:
     BasicStatementTask(std::string_view sql, bool async = false);

@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,8 +15,8 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef AC_PACKET_BUILDER_H
-#define AC_PACKET_BUILDER_H
+#ifndef C9_PACKET_BUILDER_H
+#define C9_PACKET_BUILDER_H
 
 #include "Define.h"
 
@@ -40,4 +40,4 @@ namespace Movement
         static void WriteCreate(const MoveSpline& mov, ByteBuffer& data);
     };
 }
-#endif // AC_PACKET_BUILDER_H
+#endif // C9_PACKET_BUILDER_H

@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -63,17 +63,17 @@ char const* GitRevision::GetMySQLExecutable()
     return _MYSQL_EXECUTABLE;
 }
 
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
 #  ifdef _WIN64
 #    define C9_PLATFORM_STR "Win64"
 #  else
 #    define C9_PLATFORM_STR "Win32"
 #  endif
-#else // AC_PLATFORM
+#else // C9_PLATFORM
 #  define C9_PLATFORM_STR "Unix"
 #endif
 
-#ifndef ACORE_API_USE_DYNAMIC_LINKING
+#ifndef C9CORE_API_USE_DYNAMIC_LINKING
 #  define C9_LINKAGE_TYPE_STR "Static"
 #else
 #  define C9_LINKAGE_TYPE_STR "Dynamic"

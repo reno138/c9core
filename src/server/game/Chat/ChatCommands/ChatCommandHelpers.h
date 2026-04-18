@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -119,8 +119,8 @@ namespace Acore::Impl::ChatCommands
             std::variant<std::monostate, std::string_view, std::string> _storage;
     };
 
-    AC_GAME_API void SendErrorMessageToHandler(ChatHandler* handler, std::string_view str);
-    AC_GAME_API std::string GetAcoreString(ChatHandler const* handler, AcoreStrings which);
+    C9_GAME_API void SendErrorMessageToHandler(ChatHandler* handler, std::string_view str);
+    C9_GAME_API std::string GetAcoreString(ChatHandler const* handler, AcoreStrings which);
     template <typename... Ts>
     std::string FormatAcoreString(ChatHandler const* handler, AcoreStrings which, Ts&&... args)
     {

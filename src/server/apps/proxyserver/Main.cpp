@@ -156,7 +156,7 @@ int main(int argc, char** argv)
     std::shared_ptr<void> natsHandle(nullptr, [](void*) { sNatsBus.Shutdown(); });
 
     boost::asio::signal_set signals(*ioContext, SIGINT, SIGTERM);
-#if AC_PLATFORM == AC_PLATFORM_WINDOWS
+#if C9_PLATFORM == C9_PLATFORM_WINDOWS
     signals.add(SIGBREAK);
 #endif
     signals.async_wait(std::bind(&SignalHandler,

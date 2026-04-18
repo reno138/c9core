@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,22 +24,22 @@
 namespace GameTime
 {
     // Server start time
-    AC_GAME_API Seconds GetStartTime();
+    C9_GAME_API Seconds GetStartTime();
 
     // Current server time (unix)
-    AC_GAME_API Seconds GetGameTime();
+    C9_GAME_API Seconds GetGameTime();
 
     // Milliseconds since server start
-    AC_GAME_API Milliseconds GetGameTimeMS();
+    C9_GAME_API Milliseconds GetGameTimeMS();
 
     /// Current chrono system_clock time point
-    AC_GAME_API SystemTimePoint GetSystemTime();
+    C9_GAME_API SystemTimePoint GetSystemTime();
 
     /// Current chrono steady_clock time point
-    AC_GAME_API TimePoint Now();
+    C9_GAME_API TimePoint Now();
 
     /// Uptime
-    AC_GAME_API Seconds GetUptime();
+    C9_GAME_API Seconds GetUptime();
 
     /// Uptime since a given time point
     inline Microseconds Elapsed(TimePoint start)

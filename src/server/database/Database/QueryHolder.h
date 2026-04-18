@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@
 #include "SQLOperation.h"
 #include <vector>
 
-class AC_DATABASE_API SQLQueryHolderBase
+class C9_DATABASE_API SQLQueryHolderBase
 {
 friend class SQLQueryHolderTask;
 
@@ -49,7 +49,7 @@ public:
     }
 };
 
-class AC_DATABASE_API SQLQueryHolderTask : public SQLOperation
+class C9_DATABASE_API SQLQueryHolderTask : public SQLOperation
 {
 public:
     explicit SQLQueryHolderTask(std::shared_ptr<SQLQueryHolderBase> holder)
@@ -65,7 +65,7 @@ private:
     QueryResultHolderPromise m_result;
 };
 
-class AC_DATABASE_API SQLQueryHolderCallback
+class C9_DATABASE_API SQLQueryHolderCallback
 {
 public:
     SQLQueryHolderCallback(std::shared_ptr<SQLQueryHolderBase>&& holder, QueryResultHolderFuture&& future)

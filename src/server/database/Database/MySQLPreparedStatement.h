@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,7 +30,7 @@ class PreparedStatementBase;
 //- Class of which the instances are unique per MySQLConnection
 //- access to these class objects is only done when a prepared statement task
 //- is executed.
-class AC_DATABASE_API MySQLPreparedStatement
+class C9_DATABASE_API MySQLPreparedStatement
 {
 friend class MySQLConnection;
 friend class PreparedStatementBase;

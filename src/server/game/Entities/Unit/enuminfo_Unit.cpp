@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@ namespace Acore::Impl::EnumUtilsImpl
 |* data for enum 'UnitFlags' in 'Unit.h' auto-generated *|
 \********************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<UnitFlags>::ToString(UnitFlags value)
+C9_API_EXPORT EnumText EnumUtils<UnitFlags>::ToString(UnitFlags value)
 {
     switch (value)
     {
@@ -69,10 +69,10 @@ AC_API_EXPORT EnumText EnumUtils<UnitFlags>::ToString(UnitFlags value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<UnitFlags>::Count() { return 33; }
+C9_API_EXPORT std::size_t EnumUtils<UnitFlags>::Count() { return 33; }
 
 template <>
-AC_API_EXPORT UnitFlags EnumUtils<UnitFlags>::FromIndex(std::size_t index)
+C9_API_EXPORT UnitFlags EnumUtils<UnitFlags>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -114,7 +114,7 @@ AC_API_EXPORT UnitFlags EnumUtils<UnitFlags>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<UnitFlags>::ToIndex(UnitFlags value)
+C9_API_EXPORT std::size_t EnumUtils<UnitFlags>::ToIndex(UnitFlags value)
 {
     switch (value)
     {
@@ -159,7 +159,7 @@ AC_API_EXPORT std::size_t EnumUtils<UnitFlags>::ToIndex(UnitFlags value)
 |* data for enum 'NPCFlags' in 'Unit.h' auto-generated *|
 \*******************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<NPCFlags>::ToString(NPCFlags value)
+C9_API_EXPORT EnumText EnumUtils<NPCFlags>::ToString(NPCFlags value)
 {
     switch (value)
     {
@@ -196,10 +196,10 @@ AC_API_EXPORT EnumText EnumUtils<NPCFlags>::ToString(NPCFlags value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<NPCFlags>::Count() { return 28; }
+C9_API_EXPORT std::size_t EnumUtils<NPCFlags>::Count() { return 28; }
 
 template <>
-AC_API_EXPORT NPCFlags EnumUtils<NPCFlags>::FromIndex(std::size_t index)
+C9_API_EXPORT NPCFlags EnumUtils<NPCFlags>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -236,7 +236,7 @@ AC_API_EXPORT NPCFlags EnumUtils<NPCFlags>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<NPCFlags>::ToIndex(NPCFlags value)
+C9_API_EXPORT std::size_t EnumUtils<NPCFlags>::ToIndex(NPCFlags value)
 {
     switch (value)
     {

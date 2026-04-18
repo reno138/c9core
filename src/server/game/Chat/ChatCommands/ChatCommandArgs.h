@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -292,35 +292,35 @@ namespace Acore::Impl::ChatCommands
 
     // AchievementEntry* from numeric id or link
     template <>
-    struct AC_GAME_API ArgInfo<AchievementEntry const*>
+    struct C9_GAME_API ArgInfo<AchievementEntry const*>
     {
         static ChatCommandResult TryConsume(AchievementEntry const*&, ChatHandler const*, std::string_view);
     };
 
     // GameTele* from string name or link
     template <>
-    struct AC_GAME_API ArgInfo<GameTele const*>
+    struct C9_GAME_API ArgInfo<GameTele const*>
     {
         static ChatCommandResult TryConsume(GameTele const*&, ChatHandler const*, std::string_view);
     };
 
     // ItemTemplate* from numeric id or link
     template <>
-    struct AC_GAME_API ArgInfo<ItemTemplate const*>
+    struct C9_GAME_API ArgInfo<ItemTemplate const*>
     {
         static ChatCommandResult TryConsume(ItemTemplate const*&, ChatHandler const*, std::string_view);
     };
 
     // SpellInfo const* from spell id or link
     template <>
-    struct AC_GAME_API ArgInfo<SpellInfo const*>
+    struct C9_GAME_API ArgInfo<SpellInfo const*>
     {
         static ChatCommandResult TryConsume(SpellInfo const*&, ChatHandler const*, std::string_view);
     };
 
     // Quest const* from quest id or link
     template <>
-    struct AC_GAME_API ArgInfo<Quest const*>
+    struct C9_GAME_API ArgInfo<Quest const*>
     {
         static ChatCommandResult TryConsume(Quest const*&, ChatHandler const*, std::string_view);
     };

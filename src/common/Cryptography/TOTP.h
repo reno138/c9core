@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +24,7 @@
 
 namespace Acore::Crypto
 {
-    struct AC_COMMON_API TOTP
+    struct C9_COMMON_API TOTP
     {
         static constexpr std::size_t RECOMMENDED_SECRET_LENGTH = 20;
         using Secret = std::vector<uint8>;

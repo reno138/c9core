@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,8 +15,8 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef AC_SMARTENUM_H
-#define AC_SMARTENUM_H
+#ifndef C9_SMARTENUM_H
+#define C9_SMARTENUM_H
 
 #include "IteratorPair.h"
 
@@ -129,4 +129,4 @@ public:
     static char const* ToDescription(Enum value) { return ToString(value).Description; }
 };
 
-#endif // AC_SMART_ENUM_H
+#endif // C9_SMART_ENUM_H

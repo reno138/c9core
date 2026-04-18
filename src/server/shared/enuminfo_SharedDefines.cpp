@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@ namespace Acore::Impl::EnumUtilsImpl
 |* data for enum 'Races' in 'SharedDefines.h' auto-generated *|
 \*************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<Races>::ToString(Races value)
+C9_API_EXPORT EnumText EnumUtils<Races>::ToString(Races value)
 {
     switch (value)
     {
@@ -47,10 +47,10 @@ AC_API_EXPORT EnumText EnumUtils<Races>::ToString(Races value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Races>::Count() { return 10; }
+C9_API_EXPORT std::size_t EnumUtils<Races>::Count() { return 10; }
 
 template <>
-AC_API_EXPORT Races EnumUtils<Races>::FromIndex(std::size_t index)
+C9_API_EXPORT Races EnumUtils<Races>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -69,7 +69,7 @@ AC_API_EXPORT Races EnumUtils<Races>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Races>::ToIndex(Races value)
+C9_API_EXPORT std::size_t EnumUtils<Races>::ToIndex(Races value)
 {
     switch (value)
     {
@@ -91,7 +91,7 @@ AC_API_EXPORT std::size_t EnumUtils<Races>::ToIndex(Races value)
 |* data for enum 'Classes' in 'SharedDefines.h' auto-generated *|
 \***************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<Classes>::ToString(Classes value)
+C9_API_EXPORT EnumText EnumUtils<Classes>::ToString(Classes value)
 {
     switch (value)
     {
@@ -110,10 +110,10 @@ AC_API_EXPORT EnumText EnumUtils<Classes>::ToString(Classes value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Classes>::Count() { return 10; }
+C9_API_EXPORT std::size_t EnumUtils<Classes>::Count() { return 10; }
 
 template <>
-AC_API_EXPORT Classes EnumUtils<Classes>::FromIndex(std::size_t index)
+C9_API_EXPORT Classes EnumUtils<Classes>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -132,7 +132,7 @@ AC_API_EXPORT Classes EnumUtils<Classes>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Classes>::ToIndex(Classes value)
+C9_API_EXPORT std::size_t EnumUtils<Classes>::ToIndex(Classes value)
 {
     switch (value)
     {
@@ -154,7 +154,7 @@ AC_API_EXPORT std::size_t EnumUtils<Classes>::ToIndex(Classes value)
 |* data for enum 'SpellAttr0' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr0>::ToString(SpellAttr0 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr0>::ToString(SpellAttr0 value)
 {
     switch (value)
     {
@@ -195,10 +195,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr0>::ToString(SpellAttr0 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr0>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr0>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr0 EnumUtils<SpellAttr0>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr0 EnumUtils<SpellAttr0>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -239,7 +239,7 @@ AC_API_EXPORT SpellAttr0 EnumUtils<SpellAttr0>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr0>::ToIndex(SpellAttr0 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr0>::ToIndex(SpellAttr0 value)
 {
     switch (value)
     {
@@ -283,7 +283,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr0>::ToIndex(SpellAttr0 value)
 |* data for enum 'SpellAttr1' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr1>::ToString(SpellAttr1 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr1>::ToString(SpellAttr1 value)
 {
     switch (value)
     {
@@ -324,10 +324,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr1>::ToString(SpellAttr1 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr1>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr1>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr1 EnumUtils<SpellAttr1>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr1 EnumUtils<SpellAttr1>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -368,7 +368,7 @@ AC_API_EXPORT SpellAttr1 EnumUtils<SpellAttr1>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr1>::ToIndex(SpellAttr1 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr1>::ToIndex(SpellAttr1 value)
 {
     switch (value)
     {
@@ -412,7 +412,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr1>::ToIndex(SpellAttr1 value)
 |* data for enum 'SpellAttr2' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr2>::ToString(SpellAttr2 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr2>::ToString(SpellAttr2 value)
 {
     switch (value)
     {
@@ -453,10 +453,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr2>::ToString(SpellAttr2 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr2>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr2>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr2 EnumUtils<SpellAttr2>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr2 EnumUtils<SpellAttr2>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -497,7 +497,7 @@ AC_API_EXPORT SpellAttr2 EnumUtils<SpellAttr2>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr2>::ToIndex(SpellAttr2 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr2>::ToIndex(SpellAttr2 value)
 {
     switch (value)
     {
@@ -541,7 +541,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr2>::ToIndex(SpellAttr2 value)
 |* data for enum 'SpellAttr3' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr3>::ToString(SpellAttr3 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr3>::ToString(SpellAttr3 value)
 {
     switch (value)
     {
@@ -582,10 +582,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr3>::ToString(SpellAttr3 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr3>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr3>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr3 EnumUtils<SpellAttr3>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr3 EnumUtils<SpellAttr3>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -626,7 +626,7 @@ AC_API_EXPORT SpellAttr3 EnumUtils<SpellAttr3>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr3>::ToIndex(SpellAttr3 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr3>::ToIndex(SpellAttr3 value)
 {
     switch (value)
     {
@@ -670,7 +670,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr3>::ToIndex(SpellAttr3 value)
 |* data for enum 'SpellAttr4' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr4>::ToString(SpellAttr4 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr4>::ToString(SpellAttr4 value)
 {
     switch (value)
     {
@@ -711,10 +711,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr4>::ToString(SpellAttr4 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr4>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr4>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr4 EnumUtils<SpellAttr4>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr4 EnumUtils<SpellAttr4>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -755,7 +755,7 @@ AC_API_EXPORT SpellAttr4 EnumUtils<SpellAttr4>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr4>::ToIndex(SpellAttr4 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr4>::ToIndex(SpellAttr4 value)
 {
     switch (value)
     {
@@ -799,7 +799,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr4>::ToIndex(SpellAttr4 value)
 |* data for enum 'SpellAttr5' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr5>::ToString(SpellAttr5 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr5>::ToString(SpellAttr5 value)
 {
     switch (value)
     {
@@ -840,10 +840,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr5>::ToString(SpellAttr5 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr5>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr5>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr5 EnumUtils<SpellAttr5>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr5 EnumUtils<SpellAttr5>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -884,7 +884,7 @@ AC_API_EXPORT SpellAttr5 EnumUtils<SpellAttr5>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr5>::ToIndex(SpellAttr5 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr5>::ToIndex(SpellAttr5 value)
 {
     switch (value)
     {
@@ -928,7 +928,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr5>::ToIndex(SpellAttr5 value)
 |* data for enum 'SpellAttr6' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr6>::ToString(SpellAttr6 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr6>::ToString(SpellAttr6 value)
 {
     switch (value)
     {
@@ -969,10 +969,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr6>::ToString(SpellAttr6 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr6>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr6>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr6 EnumUtils<SpellAttr6>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr6 EnumUtils<SpellAttr6>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -1013,7 +1013,7 @@ AC_API_EXPORT SpellAttr6 EnumUtils<SpellAttr6>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr6>::ToIndex(SpellAttr6 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr6>::ToIndex(SpellAttr6 value)
 {
     switch (value)
     {
@@ -1057,7 +1057,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr6>::ToIndex(SpellAttr6 value)
 |* data for enum 'SpellAttr7' in 'SharedDefines.h' auto-generated *|
 \******************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellAttr7>::ToString(SpellAttr7 value)
+C9_API_EXPORT EnumText EnumUtils<SpellAttr7>::ToString(SpellAttr7 value)
 {
     switch (value)
     {
@@ -1098,10 +1098,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellAttr7>::ToString(SpellAttr7 value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr7>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr7>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT SpellAttr7 EnumUtils<SpellAttr7>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellAttr7 EnumUtils<SpellAttr7>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -1142,7 +1142,7 @@ AC_API_EXPORT SpellAttr7 EnumUtils<SpellAttr7>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellAttr7>::ToIndex(SpellAttr7 value)
+C9_API_EXPORT std::size_t EnumUtils<SpellAttr7>::ToIndex(SpellAttr7 value)
 {
     switch (value)
     {
@@ -1186,7 +1186,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellAttr7>::ToIndex(SpellAttr7 value)
 |* data for enum 'SpellCastResult' in 'SharedDefines.h' auto-generated *|
 \***********************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<SpellCastResult>::ToString(SpellCastResult value)
+C9_API_EXPORT EnumText EnumUtils<SpellCastResult>::ToString(SpellCastResult value)
 {
     switch (value)
     {
@@ -1384,10 +1384,10 @@ AC_API_EXPORT EnumText EnumUtils<SpellCastResult>::ToString(SpellCastResult valu
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellCastResult>::Count() { return 189; }
+C9_API_EXPORT std::size_t EnumUtils<SpellCastResult>::Count() { return 189; }
 
 template <>
-AC_API_EXPORT SpellCastResult EnumUtils<SpellCastResult>::FromIndex(std::size_t index)
+C9_API_EXPORT SpellCastResult EnumUtils<SpellCastResult>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -1585,7 +1585,7 @@ AC_API_EXPORT SpellCastResult EnumUtils<SpellCastResult>::FromIndex(std::size_t 
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<SpellCastResult>::ToIndex(SpellCastResult value)
+C9_API_EXPORT std::size_t EnumUtils<SpellCastResult>::ToIndex(SpellCastResult value)
 {
     switch (value)
     {
@@ -1786,7 +1786,7 @@ AC_API_EXPORT std::size_t EnumUtils<SpellCastResult>::ToIndex(SpellCastResult va
 |* data for enum 'AuraStateType' in 'SharedDefines.h' auto-generated *|
 \*********************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<AuraStateType>::ToString(AuraStateType value)
+C9_API_EXPORT EnumText EnumUtils<AuraStateType>::ToString(AuraStateType value)
 {
     switch (value)
     {
@@ -1813,10 +1813,10 @@ AC_API_EXPORT EnumText EnumUtils<AuraStateType>::ToString(AuraStateType value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<AuraStateType>::Count() { return 18; }
+C9_API_EXPORT std::size_t EnumUtils<AuraStateType>::Count() { return 18; }
 
 template <>
-AC_API_EXPORT AuraStateType EnumUtils<AuraStateType>::FromIndex(std::size_t index)
+C9_API_EXPORT AuraStateType EnumUtils<AuraStateType>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -1843,7 +1843,7 @@ AC_API_EXPORT AuraStateType EnumUtils<AuraStateType>::FromIndex(std::size_t inde
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<AuraStateType>::ToIndex(AuraStateType value)
+C9_API_EXPORT std::size_t EnumUtils<AuraStateType>::ToIndex(AuraStateType value)
 {
     switch (value)
     {
@@ -1873,7 +1873,7 @@ AC_API_EXPORT std::size_t EnumUtils<AuraStateType>::ToIndex(AuraStateType value)
 |* data for enum 'Mechanics' in 'SharedDefines.h' auto-generated *|
 \*****************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<Mechanics>::ToString(Mechanics value)
+C9_API_EXPORT EnumText EnumUtils<Mechanics>::ToString(Mechanics value)
 {
     switch (value)
     {
@@ -1914,10 +1914,10 @@ AC_API_EXPORT EnumText EnumUtils<Mechanics>::ToString(Mechanics value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Mechanics>::Count() { return 32; }
+C9_API_EXPORT std::size_t EnumUtils<Mechanics>::Count() { return 32; }
 
 template <>
-AC_API_EXPORT Mechanics EnumUtils<Mechanics>::FromIndex(std::size_t index)
+C9_API_EXPORT Mechanics EnumUtils<Mechanics>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -1958,7 +1958,7 @@ AC_API_EXPORT Mechanics EnumUtils<Mechanics>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Mechanics>::ToIndex(Mechanics value)
+C9_API_EXPORT std::size_t EnumUtils<Mechanics>::ToIndex(Mechanics value)
 {
     switch (value)
     {
@@ -2002,7 +2002,7 @@ AC_API_EXPORT std::size_t EnumUtils<Mechanics>::ToIndex(Mechanics value)
 |* data for enum 'Emote' in 'SharedDefines.h' auto-generated *|
 \*************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<Emote>::ToString(Emote value)
+C9_API_EXPORT EnumText EnumUtils<Emote>::ToString(Emote value)
 {
     switch (value)
     {
@@ -2185,10 +2185,10 @@ AC_API_EXPORT EnumText EnumUtils<Emote>::ToString(Emote value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Emote>::Count() { return 174; }
+C9_API_EXPORT std::size_t EnumUtils<Emote>::Count() { return 174; }
 
 template <>
-AC_API_EXPORT Emote EnumUtils<Emote>::FromIndex(std::size_t index)
+C9_API_EXPORT Emote EnumUtils<Emote>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -2371,7 +2371,7 @@ AC_API_EXPORT Emote EnumUtils<Emote>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<Emote>::ToIndex(Emote value)
+C9_API_EXPORT std::size_t EnumUtils<Emote>::ToIndex(Emote value)
 {
     switch (value)
     {
@@ -2557,7 +2557,7 @@ AC_API_EXPORT std::size_t EnumUtils<Emote>::ToIndex(Emote value)
 |* data for enum 'ChatMsg' in 'SharedDefines.h' auto-generated *|
 \***************************************************************/
 template <>
-AC_API_EXPORT EnumText EnumUtils<ChatMsg>::ToString(ChatMsg value)
+C9_API_EXPORT EnumText EnumUtils<ChatMsg>::ToString(ChatMsg value)
 {
     switch (value)
     {
@@ -2619,10 +2619,10 @@ AC_API_EXPORT EnumText EnumUtils<ChatMsg>::ToString(ChatMsg value)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<ChatMsg>::Count() { return 53; }
+C9_API_EXPORT std::size_t EnumUtils<ChatMsg>::Count() { return 53; }
 
 template <>
-AC_API_EXPORT ChatMsg EnumUtils<ChatMsg>::FromIndex(std::size_t index)
+C9_API_EXPORT ChatMsg EnumUtils<ChatMsg>::FromIndex(std::size_t index)
 {
     switch (index)
     {
@@ -2684,7 +2684,7 @@ AC_API_EXPORT ChatMsg EnumUtils<ChatMsg>::FromIndex(std::size_t index)
 }
 
 template <>
-AC_API_EXPORT std::size_t EnumUtils<ChatMsg>::ToIndex(ChatMsg value)
+C9_API_EXPORT std::size_t EnumUtils<ChatMsg>::ToIndex(ChatMsg value)
 {
     switch (value)
     {

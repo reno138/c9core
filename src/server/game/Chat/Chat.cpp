@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -146,7 +146,7 @@ void ChatHandler::SendWorldTextOptional(std::string_view str, uint32 flag)
 
     Player* player = m_session->GetPlayer();
     if (sWorld->getBoolConfig(CONFIG_PLAYER_SETTINGS_ENABLED))
-        if (player->GetPlayerSetting(AzerothcorePSSource, SETTING_ANNOUNCER_FLAGS).HasFlag(flag))
+        if (player->GetPlayerSetting(C9PSSource, SETTING_ANNOUNCER_FLAGS).HasFlag(flag))
             return;
 
     for (std::string_view line : lines)

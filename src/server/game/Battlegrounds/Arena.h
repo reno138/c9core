@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,7 +38,7 @@ enum ArenaSpellIds
     SPELL_LAST_MAN_STANDING                 = 26549  // Achievement Credit
 };
 
-class AC_GAME_API Arena : public Battleground
+class C9_GAME_API Arena : public Battleground
 {
 protected:
     Arena();

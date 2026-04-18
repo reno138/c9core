@@ -1,5 +1,5 @@
 /*
- * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
+ * This file is part of the c9core Project. See AUTHORS file for Copyright information
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@
 #include <vector>
 
 /*! Transactions, high level class. */
-class AC_DATABASE_API TransactionBase
+class C9_DATABASE_API TransactionBase
 {
     friend class TransactionTask;
     friend class MySQLConnection;
@@ -71,7 +71,7 @@ public:
 };
 
 /*! Low level class*/
-class AC_DATABASE_API TransactionTask : public SQLOperation
+class C9_DATABASE_API TransactionTask : public SQLOperation
 {
     template <class T>
     friend class DatabaseWorkerPool;
@@ -92,7 +92,7 @@ protected:
     static std::mutex _deadlockLock;
 };
 
-class AC_DATABASE_API TransactionWithResultTask : public TransactionTask
+class C9_DATABASE_API TransactionWithResultTask : public TransactionTask
 {
 public:
     TransactionWithResultTask(std::shared_ptr<TransactionBase> trans) : TransactionTask(trans) { }
@@ -105,7 +105,7 @@ protected:
     TransactionPromise m_result;
 };
 
-class AC_DATABASE_API TransactionCallback
+class C9_DATABASE_API TransactionCallback
 {
 public:
     TransactionCallback(TransactionFuture&& future) : m_future(std::move(future)) { }
