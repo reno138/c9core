@@ -152,7 +152,7 @@ enum ConditionSourceType
     CONDITION_SOURCE_TYPE_GRAVEYARD                      = 27, // don't use on 3.3.5a
     CONDITION_SOURCE_TYPE_PLAYER_LOOT_TEMPLATE           = 28,
     CONDITION_SOURCE_TYPE_CREATURE_RESPAWN               = 29,
-    CONDITION_SOURCE_TYPE_OBJECT_VISIBILITY              = 30,
+    CONDITION_SOURCE_TYPE_CREATURE_VISIBILITY              = 30,
     CONDITION_SOURCE_TYPE_MAX                            = 31 // placeholder
 };
 
@@ -198,7 +198,7 @@ struct Condition
     ConditionSourceType     SourceType;        //SourceTypeOrReferenceId
     uint32                  SourceGroup;
     int32                   SourceEntry;
-    uint32                  SourceId;          // Used in CONDITION_SOURCE_TYPE_SMART_EVENT and CONDITION_SOURCE_TYPE_OBJECT_VISIBILITY
+    uint32                  SourceId;          // Used in CONDITION_SOURCE_TYPE_SMART_EVENT and CONDITION_SOURCE_TYPE_CREATURE_VISIBILITY
     uint32                  ElseGroup;
     ConditionTypes          ConditionType;     //ConditionTypeOrReference
     uint32                  ConditionValue1;
