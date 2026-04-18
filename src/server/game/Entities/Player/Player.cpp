@@ -1607,22 +1607,21 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 // `transports.guid`, so the same ObjectGuid resolves locally
                 // on the destination.
 
-                // CRITICAL ORDER: set the teleport-far semaphore BEFORE any DB
-                // write or SaveToDB call.  Player::SaveToDB has an early-return
-                // at PlayerStorage.cpp:7140 if IsBeingTeleportedFar() — it
-                // reschedules the save for after the teleport completes.
-                // Without this, any SaveToDB (explicit or periodic) that runs
-                // between DirectExecute and here would queue an async UPDATE
-                // with the player's CURRENT (source) position, racing against
-                // DirectExecute and potentially overwriting the destination row
-                // before the destination node runs LoadFromDB.  The symptom is
-                // a redirect loop: dest reads map=source, bounces client back.
-                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
-
-                // Write destination position+map synchronously via DirectExecute.
-                // CommitTransaction is async — the dest node may LoadFromDB before it commits.
-                // DirectExecute guarantees the row is updated before we send the redirect.
+                // Full save before redirect: flush all in-memory state (reputation,
+                // money, XP, quests, skills, glyphs, achievements, etc.) to DB so
+                // the destination node's LoadFromDB gets a complete picture.
+                //
+                // We must do this BEFORE SetSemaphoreTeleportFar because SaveToDB
+                // early-returns when IsBeingTeleportedFar() is true.
+                //
+                // The destination position is appended to the same transaction and
+                // overwrites the source position that _SaveCharacter just wrote —
+                // both land atomically via DirectCommitTransaction so the dest node
+                // always sees the correct spawn coordinates.
                 {
+                    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+                    SaveToDB(trans, false, false);
+
                     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHARACTER_POSITION);
                     stmt->SetData(0, teleportStore_dest.GetPositionX());
                     stmt->SetData(1, teleportStore_dest.GetPositionY());
@@ -1631,12 +1630,14 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     stmt->SetData(4, (uint16)mapid);
                     stmt->SetData(5, (uint32)0);  // zone — resolved on load
                     stmt->SetData(6, GetGUID().GetCounter());
-                    CharacterDatabase.DirectExecute(stmt);
+                    trans->Append(stmt);
+
+                    CharacterDatabase.DirectCommitTransaction(trans);
                 }
-                // No SaveToDB here.  With the teleport-far semaphore set above,
-                // SaveToDB would early-return anyway (reschedules via
-                // DELAYED_SAVE_PLAYER, which never fires because the session
-                // dies on this node).  Full player state is carried via NATS.
+
+                // Semaphore goes up after the commit: prevents any periodic save
+                // on this node from racing and overwriting the destination position.
+                SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
 
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
                 if (destNode)

@@ -1741,9 +1741,12 @@ InstantLogout = 1
 #
 #    PlayerSaveInterval
 #        Description: Time (in milliseconds) for player save interval.
-#        Default:     900000 - (15 min)
+#                     On cluster builds a full synchronous save is forced before any
+#                     cross-node redirect, so this interval only covers the data-loss
+#                     window for players who disconnect without a redirect.
+#        Default:     300000 - (5 min)
 
-PlayerSaveInterval = 900000
+PlayerSaveInterval = 300000
 
 #
 #    PlayerSave.Stats.MinLevel
