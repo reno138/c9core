@@ -439,6 +439,7 @@ private:
     uint32 _lastMgmtPlayersMs{ 0 };      ///< getMSTime() at last cluster.mgmt.players publish
     uint32 _lastNatsRetryMs{ 0 };        ///< getMSTime() at last NATS reconnect attempt
     uint32 _lastAnnounceRetryMs{ 0 };    ///< getMSTime() at last cluster.announce retry
+    uint32 _lastPeriodicAnnounceMs{ 0 }; ///< getMSTime() at last 60s periodic cluster.announce
 
     // ── Startup time (for uptime reporting) ───────────────────────────────────
     uint32 _startupTimeMs{ 0 };        ///< getMSTime() at Initialize()

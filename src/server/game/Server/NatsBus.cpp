@@ -998,6 +998,15 @@ void NatsBus::Update()
                  "NatsBus: Re-announcing to cluster (awaiting peer acknowledgement)");
     }
 
+    // Periodic announce so late-joining nodes always learn our routing table
+    // within 60 seconds, regardless of the initial registration handshake.
+    constexpr uint32 PERIODIC_ANNOUNCE_INTERVAL_MS = 60 * 1000;
+    if (_lastPeriodicAnnounceMs == 0 || now - _lastPeriodicAnnounceMs >= PERIODIC_ANNOUNCE_INTERVAL_MS)
+    {
+        _lastPeriodicAnnounceMs = now;
+        PublishAnnounce();
+    }
+
     if (now - _lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS)
     {
         SendNodeStatus();
