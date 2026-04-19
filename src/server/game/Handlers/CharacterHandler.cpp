@@ -826,15 +826,6 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         return;
     }
 
-    // Cluster: immediately broadcast this player's full state to all nodes.
-    // Every node should know about every online player at all times.
-    // This must happen before redirect checks so the dest node has data if we redirect.
-    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
-    {
-        sNatsBus.BroadcastPlayerTransferFull(pCurrChar);
-        LOG_INFO("server.worldserver", "Cluster: Broadcast full state for {} to all nodes immediately after LoadFromDB", pCurrChar->GetName());
-    }
-
     // Cluster: apply shared cache position FIRST so zone checks use the real
     // position (not stale DB). During redirect, the player's DB position might
     // Cluster: if the player's map is owned by a different node,
@@ -1023,6 +1014,15 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         }
     }
 
+    // Cluster: broadcast full player state to all nodes now that Block 1 has
+    // applied transport reattach and final position. The redirect path already
+    // uses SendPlayerTransferForRedirect for the dest node, so this only fires
+    // for players that are actually entering the world on this node.
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+    {
+        sNatsBus.BroadcastPlayerTransferFull(pCurrChar);
+        LOG_INFO("server.worldserver", "Cluster: Broadcast full state for {} to all nodes after login", pCurrChar->GetName());
+    }
 
     // Cluster: activate player from shared cache if this is a transfer login.
     // The cache has real-time state from the source node — fresher than DB.

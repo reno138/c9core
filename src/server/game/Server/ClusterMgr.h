@@ -283,6 +283,10 @@ public:
     void StorePendingRedirect(uint32 accountId, PendingRedirect&& redirect);
     std::optional<PendingRedirect> TakePendingRedirect(uint32 accountId);
 
+    /// Erase pending transfers and redirects older than 30 seconds.
+    /// Call from the World 5s timer (World::Update) via getMSTime().
+    void PurgeStaleEntries(uint32 nowMs);
+
     /// NAT-aware address resolution for SMSG_REDIRECT_CLIENT.
     /// Returns the correct (ip, port) pair based on whether the client is local or external.
     std::pair<std::string, uint16> GetRedirectAddressForNode(uint8 destNodeId, std::string const& clientIp) const;

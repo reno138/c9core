@@ -165,6 +165,9 @@ struct PlayerTransferData
     // timestamp (server game‑time seconds when snapshot was taken)
     uint64 timestamp    = 0;
 
+    // wall-clock insertion time for TTL purge (getMSTime() ms)
+    uint32 insertedAtMs = 0;
+
     // --- Extended fields (v2) ---
     uint8  activeSpec   = 0;
     std::vector<TransferEquipItem>    equipment;

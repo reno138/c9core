@@ -1145,6 +1145,9 @@ void World::Update(uint32 diff)
 
         // Cluster: send 10s heartbeat + 5min refresh to proxy when due.
         sNatsBus.Update();
+
+        // Cluster: evict pending transfers/redirects that were never consumed.
+        sClusterMgr.PurgeStaleEntries(getMSTime());
     }
 
     ///- Update Who List Cache

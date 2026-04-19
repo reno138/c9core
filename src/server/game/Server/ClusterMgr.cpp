@@ -700,6 +700,7 @@ bool ClusterMgr::IsPlayerOwnedLocally(uint64 guid) const
 void ClusterMgr::StorePendingTransfer(uint64 guid, PlayerTransferData&& data)
 {
     std::lock_guard<std::mutex> lock(_transferMutex);
+    data.insertedAtMs = getMSTime();
     LOG_INFO("server.worldserver", "ClusterMgr: Stored pending transfer for GUID {:016X} (map {})",
              guid, data.mapId);
     _pendingTransfers[guid] = std::move(data);
@@ -730,6 +731,7 @@ std::optional<uint32> ClusterMgr::PeekPendingTransferMapId(uint64 guid)
 void ClusterMgr::StorePendingRedirect(uint32 accountId, PendingRedirect&& redirect)
 {
     std::lock_guard<std::mutex> lock(_redirectMutex);
+    redirect.timestampMs = getMSTime();
     _pendingRedirects[accountId] = std::move(redirect);
     LOG_INFO("server.worldserver", "ClusterMgr: Stored redirect token for account {} (GUID {:016X} from node {})",
              accountId, redirect.playerGuid, redirect.sourceNodeId);
@@ -744,6 +746,41 @@ std::optional<ClusterMgr::PendingRedirect> ClusterMgr::TakePendingRedirect(uint3
     PendingRedirect data = std::move(it->second);
     _pendingRedirects.erase(it);
     return data;
+}
+
+void ClusterMgr::PurgeStaleEntries(uint32 nowMs)
+{
+    constexpr uint32 TTL_MS = 30000;
+
+    {
+        std::lock_guard<std::mutex> lock(_transferMutex);
+        for (auto it = _pendingTransfers.begin(); it != _pendingTransfers.end(); )
+        {
+            if (it->second.insertedAtMs != 0 && (nowMs - it->second.insertedAtMs) > TTL_MS)
+            {
+                LOG_WARN("server.worldserver", "ClusterMgr: Purging stale transfer for GUID {:016X} (age {}ms)",
+                         it->first, nowMs - it->second.insertedAtMs);
+                it = _pendingTransfers.erase(it);
+            }
+            else
+                ++it;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(_redirectMutex);
+        for (auto it = _pendingRedirects.begin(); it != _pendingRedirects.end(); )
+        {
+            if (it->second.timestampMs != 0 && (nowMs - it->second.timestampMs) > TTL_MS)
+            {
+                LOG_WARN("server.worldserver", "ClusterMgr: Purging stale redirect token for account {} (age {}ms)",
+                         it->first, nowMs - it->second.timestampMs);
+                it = _pendingRedirects.erase(it);
+            }
+            else
+                ++it;
+        }
+    }
 }
 
 std::pair<std::string, uint16> ClusterMgr::GetRedirectAddressForNode(uint8 destNodeId, std::string const& clientIp) const
