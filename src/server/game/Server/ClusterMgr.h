@@ -320,7 +320,7 @@ private:
     mutable std::mutex _localMapsMutex;
     std::unordered_set<uint32> _localMaps; ///< non-empty explicit map list
     std::unordered_set<uint32> _localZones;
-    std::unordered_map<uint32, uint8> _zoneToNode; ///< zoneId -> nodeId routing table ///< non-empty explicit zone list (zone-level sub-map routing)
+    std::unordered_map<uint32, uint8> _zoneToNode; ///< zoneId -> nodeId routing table (zone-level sub-map routing)
     bool _instanceServerMode{false}; ///< true = handle all instanceable maps
     bool _allMapsMode{false};        ///< true = handle all maps (no rerouting)
 

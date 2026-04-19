@@ -1202,10 +1202,16 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     // transport CREATE_OBJECT before the player's own CREATE_OBJECT2 when GetTransport()
     // is non-null.  No manual pre-send needed here — that caused a triple-send which
     // destroyed the transport sound emitter on the client.
+    // On a NATS transfer arrival the player enters via the login path
+    // (PlayerLoading=true). UpdateLocalChannels skips when PlayerLoading &&
+    // !IsBeingTeleportedFar — set the semaphore so it treats this as a teleport
+    // and sends the correct zone channel joins to the client.
+    if (hadNatsTransfer)
+        pCurrChar->SetSemaphoreTeleportFar(1);
+
     pCurrChar->SendInitialPacketsAfterAddToMap();
 
-    // Cross-node teleport arrival: clear SemaphoreTeleportFar that the source node set.
-    // The player is now in the world on this node.
+    // Clear the semaphore now that SendInitialPacketsAfterAddToMap has run.
     if (pCurrChar->IsBeingTeleportedFar())
         pCurrChar->SetSemaphoreTeleportFar(0);
 

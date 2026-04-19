@@ -516,10 +516,12 @@ void NatsBus::Dispatch(uint8 msgType, std::vector<uint8> payload)
         }
         case MSG_CLUSTER_CHAT:
         {
-            if (payload.size() < 2) break;
+            if (payload.size() < 3) break;
             uint16 pl; std::memcpy(&pl, payload.data(), 2);
             if (payload.size() < static_cast<std::size_t>(2 + pl)) break;
             std::vector<uint8> inner(payload.begin() + 2, payload.begin() + 2 + pl);
+            // inner[0] is srcNodeId — skip if this is our own broadcast (already delivered locally)
+            if (!inner.empty() && inner[0] == _nodeId) break;
             HandleIncomingChat(inner);
             break;
         }
@@ -1275,6 +1277,7 @@ void NatsBus::HandleNodeDead(uint8 deadNodeId)
              deadNodeId, orphanedMaps.size());
 
     // Elect a new BG coordinator if the dead node held that role.
+    // Lowest alive non-instance nodeId wins — deterministic, no consensus needed.
     if (deadNodeId == _bgCoordNodeId)
     {
         uint8 newCoord = sClusterMgr.GetLowestAliveNonInstanceNodeId();
@@ -2490,9 +2493,10 @@ void NatsBus::SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const&
     if (!_connected || _nodeId == 0)
         return;
 
-    // Payload layout: uint8 chatMsgType | uint32 zoneId | uint16 innerLen | uint8 inner[innerLen]
+    // Payload layout: uint8 srcNodeId | uint8 chatMsgType | uint32 zoneId | uint16 innerLen | uint8 inner[innerLen]
+    // srcNodeId lets receiving nodes skip delivery for their own broadcast (prevents double-say).
     uint16 innerLen    = static_cast<uint16>(pkt.size());
-    uint16 payloadLen  = static_cast<uint16>(1 + 4 + 2 + innerLen);
+    uint16 payloadLen  = static_cast<uint16>(1 + 1 + 4 + 2 + innerLen);
 
     std::vector<uint8> msg;
     msg.reserve(3 + payloadLen);
@@ -2503,6 +2507,7 @@ void NatsBus::SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const&
 
     pushU8(MSG_CLUSTER_CHAT);
     pushU16(payloadLen);
+    pushU8(_nodeId);
     pushU8(chatMsgType);
     pushU32(zoneId);
     pushU16(innerLen);
@@ -2516,19 +2521,20 @@ void NatsBus::SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const&
 
 void NatsBus::HandleIncomingChat(std::vector<uint8> const& payload)
 {
-    // Payload layout: uint8 chatMsgType | uint32 zoneId | uint16 innerLen | uint8 inner[innerLen]
-    static constexpr std::size_t HEADER_SIZE = 7; // 1 + 4 + 2
+    // Payload layout: uint8 srcNodeId | uint8 chatMsgType | uint32 zoneId | uint16 innerLen | uint8 inner[innerLen]
+    // srcNodeId already filtered by caller — only foreign nodes reach here.
+    static constexpr std::size_t HEADER_SIZE = 8; // 1 + 1 + 4 + 2
     if (payload.size() < HEADER_SIZE)
     {
         LOG_WARN("server.worldserver", "NatsBus: HandleIncomingChat — payload too small ({})", payload.size());
         return;
     }
 
-    uint8  chatMsgType = payload[0];
+    uint8  chatMsgType = payload[1];
     uint32 zoneId      = 0;
     uint16 innerLen    = 0;
-    std::memcpy(&zoneId,   payload.data() + 1, 4);
-    std::memcpy(&innerLen, payload.data() + 5, 2);
+    std::memcpy(&zoneId,   payload.data() + 2, 4);
+    std::memcpy(&innerLen, payload.data() + 6, 2);
 
     if (payload.size() < HEADER_SIZE + innerLen)
     {
@@ -2540,7 +2546,6 @@ void NatsBus::HandleIncomingChat(std::vector<uint8> const& payload)
     if (innerLen == 0)
         return;
 
-    // Copy inner packet bytes into a vector for capture.
     std::vector<uint8> innerData(payload.begin() + HEADER_SIZE, payload.begin() + HEADER_SIZE + innerLen);
 
     LOG_DEBUG("server.worldserver", "NatsBus: IncomingChat msgType={} zone={} innerLen={}",
