@@ -567,8 +567,11 @@ void TransportMgr::PreloadGridsFromQuery(std::string const& query, uint32& count
                 {
                     if (Map* map = sMapMgr->CreateBaseMap(mapId))
                     {
-                        map->LoadGrid(x, y);
-                        ++count;
+                        if (!map->IsGhostMap())
+                        {
+                            map->LoadGrid(x, y);
+                            ++count;
+                        }
                     }
                 }
             }

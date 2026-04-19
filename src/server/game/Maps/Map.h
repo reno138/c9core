@@ -305,6 +305,11 @@ public:
     [[nodiscard]] bool IsBattlegroundOrArena() const { return i_mapEntry && i_mapEntry->IsBattlegroundOrArena(); }
     [[nodiscard]] bool IsWorldMap() const { return i_mapEntry && i_mapEntry->IsWorldMap(); }
 
+    // Cluster: ghost maps exist only for cross-map transport routing.
+    // They never spawn creatures or game objects.
+    [[nodiscard]] bool IsGhostMap() const { return _ghostMap; }
+    void SetGhostMap() { _ghostMap = true; }
+
     bool GetEntrancePos(int32& mapid, float& x, float& y)
     {
         if (!i_mapEntry)
@@ -625,6 +630,7 @@ private:
 
     std::bitset<TOTAL_NUMBER_OF_CELLS_PER_MAP * TOTAL_NUMBER_OF_CELLS_PER_MAP> marked_cells;
 
+    bool _ghostMap{ false };  ///< Cluster: non-local map — no creature/GO spawns
     bool i_scriptLock;
     std::unordered_set<WorldObject*> i_objectsToRemove;
 

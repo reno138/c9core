@@ -188,6 +188,10 @@ bool Map::EnsureGridLoaded(Cell const& cell)
 {
     EnsureGridCreated(GridCoord(cell.GridX(), cell.GridY()));
 
+    // Ghost maps exist only for transport routing — suppress creature/GO spawning.
+    if (_ghostMap)
+        return false;
+
     if (_mapGridManager.LoadGrid(cell.GridX(), cell.GridY()))
     {
         Balance();
