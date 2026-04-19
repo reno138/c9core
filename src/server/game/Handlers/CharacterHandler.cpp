@@ -988,9 +988,9 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                              foundTransport
                                  ? fmt::format("found but on map={} not map={}", foundTransport->GetMapId(), transfer->mapId)
                                  : "not found on this node");
-                    // Transport not yet on this map (timing race): queue deferred reattach.
-                    // Player::Update will retry every 200ms for up to 2.5s.
-                    if (!foundTransport)
+                    // Transport not on this map yet (not found, or found but mid-teleport
+                    // on wrong map): queue deferred reattach. Player::Update retries
+                    // every 200ms for up to 2.5s, waiting for the transport to arrive.
                     {
                         WorldSession::PendingTransportAttach pa;
                         pa.entry   = transfer->transport.entry;
