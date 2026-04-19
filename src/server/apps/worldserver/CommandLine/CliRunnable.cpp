@@ -77,10 +77,10 @@ namespace Acore::Impl::Readline
 void utf8print(void* /*arg*/, std::string_view str)
 {
 #if C9_PLATFORM == C9_PLATFORM_WINDOWS
-    fmt::print(str);
+    fmt::print("{}", str);
 #else
 {
-    fmt::print(str);
+    fmt::print("{}", str);
     fflush(stdout);
 }
 #endif
