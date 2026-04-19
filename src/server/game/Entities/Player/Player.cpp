@@ -1647,7 +1647,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
                 if (destNode)
                 {
-                    static std::mt19937 rng(std::random_device{}());
+                    thread_local static std::mt19937 rng(std::random_device{}());
                     uint32 token = rng();
                     sNatsBus.PublishRedirectToken(
                         GetSession()->GetAccountId(),
@@ -1688,31 +1688,33 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     // [this+0x2E38] and drops non-main.  The DESTINATION node sends
                     // only SMSG_FORCE_SEND_QUEUED_PACKETS (0x511) to complete the switch.
                     ClientRedirect::SuspendClient(GetSession());
+
+                    // For group/raid cross-node entry: relay reroute to remote member nodes
+                    // so the whole group lands on the same instance node together.
+                    // Must be inside the destNode block — no point relaying if we couldn't
+                    // resolve a destination ourselves.
+                    if (Group* grp = GetGroup())
+                    {
+                        uint64 myGuid  = GetGUID().GetRawValue();
+                        uint64 grpGuid = grp->GetGUID().GetRawValue();
+                        for (auto const& member : sClusterMgr.GetGroupRemoteMembers(grpGuid))
+                        {
+                            if (member.guid == myGuid)
+                                continue;
+                            std::vector<uint8> payload(12);
+                            std::memcpy(payload.data(),     &member.guid, 8);
+                            std::memcpy(payload.data() + 8, &mapid,       4);
+                            sNatsBus.RelayToNode(member.nodeId,
+                                                     NatsBus::GROUP_INNER_REROUTE_TO_MAP,
+                                                     payload);
+                        }
+                    }
                 }
                 else
                 {
                     LOG_WARN("server.worldserver",
                              "Player::TeleportTo: no node info for map {} -- cannot reroute player {}",
                              mapid, GetGUID().ToString());
-                }
-
-                // For group/raid cross-node entry: relay reroute to remote member nodes
-                // so the whole group lands on the same instance node together.
-                if (Group* grp = GetGroup())
-                {
-                    uint64 myGuid  = GetGUID().GetRawValue();
-                    uint64 grpGuid = grp->GetGUID().GetRawValue();
-                    for (auto const& member : sClusterMgr.GetGroupRemoteMembers(grpGuid))
-                    {
-                        if (member.guid == myGuid)
-                            continue;
-                        std::vector<uint8> payload(12);
-                        std::memcpy(payload.data(),     &member.guid, 8);
-                        std::memcpy(payload.data() + 8, &mapid,       4);
-                        sNatsBus.RelayToNode(member.nodeId,
-                                                 NatsBus::GROUP_INNER_REROUTE_TO_MAP,
-                                                 payload);
-                    }
                 }
 
                 // Detach from the source transport AFTER the snapshot and

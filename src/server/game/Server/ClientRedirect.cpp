@@ -30,7 +30,7 @@ uint32 SuspendClient(WorldSession* session)
         return 0;
 
     // Generate random suspension token
-    static std::mt19937 rng(std::random_device{}());
+    thread_local static std::mt19937 rng(std::random_device{}());
     uint32 token = rng();
 
     // SMSG_SUSPEND_COMMS (0x50F) — payload: uint32 token

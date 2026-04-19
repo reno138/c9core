@@ -886,7 +886,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             }
 
             // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
-            static std::mt19937 rng(std::random_device{}());
+            thread_local static std::mt19937 rng(std::random_device{}());
             uint32 token = rng();
             sNatsBus.PublishRedirectToken(GetAccountId(), charGuid, token,
                                               destNode->nodeId, GetAddonsList());
