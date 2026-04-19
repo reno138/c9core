@@ -50,7 +50,7 @@
 #include "SteadyTimer.h"
 #include "Systemd.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "World.h"
 #include "WorldSessionMgr.h"
 #include "WorldSocket.h"
@@ -308,7 +308,7 @@ int main(int argc, char** argv)
 
     // Connect to NATS cluster bus BEFORE loading the world so that
     // SpawnContinentTransports() can query peer transport PathProgress values
-    // via ProxyClient::QueryTransportSync() during SetInitialWorldSettings().
+    // via NatsBus::QueryTransportSync() during SetInitialWorldSettings().
     // (Handlers are queued via QueueCallback, so no race with in-flight world state.)
     if (sConfigMgr->GetOption<int32>("ClusterServer.NodeId", 0) > 0)
     {
@@ -323,7 +323,7 @@ int main(int argc, char** argv)
                 sConfigMgr->GetOption<int32>("WorldServerPort", 8085)));
         uint8 serverType = (sConfigMgr->GetOption<bool>("ClusterServer.InstanceServer", false) ||
                             sConfigMgr->GetOption<bool>("InstanceServer.Enable", false)) ? 1 : 0;
-        sProxyClient.Initialize(natsUrl, serverType, gamePort, gameAddress);
+        sNatsBus.Initialize(natsUrl, serverType, gamePort, gameAddress);
     }
 
     ///- Initialize the World
@@ -512,8 +512,13 @@ void ClearOnlineAccounts()
     // pussywizard: tc query would set online=0 even if logged in on another realm >_>
     LoginDatabase.DirectExecute("UPDATE account SET online = 0 WHERE online = {}", realm.Id.Realm);
 
-    // Reset online status for all characters
-    CharacterDatabase.DirectExecute("UPDATE characters SET online = 0 WHERE online <> 0");
+    // Reset online status only for characters owned by THIS node. In a cluster, other
+    // nodes may still be running — a blanket reset would incorrectly clear their sessions.
+    uint8 nodeId = sConfigMgr->GetOption<uint8>("ClusterServer.NodeId", 0);
+    if (nodeId > 0)
+        CharacterDatabase.DirectExecute("UPDATE characters SET online = 0, owning_node_id = 0 WHERE owning_node_id = {}", nodeId);
+    else
+        CharacterDatabase.DirectExecute("UPDATE characters SET online = 0 WHERE online <> 0");
 }
 
 void ShutdownCLIThread(std::thread* cliThread)

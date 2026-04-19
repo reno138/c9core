@@ -27,7 +27,7 @@
 #include "MapMgr.h"
 #include "Player.h"
 #include "PoolMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "ReputationMgr.h"
 #include "ScriptMgr.h"
 #include "SpellAuraEffects.h"
@@ -597,8 +597,8 @@ void Player::AddQuest(Quest const* quest, Object* questGiver)
     UpdateZoneDependentAuras(GetZoneId());
     UpdateAreaDependentAuras(GetAreaId());
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 }
 
 void Player::CompleteQuest(uint32 quest_id)
@@ -882,8 +882,8 @@ void Player::RewardQuest(Quest const* quest, uint32 reward, Object* questGiver, 
 
     sScriptMgr->OnPlayerCompleteQuest(this, quest);
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 }
 
 void Player::SetRewardedQuest(uint32 quest_id)

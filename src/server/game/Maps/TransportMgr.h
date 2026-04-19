@@ -162,7 +162,7 @@ private:
 
     /// Peer-queried PathProgress values keyed by transport guid_low.
     /// Populated by SpawnContinentTransports() before the spawn loop via
-    /// ProxyClient::QueryTransportSync().  Consumed by CreateTransport() to seed
+    /// NatsBus::QueryTransportSync().  Consumed by CreateTransport() to seed
     /// each transport's initial position so all cluster nodes agree from tick 1.
     std::unordered_map<uint32, uint32> _spawnSyncData;
 

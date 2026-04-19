@@ -18,7 +18,7 @@
 #include "SocialMgr.h"
 #include "AccountMgr.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "DatabaseEnv.h"
 #include "ObjectMgr.h"
 #include "Player.h"
@@ -314,12 +314,12 @@ void SocialMgr::BroadcastToFriendListers(Player* player, WorldPacket* packet)
             // MODERATOR, GAME MASTER, ADMINISTRATOR can see all
             if (pFriend && (!AccountMgr::IsPlayerAccount(pFriend->GetSession()->GetSecurity()) || ((pFriend->GetTeamId() == teamId || allowTwoSideWhoList) && security <= gmLevelInWhoList)) && player->IsVisibleGloballyFor(pFriend))
                 pFriend->SendDirectMessage(packet);
-            else if (!pFriend && sProxyClient.IsConnected())
+            else if (!pFriend && sNatsBus.IsConnected())
             {
                 // Friend is on another node — deliver status notification via proxy.
                 if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayerByGuid(itr.first.GetRawValue()))
                     if (info->teamId == teamId || allowTwoSideWhoList)
-                        sProxyClient.DeliverPacketToPlayer(info->guid, *packet);
+                        sNatsBus.DeliverPacketToPlayer(info->guid, *packet);
             }
         }
     }
@@ -329,7 +329,7 @@ void SocialMgr::NotifyRemoteFriendOnline(ObjectGuid const& remoteGuid, uint32 ar
 {
     // Build SMSG_FRIEND_STATUS (FRIEND_ONLINE) for a player on another cluster node.
     // We can't call SendFriendStatus() because the remote player has no local Player object;
-    // build the packet manually with the data provided by the ProxyClient.
+    // build the packet manually with the data provided by the NatsBus.
     WorldPacket data(SMSG_FRIEND_STATUS, 9 + 4 + 4 + 4);
     data << uint8(FRIEND_ONLINE);
     data << remoteGuid;

@@ -15,7 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include <nats.h>
 #include <cstdio>
 #include <fstream>
@@ -27,6 +27,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "ClusterMgr.h"
+#include "DatabaseEnv.h"
 #include "Position.h"
 #include "PlayerTransfer.h"
 #include "SharedPlayerCache.h"
@@ -52,7 +53,7 @@
 
 // ── Initialize (peer-to-peer NATS) ───────────────────────────────────────────
 
-void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
+void NatsBus::Initialize(std::string const& natsUrl, uint8 serverType,
                               uint16 gamePort, std::string const& gameAddress)
 {
     _natsUrl        = natsUrl;
@@ -66,7 +67,7 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
     if (_nodeId == 0)
     {
         LOG_ERROR("server.worldserver",
-                  "ProxyClient: ClusterServer.NodeId not set or is 0 — cluster disabled");
+                  "NatsBus: ClusterServer.NodeId not set or is 0 — cluster disabled");
         return;
     }
 
@@ -83,7 +84,7 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
     if (!ConnectNATS())
     {
         LOG_WARN("server.worldserver",
-                 "ProxyClient: Initial NATS connect failed — will retry every 10s in Update()");
+                 "NatsBus: Initial NATS connect failed — will retry every 10s in Update()");
         return;
     }
 
@@ -91,14 +92,14 @@ void ProxyClient::Initialize(std::string const& natsUrl, uint8 serverType,
     _lastAnnounceRetryMs = getMSTime();
 
     LOG_INFO("server.worldserver",
-             "ProxyClient: Connected to NATS as node {} (serverType={}, gamePort={} addr={}) "
+             "NatsBus: Connected to NATS as node {} (serverType={}, gamePort={} addr={}) "
              "transport_sync_interval={}s",
              _nodeId, serverType, gamePort, gameAddress, syncIntervalSec);
 }
 
 /// Connect to NATS and subscribe to all required subjects.
 /// Returns true on success.  On failure cleans up and returns false.
-bool ProxyClient::ConnectNATS()
+bool NatsBus::ConnectNATS()
 {
     // Connect to NATS.
     // Clean up stale handles from previous failed attempt
@@ -110,7 +111,7 @@ bool ProxyClient::ConnectNATS()
     natsStatus s = natsConnection_ConnectTo(&_nc, _natsUrl.c_str());
     if (s != NATS_OK)
     {
-        LOG_ERROR("server.worldserver", "ProxyClient: Failed to connect to NATS at {} — {}",
+        LOG_ERROR("server.worldserver", "NatsBus: Failed to connect to NATS at {} — {}",
                   _natsUrl, natsStatus_GetText(s));
         return false;
     }
@@ -120,7 +121,7 @@ bool ProxyClient::ConnectNATS()
     s = natsConnection_Subscribe(&_subNode, _nc, nodeSub.c_str(), OnNatsMsg, this);
     if (s != NATS_OK)
     {
-        LOG_ERROR("server.worldserver", "ProxyClient: Failed to subscribe to {} — {}",
+        LOG_ERROR("server.worldserver", "NatsBus: Failed to subscribe to {} — {}",
                   nodeSub, natsStatus_GetText(s));
         natsConnection_Destroy(_nc);
         _nc = nullptr;
@@ -131,7 +132,7 @@ bool ProxyClient::ConnectNATS()
     s = natsConnection_Subscribe(&_subBroadcast, _nc, "cluster.broadcast", OnNatsMsg, this);
     if (s != NATS_OK)
     {
-        LOG_ERROR("server.worldserver", "ProxyClient: Failed to subscribe to cluster.broadcast — {}",
+        LOG_ERROR("server.worldserver", "NatsBus: Failed to subscribe to cluster.broadcast — {}",
                   natsStatus_GetText(s));
         natsSubscription_Destroy(_subNode);
         _subNode = nullptr;
@@ -144,7 +145,7 @@ bool ProxyClient::ConnectNATS()
     s = natsConnection_Subscribe(&_subAnnounce, _nc, "cluster.announce", OnAnnounceMsg, this);
     if (s != NATS_OK)
     {
-        LOG_ERROR("server.worldserver", "ProxyClient: Failed to subscribe to cluster.announce — {}",
+        LOG_ERROR("server.worldserver", "NatsBus: Failed to subscribe to cluster.announce — {}",
                   natsStatus_GetText(s));
         natsSubscription_Destroy(_subBroadcast);
         _subBroadcast = nullptr;
@@ -163,7 +164,7 @@ bool ProxyClient::ConnectNATS()
     {
         // Non-fatal: transport sync falls back to system_clock epoch.
         LOG_WARN("server.worldserver",
-                 "ProxyClient: Failed to subscribe to cluster.transport.query — {} "
+                 "NatsBus: Failed to subscribe to cluster.transport.query — {} "
                  "(transport sync will use system clock as fallback)",
                  natsStatus_GetText(s));
     }
@@ -174,7 +175,7 @@ bool ProxyClient::ConnectNATS()
 
 // ── NATS publish helpers ──────────────────────────────────────────────────────
 
-void ProxyClient::PublishToNode(uint8 targetNodeId, uint8 msgType,
+void NatsBus::PublishToNode(uint8 targetNodeId, uint8 msgType,
                                  uint8 const* payload, int payloadLen)
 {
     if (!_nc || !_connected)
@@ -191,13 +192,13 @@ void ProxyClient::PublishToNode(uint8 targetNodeId, uint8 msgType,
     natsStatus s = natsConnection_Publish(_nc, subject.c_str(),
                                           buf.data(), static_cast<int>(buf.size()));
     if (s != NATS_OK)
-        LOG_WARN("server.worldserver", "ProxyClient: Publish to {} failed — {}",
+        LOG_WARN("server.worldserver", "NatsBus: Publish to {} failed — {}",
                  subject, natsStatus_GetText(s));
     else
         _natsBytesTx.fetch_add(static_cast<uint32>(buf.size()), std::memory_order_relaxed);
 }
 
-void ProxyClient::PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadLen)
+void NatsBus::PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadLen)
 {
     if (!_nc || !_connected)
         return;
@@ -212,19 +213,23 @@ void ProxyClient::PublishBroadcast(uint8 msgType, uint8 const* payload, int payl
     natsStatus s = natsConnection_Publish(_nc, "cluster.broadcast",
                                           buf.data(), static_cast<int>(buf.size()));
     if (s != NATS_OK)
-        LOG_WARN("server.worldserver", "ProxyClient: Broadcast publish failed — {}",
+        LOG_WARN("server.worldserver", "NatsBus: Broadcast publish failed — {}",
                  natsStatus_GetText(s));
     else
         _natsBytesTx.fetch_add(static_cast<uint32>(buf.size()), std::memory_order_relaxed);
 }
 
-void ProxyClient::PublishAnnounce()
+void NatsBus::PublishAnnounce()
 {
     if (!_nc)
         return;
 
     // Wire format for cluster.announce:
-    //   [nodeId:1][serverType:1][gamePort:2][addrLen:1][addr:n][mapCount:2][mapIds:4*n]
+    //   [nodeId:1][serverType:1][gamePort:2][addrLen:1][addr:n]
+    //   [mapCount:2][mapIds:4*n][zoneCount:2][zoneIds:4*n]
+    //   [redirectAddrLen:1][redirectAddr:n][redirectPort:2]
+    // redirectAddr is the address sent to clients in SMSG_REDIRECT_CLIENT.
+    // Empty (len=0) means use the LAN address. Appended last for compatibility.
     // If this node has zones configured, it's a zones-only node — don't
     // announce maps, because Maps config just tells the worldserver what
     // terrain to load. The map is OWNED by another node; we only own zones.
@@ -233,8 +238,12 @@ void ProxyClient::PublishAnnounce()
     uint16 mapCount = static_cast<uint16>(localMaps.size());
     uint8  addrLen  = static_cast<uint8>(_gameAddress.size());
 
+    std::string const& redirectAddr = sClusterMgr.GetRedirectAddress();
+    uint16 const        redirectPort = sClusterMgr.GetRedirectPort();
+    uint8  redirectAddrLen = static_cast<uint8>(redirectAddr.size());
+
     std::vector<uint8> buf;
-    buf.reserve(6 + addrLen + mapCount * 4);
+    buf.reserve(6 + addrLen + mapCount * 4 + 3 + redirectAddrLen);
     buf.push_back(_nodeId);
     buf.push_back(_serverType);
     buf.push_back(static_cast<uint8>(_gamePort & 0xFF));
@@ -263,21 +272,27 @@ void ProxyClient::PublishAnnounce()
         buf.push_back(static_cast<uint8>((zoneId >> 24) & 0xFF));
     }
 
+    // Append redirect address: [redirectAddrLen:1][redirectAddr:n][redirectPort:2]
+    buf.push_back(redirectAddrLen);
+    buf.insert(buf.end(), redirectAddr.begin(), redirectAddr.end());
+    buf.push_back(static_cast<uint8>(redirectPort & 0xFF));
+    buf.push_back(static_cast<uint8>(redirectPort >> 8));
+
     natsStatus s = natsConnection_Publish(_nc, "cluster.announce",
                                           buf.data(), static_cast<int>(buf.size()));
     if (s != NATS_OK)
-        LOG_WARN("server.worldserver", "ProxyClient: cluster.announce publish failed — {}",
+        LOG_WARN("server.worldserver", "NatsBus: cluster.announce publish failed — {}",
                  natsStatus_GetText(s));
     else
         LOG_INFO("server.worldserver",
-                 "ProxyClient: Published cluster.announce (nodeId={} maps={} zones={})", _nodeId, mapCount, zoneCount);
+                 "NatsBus: Published cluster.announce (nodeId={} maps={} zones={})", _nodeId, mapCount, zoneCount);
 }
 
 /// Called on the NATS dispatch thread for cluster.announce messages.
-void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
+void NatsBus::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
                                   natsMsg* msg, void* closure)
 {
-    auto* self = static_cast<ProxyClient*>(closure);
+    auto* self = static_cast<NatsBus*>(closure);
 
     const uint8* d = reinterpret_cast<const uint8*>(natsMsg_GetData(msg));
     int n          = natsMsg_GetDataLength(msg);
@@ -348,6 +363,26 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
         }
     }
 
+    // Parse redirect address (appended last — optional for compatibility):
+    // [redirectAddrLen:1][redirectAddr:n][redirectPort:2]
+    if (n >= off + 1)
+    {
+        uint8 redirectAddrLen = d[off++];
+        if (redirectAddrLen > 0 && n >= off + redirectAddrLen + 2)
+        {
+            info.redirectAddress = std::string(reinterpret_cast<char const*>(d + off), redirectAddrLen);
+            off += redirectAddrLen;
+            info.redirectPort = static_cast<uint16>(d[off]) | (static_cast<uint16>(d[off + 1]) << 8);
+            LOG_INFO("server.worldserver", "NatsBus: Parsed redirect for nodeId={} -> {}:{}",
+                     nodeId, info.redirectAddress, info.redirectPort);
+        }
+        else
+        {
+            LOG_INFO("server.worldserver", "NatsBus: No redirect in announce for nodeId={} (len={} n={} off={})",
+                     nodeId, redirectAddrLen, n, off);
+        }
+    }
+
     // All data copied — safe to release the NATS message now.
     natsMsg_Destroy(msg);
 
@@ -362,7 +397,7 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
     {
         bool wasRevived = sClusterMgr.RegisterRemoteNode(std::move(info));
         if (wasRevived)
-            sProxyClient.RestoreBgCoordIfNeeded(announceNodeId);
+            sNatsBus.RestoreBgCoordIfNeeded(announceNodeId);
     });
 
     // Acknowledge receipt so the announcing node stops its 10-second retry loop.
@@ -370,7 +405,7 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
     if (self->_nc && self->_connected)
     {
         std::string ackSubject = "cluster.node." + std::to_string(nodeId);
-        uint8 ackBuf[2] = { ProxyClient::MSG_ANNOUNCE_ACK, self->_nodeId };
+        uint8 ackBuf[2] = { NatsBus::MSG_ANNOUNCE_ACK, self->_nodeId };
         natsConnection_Publish(self->_nc, ackSubject.c_str(), ackBuf, 2);
     }
 }
@@ -378,10 +413,10 @@ void ProxyClient::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*
 // ── Incoming NATS message dispatcher ─────────────────────────────────────────
 
 /// Called on the NATS dispatch thread.  Copies payload and queues Dispatch() on the world thread.
-void ProxyClient::OnNatsMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
+void NatsBus::OnNatsMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
                              natsMsg* msg, void* closure)
 {
-    auto* self = static_cast<ProxyClient*>(closure);
+    auto* self = static_cast<NatsBus*>(closure);
 
     const uint8* d = reinterpret_cast<const uint8*>(natsMsg_GetData(msg));
     int n          = natsMsg_GetDataLength(msg);
@@ -405,7 +440,7 @@ void ProxyClient::OnNatsMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
 }
 
 /// Called on the world thread — dispatches to the appropriate handler.
-void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
+void NatsBus::Dispatch(uint8 msgType, std::vector<uint8> payload)
 {
     switch (msgType)
     {
@@ -573,12 +608,12 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             if (DeserializeTransfer(payload.data(), payload.size(), td))
             {
                 LOG_INFO("server.worldserver",
-                         "ProxyClient: Received player transfer GUID {:016X} map={}",
+                         "NatsBus: Received player transfer GUID {:016X} map={}",
                          td.guid, td.mapId);
                 sClusterMgr.StorePendingTransfer(td.guid, std::move(td));
             }
             else
-                LOG_ERROR("server.worldserver", "ProxyClient: Failed to deserialize player transfer");
+                LOG_ERROR("server.worldserver", "NatsBus: Failed to deserialize player transfer");
             break;
         }
         case MSG_PLAYER_STATE_SYNC_V2:
@@ -640,7 +675,7 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             SharedPlayerState state;
             if (DeserializeFullState(payload.data(), static_cast<int>(payload.size()), state))
             {
-                LOG_DEBUG("server.worldserver", "ProxyClient: Received full state for GUID {:016X} from node {}", state.guid, state.ownerNodeId);
+                LOG_DEBUG("server.worldserver", "NatsBus: Received full state for GUID {:016X} from node {}", state.guid, state.ownerNodeId);
                 sSharedPlayerCache.StoreFullState(std::move(state));
             }
             break;
@@ -657,7 +692,7 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
                     s.ownerNodeId = claimingNode;
                 });
 
-                LOG_INFO("server.worldserver", "ProxyClient: Node {} claimed GUID {:016X}", claimingNode, guid);
+                LOG_INFO("server.worldserver", "NatsBus: Node {} claimed GUID {:016X}", claimingNode, guid);
                 sClusterMgr.SetPlayerOwner(guid, claimingNode);
 
                 // If we own this player locally and another node is claiming it,
@@ -666,7 +701,7 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
                 {
                     if (Player* player = ObjectAccessor::FindPlayer(ObjectGuid(guid)))
                     {
-                        LOG_INFO("server.worldserver", "ProxyClient: Local player GUID {:016X} claimed by node {} -- queueing deactivation", guid, claimingNode);
+                        LOG_INFO("server.worldserver", "NatsBus: Local player GUID {:016X} claimed by node {} -- queueing deactivation", guid, claimingNode);
                         sWorld->QueuePlayerDeactivation(guid);
                     }
                 }
@@ -685,7 +720,7 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
                     s.active = false;
                 });
 
-                LOG_INFO("server.worldserver", "ProxyClient: Node {} released GUID {:016X}", releasingNode, guid);
+                LOG_INFO("server.worldserver", "NatsBus: Node {} released GUID {:016X}", releasingNode, guid);
                 sClusterMgr.SetPlayerOwner(guid, 0);
             }
             break;
@@ -728,14 +763,14 @@ void ProxyClient::Dispatch(uint8 msgType, std::vector<uint8> payload)
             break;
         }
         default:
-            LOG_WARN("server.worldserver", "ProxyClient: Unknown incoming msgType 0x{:02X}", msgType);
+            LOG_WARN("server.worldserver", "NatsBus: Unknown incoming msgType 0x{:02X}", msgType);
             break;
     }
 }
 
 // ── Incoming message handlers ─────────────────────────────────────────────────
 
-void ProxyClient::HandleRemotePlayerOnline(std::vector<uint8> const& payload)
+void NatsBus::HandleRemotePlayerOnline(std::vector<uint8> const& payload)
 {
     // Payload: guid(8) + nameLen(1) + name[nameLen] + zone(4) + level + class + race + team + nodeId
     if (payload.size() < 9)
@@ -767,7 +802,7 @@ void ProxyClient::HandleRemotePlayerOnline(std::vector<uint8> const& payload)
     if (nodeId == _nodeId)
         return;
 
-    LOG_INFO("server.worldserver", "ProxyClient: Remote player ONLINE  GUID {:016X} '{}' node={}",
+    LOG_INFO("server.worldserver", "NatsBus: Remote player ONLINE  GUID {:016X} '{}' node={}",
              guid, name, nodeId);
 
     sClusterMgr.OnRemotePlayerOnline(guid, std::move(name),
@@ -790,9 +825,9 @@ void ProxyClient::HandleRemotePlayerOnline(std::vector<uint8> const& payload)
     });
 }
 
-void ProxyClient::HandleRemotePlayerOffline(uint64 guid)
+void NatsBus::HandleRemotePlayerOffline(uint64 guid)
 {
-    LOG_INFO("server.worldserver", "ProxyClient: Remote player OFFLINE GUID {:016X}", guid);
+    LOG_INFO("server.worldserver", "NatsBus: Remote player OFFLINE GUID {:016X}", guid);
     sClusterMgr.OnRemotePlayerOffline(guid);
 
     // Clean up transfer and state cache for logged-off player
@@ -808,20 +843,20 @@ void ProxyClient::HandleRemotePlayerOffline(uint64 guid)
 
 // ── Instance address query ────────────────────────────────────────────────────
 
-bool ProxyClient::QueryBestInstanceAddress(std::string& outAddr, uint16& outPort)
+bool NatsBus::QueryBestInstanceAddress(std::string& outAddr, uint16& outPort)
 {
     // Look up the instance node from our local routing table (populated by cluster.announce).
     uint8 instanceNodeId = sClusterMgr.GetInstanceNodeId();
     if (instanceNodeId == 0)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: QueryBestInstanceAddress — no instance node registered");
+        LOG_WARN("server.worldserver", "NatsBus: QueryBestInstanceAddress — no instance node registered");
         return false;
     }
 
     auto nodeInfo = sClusterMgr.GetNodeInfo(instanceNodeId);
     if (!nodeInfo)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: QueryBestInstanceAddress — no info for instance nodeId={}", instanceNodeId);
+        LOG_WARN("server.worldserver", "NatsBus: QueryBestInstanceAddress — no info for instance nodeId={}", instanceNodeId);
         return false;
     }
 
@@ -835,7 +870,7 @@ bool ProxyClient::QueryBestInstanceAddress(std::string& outAddr, uint16& outPort
 
 // ── Shared Player State NATS methods ──────────────────────────────────────────
 
-void ProxyClient::BroadcastPlayerStateDelta(uint64 guid, uint8 fieldMask)
+void NatsBus::BroadcastPlayerStateDelta(uint64 guid, uint8 fieldMask)
 {
     if (!_nc || !_connected) return;
     auto state = sSharedPlayerCache.Get(guid);
@@ -845,7 +880,7 @@ void ProxyClient::BroadcastPlayerStateDelta(uint64 guid, uint8 fieldMask)
     PublishBroadcast(MSG_PLAYER_STATE_DELTA, payload.data(), static_cast<int>(payload.size()));
 }
 
-void ProxyClient::BroadcastPlayerStateFull(uint64 guid)
+void NatsBus::BroadcastPlayerStateFull(uint64 guid)
 {
     if (!_nc || !_connected) return;
     auto state = sSharedPlayerCache.Get(guid);
@@ -854,10 +889,10 @@ void ProxyClient::BroadcastPlayerStateFull(uint64 guid)
     std::vector<uint8> payload = SerializeFullState(*state);
     PublishBroadcast(MSG_PLAYER_STATE_FULL, payload.data(), static_cast<int>(payload.size()));
 
-    LOG_DEBUG("server.worldserver", "ProxyClient: Broadcast full state for GUID {:016X} ({} bytes)", guid, payload.size());
+    LOG_DEBUG("server.worldserver", "NatsBus: Broadcast full state for GUID {:016X} ({} bytes)", guid, payload.size());
 }
 
-void ProxyClient::ClaimPlayer(uint64 guid)
+void NatsBus::ClaimPlayer(uint64 guid)
 {
     if (!_nc || !_connected) return;
 
@@ -866,10 +901,10 @@ void ProxyClient::ClaimPlayer(uint64 guid)
     payload[8] = _nodeId;
 
     PublishBroadcast(MSG_PLAYER_CLAIM, payload, 9);
-    LOG_INFO("server.worldserver", "ProxyClient: Claiming ownership of GUID {:016X} for node {}", guid, _nodeId);
+    LOG_INFO("server.worldserver", "NatsBus: Claiming ownership of GUID {:016X} for node {}", guid, _nodeId);
 }
 
-void ProxyClient::ReleasePlayer(uint64 guid)
+void NatsBus::ReleasePlayer(uint64 guid)
 {
     if (!_nc || !_connected) return;
 
@@ -878,10 +913,10 @@ void ProxyClient::ReleasePlayer(uint64 guid)
     payload[8] = _nodeId;
 
     PublishBroadcast(MSG_PLAYER_RELEASE, payload, 9);
-    LOG_INFO("server.worldserver", "ProxyClient: Releasing ownership of GUID {:016X} from node {}", guid, _nodeId);
+    LOG_INFO("server.worldserver", "NatsBus: Releasing ownership of GUID {:016X} from node {}", guid, _nodeId);
 }
 
-void ProxyClient::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token,
+void NatsBus::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token,
                                         uint8 destNodeId, std::list<AddonInfo> const& addons)
 {
     if (!_nc || !_connected) return;
@@ -918,12 +953,12 @@ void ProxyClient::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint
                      payload.data(), static_cast<int>(payload.size()));
 
     LOG_INFO("server.worldserver",
-             "ProxyClient: Published redirect token for account {} GUID {:016X} -> node {} "
+             "NatsBus: Published redirect token for account {} GUID {:016X} -> node {} "
              "(token=0x{:08X}, {} addons)",
              accountId, playerGuid, destNodeId, token, addonCount);
 }
 
-void ProxyClient::Update()
+void NatsBus::Update()
 {
     constexpr uint32 NATS_RETRY_INTERVAL_MS     = 10 * 1000;    //  10 seconds
     constexpr uint32 ANNOUNCE_RETRY_INTERVAL_MS = 10 * 1000;    //  10 seconds
@@ -941,7 +976,7 @@ void ProxyClient::Update()
             if (ConnectNATS())
             {
                 LOG_INFO("server.worldserver",
-                         "ProxyClient: Reconnected to NATS as node {}", _nodeId);
+                         "NatsBus: Reconnected to NATS as node {}", _nodeId);
                 PublishAnnounce();
                 _lastAnnounceRetryMs = now;
             }
@@ -958,7 +993,7 @@ void ProxyClient::Update()
         _lastAnnounceRetryMs = now;
         PublishAnnounce();
         LOG_INFO("server.worldserver",
-                 "ProxyClient: Re-announcing to cluster (awaiting peer acknowledgement)");
+                 "NatsBus: Re-announcing to cluster (awaiting peer acknowledgement)");
     }
 
     if (now - _lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS)
@@ -1013,7 +1048,7 @@ void ProxyClient::Update()
 
 // ── Transport sync ────────────────────────────────────────────────────────────
 
-void ProxyClient::OnTransportQueryMsg(natsConnection* nc, natsSubscription* /*sub*/,
+void NatsBus::OnTransportQueryMsg(natsConnection* nc, natsSubscription* /*sub*/,
                                        natsMsg* msg, void* /*closure*/)
 {
     // Called on NATS dispatch thread: build a reply with current PathProgress for
@@ -1046,7 +1081,7 @@ void ProxyClient::OnTransportQueryMsg(natsConnection* nc, natsSubscription* /*su
     natsMsg_Destroy(msg);
 }
 
-std::unordered_map<uint32, uint32> ProxyClient::QueryTransportSync()
+std::unordered_map<uint32, uint32> NatsBus::QueryTransportSync()
 {
     std::unordered_map<uint32, uint32> result;
     if (!_nc || !_connected)
@@ -1064,7 +1099,7 @@ std::unordered_map<uint32, uint32> ProxyClient::QueryTransportSync()
     if (s != NATS_OK)
     {
         LOG_WARN("server.worldserver",
-                 "ProxyClient::QueryTransportSync — NATS request failed: {}",
+                 "NatsBus::QueryTransportSync — NATS request failed: {}",
                  natsStatus_GetText(s));
         return result;
     }
@@ -1092,7 +1127,7 @@ std::unordered_map<uint32, uint32> ProxyClient::QueryTransportSync()
     return result;
 }
 
-void ProxyClient::SendTransportSync()
+void NatsBus::SendTransportSync()
 {
     auto& container = HashMapHolder<MotionTransport>::GetContainer();
     std::shared_lock lock(*HashMapHolder<MotionTransport>::GetLock());
@@ -1115,10 +1150,10 @@ void ProxyClient::SendTransportSync()
 
     PublishBroadcast(MSG_TRANSPORT_SYNC, payload.data(), static_cast<int>(payload.size()));
     LOG_DEBUG("server.worldserver",
-              "ProxyClient: Sent transport sync for {} transport(s)", idx);
+              "NatsBus: Sent transport sync for {} transport(s)", idx);
 }
 
-void ProxyClient::HandleTransportSync(std::vector<uint8> const& payload)
+void NatsBus::HandleTransportSync(std::vector<uint8> const& payload)
 {
     if (payload.size() < 2)
         return;
@@ -1156,7 +1191,7 @@ void ProxyClient::HandleTransportSync(std::vector<uint8> const& payload)
         {
             trans->InitializeToTime(remoteProgress);
             LOG_DEBUG("server.worldserver",
-                      "ProxyClient: Transport {:08X} synced: local={} remote={} drift={}ms",
+                      "NatsBus: Transport {:08X} synced: local={} remote={} drift={}ms",
                       guidLow, localProgress, remoteProgress, diff);
         }
     }
@@ -1178,11 +1213,11 @@ static void RACommandPrint(void* arg, std::string_view text)
 static void RACommandFinished(void* arg, bool /*success*/)
 {
     auto* state = static_cast<RACommandState*>(arg);
-    sProxyClient.SendRAReply(state->reqId, state->output);
+    sNatsBus.SendRAReply(state->reqId, state->output);
     delete state;
 }
 
-void ProxyClient::HandleRACommand(uint32 reqId, std::string const& cmd)
+void NatsBus::HandleRACommand(uint32 reqId, std::string const& cmd)
 {
     auto* state = new RACommandState();
     state->reqId = reqId;
@@ -1190,7 +1225,7 @@ void ProxyClient::HandleRACommand(uint32 reqId, std::string const& cmd)
     sWorld->QueueCliCommand(holder);
 }
 
-void ProxyClient::SendRAReply(uint32 reqId, std::string const& output)
+void NatsBus::SendRAReply(uint32 reqId, std::string const& output)
 {
     if (!_connected || !_nc)
         return;
@@ -1211,7 +1246,7 @@ void ProxyClient::SendRAReply(uint32 reqId, std::string const& output)
 
 // ── Node health / failover ────────────────────────────────────────────────────
 
-void ProxyClient::HandleNodeStatus(std::vector<uint8> const& payload)
+void NatsBus::HandleNodeStatus(std::vector<uint8> const& payload)
 {
     // Wire: [nodeId:1][playerCount:4][natsBytesTx:4][natsBytesRx:4] = 13 bytes
     if (payload.size() < 13)
@@ -1231,12 +1266,12 @@ void ProxyClient::HandleNodeStatus(std::vector<uint8> const& payload)
         RestoreBgCoordIfNeeded(srcNodeId);
 }
 
-void ProxyClient::HandleNodeDead(uint8 deadNodeId)
+void NatsBus::HandleNodeDead(uint8 deadNodeId)
 {
     auto orphanedMaps = sClusterMgr.MarkNodeDead(deadNodeId);
 
     LOG_WARN("server.worldserver",
-             "ProxyClient: Node {} declared DEAD (missed heartbeats). Orphaned {} map(s).",
+             "NatsBus: Node {} declared DEAD (missed heartbeats). Orphaned {} map(s).",
              deadNodeId, orphanedMaps.size());
 
     // Elect a new BG coordinator if the dead node held that role.
@@ -1248,7 +1283,7 @@ void ProxyClient::HandleNodeDead(uint8 deadNodeId)
             newCoord = _nodeId;
         _bgCoordNodeId = newCoord;
         LOG_WARN("server.worldserver",
-                 "ProxyClient: BG coordinator was node {} (dead). Elected new coordinator: node {}.",
+                 "NatsBus: BG coordinator was node {} (dead). Elected new coordinator: node {}.",
                  deadNodeId, _bgCoordNodeId);
     }
 
@@ -1265,13 +1300,21 @@ void ProxyClient::HandleNodeDead(uint8 deadNodeId)
     if (!orphanedMaps.empty() && !sClusterMgr.IsInstanceServerMode())
     {
         LOG_WARN("server.worldserver",
-                 "ProxyClient: Claiming {} orphaned maps from dead node {}",
+                 "NatsBus: Claiming {} orphaned maps from dead node {}",
                  orphanedMaps.size(), deadNodeId);
         sClusterMgr.ClaimOrphanedMaps(deadNodeId);
     }
+
+    // Clear stale online flags for characters that were on the dead node.
+    // Without this, those characters remain online=1 forever and block re-login.
+    CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NODE_ONLINE_CLEANUP);
+    stmt->SetData(0, deadNodeId);
+    CharacterDatabase.Execute(stmt);
+    LOG_INFO("server.worldserver",
+             "NatsBus: Cleared online flags for characters owned by dead node {}.", deadNodeId);
 }
 
-void ProxyClient::HandleNodeDeadMsg(std::vector<uint8> const& payload)
+void NatsBus::HandleNodeDeadMsg(std::vector<uint8> const& payload)
 {
     if (payload.empty())
         return;
@@ -1283,7 +1326,7 @@ void ProxyClient::HandleNodeDeadMsg(std::vector<uint8> const& payload)
     auto orphanedMaps = sClusterMgr.MarkNodeDead(deadNodeId);
 
     LOG_WARN("server.worldserver",
-             "ProxyClient: Received MSG_NODE_DEAD for node {}. Orphaned {} map(s).",
+             "NatsBus: Received MSG_NODE_DEAD for node {}. Orphaned {} map(s).",
              deadNodeId, orphanedMaps.size());
 
     // Failover: elect this node to claim orphaned maps based on lowest nodeId
@@ -1293,14 +1336,14 @@ void ProxyClient::HandleNodeDeadMsg(std::vector<uint8> const& payload)
         if (lowestAlive == 0 || lowestAlive == _nodeId)
         {
             LOG_WARN("server.worldserver",
-                     "ProxyClient: This node (id {}) elected to claim {} orphaned maps from dead node {}",
+                     "NatsBus: This node (id {}) elected to claim {} orphaned maps from dead node {}",
                      _nodeId, orphanedMaps.size(), deadNodeId);
             sClusterMgr.ClaimOrphanedMaps(deadNodeId);
         }
         else
         {
             LOG_INFO("server.worldserver",
-                     "ProxyClient: Node {} will claim maps from dead node {} (lower nodeId)",
+                     "NatsBus: Node {} will claim maps from dead node {} (lower nodeId)",
                      lowestAlive, deadNodeId);
         }
     }
@@ -1312,12 +1355,12 @@ void ProxyClient::HandleNodeDeadMsg(std::vector<uint8> const& payload)
             newCoord = _nodeId;
         _bgCoordNodeId = newCoord;
         LOG_WARN("server.worldserver",
-                 "ProxyClient: BG coordinator was node {} (dead). Elected new coordinator: node {}.",
+                 "NatsBus: BG coordinator was node {} (dead). Elected new coordinator: node {}.",
                  deadNodeId, _bgCoordNodeId);
     }
 }
 
-void ProxyClient::RestoreBgCoordIfNeeded(uint8 revivedNodeId)
+void NatsBus::RestoreBgCoordIfNeeded(uint8 revivedNodeId)
 {
     uint8 configCoordId = static_cast<uint8>(
         sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
@@ -1325,12 +1368,12 @@ void ProxyClient::RestoreBgCoordIfNeeded(uint8 revivedNodeId)
     {
         _bgCoordNodeId = configCoordId;
         LOG_WARN("server.worldserver",
-                 "ProxyClient: BG coordinator restored to configured node {} (revived).",
+                 "NatsBus: BG coordinator restored to configured node {} (revived).",
                  _bgCoordNodeId);
     }
 }
 
-void ProxyClient::SendNodeStatus()
+void NatsBus::SendNodeStatus()
 {
     uint32 playerCount = static_cast<uint32>(sWorldSessionMgr->GetActiveSessionCount());
     uint32 natsBytesTx = _natsBytesTx.exchange(0, std::memory_order_relaxed);
@@ -1346,27 +1389,27 @@ void ProxyClient::SendNodeStatus()
 
     PublishBroadcast(MSG_NODE_STATUS, payload, 13);
     LOG_DEBUG("server.worldserver",
-              "ProxyClient: Sent NODE_STATUS players={} nats_tx={}B nats_rx={}B",
+              "NatsBus: Sent NODE_STATUS players={} nats_tx={}B nats_rx={}B",
               playerCount, natsBytesTx, natsBytesRx);
 }
 
-void ProxyClient::SendNodeRefresh()
+void NatsBus::SendNodeRefresh()
 {
     // Re-announce identity so late-joining peer nodes can build routing tables.
     PublishAnnounce();
     LOG_INFO("server.worldserver",
-             "ProxyClient: Sent node re-announce (port={} nodeId={})", _gamePort, _nodeId);
+             "NatsBus: Sent node re-announce (port={} nodeId={})", _gamePort, _nodeId);
 }
 
 // ── Management monitoring publishes (cluster.mgmt.*) ─────────────────────────
 
-void ProxyClient::PublishRaw(std::string const& subject, uint8 const* data, int len)
+void NatsBus::PublishRaw(std::string const& subject, uint8 const* data, int len)
 {
     if (!_nc)
         return;
     natsStatus s = natsConnection_Publish(_nc, subject.c_str(), data, len);
     if (s != NATS_OK)
-        LOG_WARN("server.worldserver", "ProxyClient: PublishRaw to {} failed — {}",
+        LOG_WARN("server.worldserver", "NatsBus: PublishRaw to {} failed — {}",
                  subject, natsStatus_GetText(s));
     else
         _natsBytesTx.fetch_add(static_cast<uint32>(len), std::memory_order_relaxed);
@@ -1390,7 +1433,7 @@ static uint32 ReadMemUsageMB()
 }
 
 /// Compute CPU% from /proc/self/stat delta between calls.
-/// lastJiffies and lastCheckMs are persistent across calls (stored in ProxyClient).
+/// lastJiffies and lastCheckMs are persistent across calls (stored in NatsBus).
 static uint8 ComputeCpuPercent(uint32& lastJiffies, uint32& lastCheckMs)
 {
     // /proc/self/stat fields: pid(1) comm(2) state(3) ... utime(14) stime(15)
@@ -1443,7 +1486,7 @@ static uint8 ComputeCpuPercent(uint32& lastJiffies, uint32& lastCheckMs)
     return static_cast<uint8>(std::min(pct, 100u));
 }
 
-void ProxyClient::SendMgmtStatus()
+void NatsBus::SendMgmtStatus()
 {
     if (!_nc || !_connected)
         return;
@@ -1503,7 +1546,7 @@ void ProxyClient::SendMgmtStatus()
     PublishRaw("cluster.mgmt.status", buf.data(), static_cast<int>(totalLen));
 }
 
-void ProxyClient::SendMgmtPlayers()
+void NatsBus::SendMgmtPlayers()
 {
     if (!_nc || !_connected)
         return;
@@ -1570,7 +1613,7 @@ void ProxyClient::SendMgmtPlayers()
 
 // ── Outgoing cluster messages ─────────────────────────────────────────────────
 
-void ProxyClient::SendReroute(uint64 playerGuid, std::string const& address, uint16 port,
+void NatsBus::SendReroute(uint64 playerGuid, std::string const& address, uint16 port,
                              uint32 mapId, float x, float y, float z, float ori)
 {
     if (!_nc || !_connected)
@@ -1623,17 +1666,17 @@ void ProxyClient::SendReroute(uint64 playerGuid, std::string const& address, uin
 
     natsStatus s = natsConnection_Publish(_nc, "cluster.proxy", buf.data(), static_cast<int>(buf.size()));
     if (s != NATS_OK)
-        LOG_WARN("server.worldserver", "ProxyClient::SendReroute: publish failed — {}", natsStatus_GetText(s));
+        LOG_WARN("server.worldserver", "NatsBus::SendReroute: publish failed — {}", natsStatus_GetText(s));
     else
     {
         _natsBytesTx.fetch_add(static_cast<uint32>(buf.size()), std::memory_order_relaxed);
         LOG_INFO("server.worldserver",
-                 "ProxyClient::SendReroute GUID {:016X} → {}:{} map={} pos=({:.1f},{:.1f},{:.1f},{:.2f})",
+                 "NatsBus::SendReroute GUID {:016X} → {}:{} map={} pos=({:.1f},{:.1f},{:.1f},{:.2f})",
                  playerGuid, address, port, mapId, x, y, z, ori);
     }
 }
 
-void ProxyClient::SendRerouteToMap(uint64 playerGuid, uint32 mapId)
+void NatsBus::SendRerouteToMap(uint64 playerGuid, uint32 mapId)
 {
     if (!_nc || !_connected)
         return;
@@ -1647,12 +1690,12 @@ void ProxyClient::SendRerouteToMap(uint64 playerGuid, uint32 mapId)
 
     natsStatus s = natsConnection_Publish(_nc, "cluster.proxy", buf, 14);
     if (s != NATS_OK)
-        LOG_WARN("server.worldserver", "ProxyClient::SendRerouteToMap: publish failed — {}", natsStatus_GetText(s));
+        LOG_WARN("server.worldserver", "NatsBus::SendRerouteToMap: publish failed — {}", natsStatus_GetText(s));
     else
-        LOG_INFO("server.worldserver", "ProxyClient::SendRerouteToMap GUID {:016X} map={}", playerGuid, mapId);
+        LOG_INFO("server.worldserver", "NatsBus::SendRerouteToMap GUID {:016X} map={}", playerGuid, mapId);
 }
 
-void ProxyClient::SendSeamlessReroute(uint64 playerGuid, std::string const& address, uint16 port)
+void NatsBus::SendSeamlessReroute(uint64 playerGuid, std::string const& address, uint16 port)
 {
     if (!_nc || !_connected)
         return;
@@ -1679,10 +1722,10 @@ void ProxyClient::SendSeamlessReroute(uint64 playerGuid, std::string const& addr
 
     natsConnection_Publish(_nc, "cluster.proxy", buf.data(), static_cast<int>(buf.size()));
     LOG_INFO("server.worldserver",
-             "ProxyClient::SendSeamlessReroute GUID {:016X} -> {}:{}", playerGuid, address, port);
+             "NatsBus::SendSeamlessReroute GUID {:016X} -> {}:{}", playerGuid, address, port);
 }
 
-void ProxyClient::SendPlayerTransfer(Player const* player, uint8 destNodeId,
+void NatsBus::SendPlayerTransfer(Player const* player, uint8 destNodeId,
                                       std::string const& address, uint16 port,
                                       uint32 mapId, float x, float y, float z, float ori)
 {
@@ -1697,7 +1740,7 @@ void ProxyClient::SendPlayerTransfer(Player const* player, uint8 destNodeId,
                   payload.data(), static_cast<int>(payload.size()));
 
     LOG_INFO("server.worldserver",
-             "ProxyClient: Sent player transfer GUID {:016X} to node {} ({} bytes)",
+             "NatsBus: Sent player transfer GUID {:016X} to node {} ({} bytes)",
              player->GetGUID().GetRawValue(), destNodeId, payload.size());
 
     // 3. Tell proxy to reroute client connection
@@ -1705,7 +1748,7 @@ void ProxyClient::SendPlayerTransfer(Player const* player, uint8 destNodeId,
                 mapId, x, y, z, ori);
 }
 
-void ProxyClient::SendPlayerTransferSeamless(Player const* player, uint8 destNodeId,
+void NatsBus::SendPlayerTransferSeamless(Player const* player, uint8 destNodeId,
                                               const std::string& address, uint16 port)
 {
     if (!_nc || !_connected) return;
@@ -1719,7 +1762,7 @@ void ProxyClient::SendPlayerTransferSeamless(Player const* player, uint8 destNod
                   payload.data(), static_cast<int>(payload.size()));
 
     LOG_INFO("server.worldserver",
-             "ProxyClient: Sent seamless player transfer GUID {:016X} to node {} ({} bytes)",
+             "NatsBus: Sent seamless player transfer GUID {:016X} to node {} ({} bytes)",
              player->GetGUID().GetRawValue(), destNodeId, payload.size());
 
     // 3. Tell proxy to do a seamless backend swap (no loading screen)
@@ -1727,7 +1770,7 @@ void ProxyClient::SendPlayerTransferSeamless(Player const* player, uint8 destNod
 }
 
 
-void ProxyClient::BroadcastPlayerTransferFull(Player const* player)
+void NatsBus::BroadcastPlayerTransferFull(Player const* player)
 {
     if (!_nc || !_connected || !player) return;
 
@@ -1741,11 +1784,11 @@ void ProxyClient::BroadcastPlayerTransferFull(Player const* player)
                      payload.data(), static_cast<int>(payload.size()));
 
     LOG_DEBUG("server.worldserver",
-             "ProxyClient: Broadcast v2 state sync for {} ({} bytes)",
+             "NatsBus: Broadcast v2 state sync for {} ({} bytes)",
              player->GetName(), payload.size());
 }
 
-void ProxyClient::SendPlayerTransferForRedirect(Player const* player,
+void NatsBus::SendPlayerTransferForRedirect(Player const* player,
                                                  uint8 destNodeId,
                                                  WorldLocation const& destLoc)
 {
@@ -1773,13 +1816,13 @@ void ProxyClient::SendPlayerTransferForRedirect(Player const* player,
                   payload.data(), static_cast<int>(payload.size()));
 
     LOG_INFO("server.worldserver",
-             "ProxyClient: Sent redirect transfer for {} (GUID {:016X}) to node {} "
+             "NatsBus: Sent redirect transfer for {} (GUID {:016X}) to node {} "
              "dest map={} pos=({:.1f},{:.1f},{:.1f}) ({} bytes)",
              player->GetName(), player->GetGUID().GetRawValue(), destNodeId,
              td.mapId, td.posX, td.posY, td.posZ, payload.size());
 }
 
-void ProxyClient::AnnounceOnline(Player const* player)
+void NatsBus::AnnounceOnline(Player const* player)
 {
     if (!_connected || !player)
         return;
@@ -1819,7 +1862,7 @@ void ProxyClient::AnnounceOnline(Player const* player)
     PublishBroadcast(MSG_CLUSTER_PLAYER_ONLINE, payload.data(), static_cast<int>(payload.size()));
 }
 
-void ProxyClient::AnnounceOffline(uint64 playerGuid)
+void NatsBus::AnnounceOffline(uint64 playerGuid)
 {
     if (!_connected)
         return;
@@ -1832,7 +1875,7 @@ void ProxyClient::AnnounceOffline(uint64 playerGuid)
     PublishBroadcast(MSG_CLUSTER_PLAYER_OFFLINE, payload, 9);
 }
 
-void ProxyClient::RelayToNode(uint8 targetNodeId, uint8 innerType, std::vector<uint8> const& payload)
+void NatsBus::RelayToNode(uint8 targetNodeId, uint8 innerType, std::vector<uint8> const& payload)
 {
     if (!_connected)
         return;
@@ -1851,7 +1894,7 @@ void ProxyClient::RelayToNode(uint8 targetNodeId, uint8 innerType, std::vector<u
     PublishToNode(targetNodeId, MSG_CLUSTER_RELAY_TO_NODE, msg.data(), static_cast<int>(msg.size()));
 }
 
-void ProxyClient::SendGroupUpdate(uint64 groupGuid, std::vector<uint8> const& memberData)
+void NatsBus::SendGroupUpdate(uint64 groupGuid, std::vector<uint8> const& memberData)
 {
     if (!_connected)
         return;
@@ -1867,7 +1910,7 @@ void ProxyClient::SendGroupUpdate(uint64 groupGuid, std::vector<uint8> const& me
     PublishBroadcast(MSG_CLUSTER_GROUP_UPDATE, payload.data(), static_cast<int>(payload.size()));
 }
 
-void ProxyClient::SendGroupDisband(uint64 groupGuid)
+void NatsBus::SendGroupDisband(uint64 groupGuid)
 {
     if (!_connected)
         return;
@@ -1883,7 +1926,7 @@ static constexpr uint8 CLUSTER_INNER_GROUP_INVITE        = 0x01;
 static constexpr uint8 CLUSTER_INNER_GROUP_INVITE_RESULT = 0x02;
 static constexpr uint8 CLUSTER_INNER_GROUP_REROUTE_TO_MAP = 0x03;
 
-void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const& payload)
+void NatsBus::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const& payload)
 {
     switch (innerType)
     {
@@ -1900,7 +1943,7 @@ void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const&
                 return;
             std::string inviterName(reinterpret_cast<char const*>(payload.data() + 17), nameLen);
 
-            LOG_DEBUG("server.worldserver", "ProxyClient: Cross-node GROUP_INVITE from GUID {:016X} '{}' to GUID {:016X}",
+            LOG_DEBUG("server.worldserver", "NatsBus: Cross-node GROUP_INVITE from GUID {:016X} '{}' to GUID {:016X}",
                       inviterGuid, inviterName, inviteeGuid);
 
             // Store the pending invite now (ClusterMgr is mutex-protected, safe from I/O thread).
@@ -1912,7 +1955,7 @@ void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const&
                 Player* invitee = ObjectAccessor::FindPlayer(ObjectGuid(inviteeGuid));
                 if (!invitee)
                 {
-                    LOG_DEBUG("server.worldserver", "ProxyClient: GROUP_INVITE — invitee {:016X} not found locally", inviteeGuid);
+                    LOG_DEBUG("server.worldserver", "NatsBus: GROUP_INVITE — invitee {:016X} not found locally", inviteeGuid);
                     return;
                 }
                 WorldPacket data(SMSG_GROUP_INVITE, 10);
@@ -1935,7 +1978,7 @@ void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const&
             std::memcpy(&inviteeGuid, payload.data(), 8);
             uint8 result = payload[8];
 
-            LOG_DEBUG("server.worldserver", "ProxyClient: Cross-node GROUP_INVITE_RESULT for invitee {:016X} result={}",
+            LOG_DEBUG("server.worldserver", "NatsBus: Cross-node GROUP_INVITE_RESULT for invitee {:016X} result={}",
                       inviteeGuid, result);
 
             // Queue the invite result to be processed on the game update thread.
@@ -1953,7 +1996,7 @@ void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const&
             std::memcpy(&guid,  payload.data(),     8);
             std::memcpy(&mapId, payload.data() + 8, 4);
 
-            LOG_DEBUG("server.worldserver", "ProxyClient: GROUP_REROUTE_TO_MAP GUID {:016X} → map {}", guid, mapId);
+            LOG_DEBUG("server.worldserver", "NatsBus: GROUP_REROUTE_TO_MAP GUID {:016X} → map {}", guid, mapId);
 
             sWorld->QueueCallback([guid, mapId]()
             {
@@ -1970,14 +2013,14 @@ void ProxyClient::HandleIncomingRelay(uint8 innerType, std::vector<uint8> const&
         }
 
         default:
-            LOG_WARN("server.worldserver", "ProxyClient: Unknown relay inner type 0x{:02X}", innerType);
+            LOG_WARN("server.worldserver", "NatsBus: Unknown relay inner type 0x{:02X}", innerType);
             break;
     }
 }
 
-void ProxyClient::HandleGroupUpdate(uint64 groupGuid, uint8 memberCount, std::vector<uint8> const& memberData)
+void NatsBus::HandleGroupUpdate(uint64 groupGuid, uint8 memberCount, std::vector<uint8> const& memberData)
 {
-    LOG_DEBUG("server.worldserver", "ProxyClient: GroupUpdate group {:016X} {} members", groupGuid, memberCount);
+    LOG_DEBUG("server.worldserver", "NatsBus: GroupUpdate group {:016X} {} members", groupGuid, memberCount);
     sClusterMgr.OnGroupUpdate(groupGuid, memberCount, memberData);
 
     // Trigger a full stats push from local players so remote group members
@@ -1995,15 +2038,15 @@ void ProxyClient::HandleGroupUpdate(uint64 groupGuid, uint8 memberCount, std::ve
     });
 }
 
-void ProxyClient::HandleGroupDisband(uint64 groupGuid)
+void NatsBus::HandleGroupDisband(uint64 groupGuid)
 {
-    LOG_DEBUG("server.worldserver", "ProxyClient: GroupDisband group {:016X}", groupGuid);
+    LOG_DEBUG("server.worldserver", "NatsBus: GroupDisband group {:016X}", groupGuid);
     sClusterMgr.OnGroupDisband(groupGuid);
 }
 
 // ── LFG relay send methods ────────────────────────────────────────────────────
 
-void ProxyClient::SendLFGJoinRelay(uint64 playerGuid, uint8 roles, std::vector<uint32> const& dungeons)
+void NatsBus::SendLFGJoinRelay(uint64 playerGuid, uint8 roles, std::vector<uint32> const& dungeons)
 {
     if (!_connected)
         return;
@@ -2035,7 +2078,7 @@ void ProxyClient::SendLFGJoinRelay(uint64 playerGuid, uint8 roles, std::vector<u
     PublishToNode(lfgMasterNodeId, MSG_CLUSTER_LFG_RELAY, msg.data(), static_cast<int>(msg.size()));
 }
 
-void ProxyClient::SendLFGLeaveRelay(uint64 playerGuid)
+void NatsBus::SendLFGLeaveRelay(uint64 playerGuid)
 {
     if (!_connected)
         return;
@@ -2054,7 +2097,7 @@ void ProxyClient::SendLFGLeaveRelay(uint64 playerGuid)
     PublishToNode(lfgMasterNodeId, MSG_CLUSTER_LFG_RELAY, msg.data(), static_cast<int>(msg.size()));
 }
 
-void ProxyClient::SendLFGProposalResultRelay(uint32 proposalId, uint64 playerGuid, bool accept)
+void NatsBus::SendLFGProposalResultRelay(uint32 proposalId, uint64 playerGuid, bool accept)
 {
     if (!_connected)
         return;
@@ -2076,7 +2119,7 @@ void ProxyClient::SendLFGProposalResultRelay(uint32 proposalId, uint64 playerGui
     PublishToNode(lfgMasterNodeId, MSG_CLUSTER_LFG_RELAY, msg.data(), static_cast<int>(msg.size()));
 }
 
-void ProxyClient::SendLFGRelayResponse(uint8 targetNodeId, uint8 innerType, std::vector<uint8> const& payload)
+void NatsBus::SendLFGRelayResponse(uint8 targetNodeId, uint8 innerType, std::vector<uint8> const& payload)
 {
     if (!_connected)
         return;
@@ -2095,7 +2138,7 @@ void ProxyClient::SendLFGRelayResponse(uint8 targetNodeId, uint8 innerType, std:
 
 // ── LFG relay incoming handlers ───────────────────────────────────────────────
 
-void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& payload)
+void NatsBus::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& payload)
 {
     if (payload.empty())
         return;
@@ -2128,7 +2171,7 @@ void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& p
             if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayerByGuid(guid))
                 teamId = info->teamId;
 
-            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_JOIN relay from node {} guid {:016X} roles={} dungeons={}",
+            LOG_DEBUG("server.worldserver", "NatsBus: LFG_INNER_JOIN relay from node {} guid {:016X} roles={} dungeons={}",
                       sourceNodeId, guid, roles, dungeons.size());
 
             // sLFGMgr is not thread-safe; post to world update thread.
@@ -2146,7 +2189,7 @@ void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& p
                 return;
             uint64 guid;
             std::memcpy(&guid, payload.data() + 1, 8);
-            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_LEAVE relay from node {} guid {:016X}", sourceNodeId, guid);
+            LOG_DEBUG("server.worldserver", "NatsBus: LFG_INNER_LEAVE relay from node {} guid {:016X}", sourceNodeId, guid);
             // sLFGMgr is not thread-safe; post to world update thread.
             sWorld->QueueCallback([guid]()
             {
@@ -2167,7 +2210,7 @@ void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& p
             uint64 guid;
             std::memcpy(&guid, payload.data() + 5, 8);
             bool accept = payload[13] != 0;
-            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_PROPOSAL_RESULT relay from node {} guid {:016X} proposal={} accept={}",
+            LOG_DEBUG("server.worldserver", "NatsBus: LFG_INNER_PROPOSAL_RESULT relay from node {} guid {:016X} proposal={} accept={}",
                       sourceNodeId, guid, proposalId, accept ? 1 : 0);
             // sLFGMgr is not thread-safe; post to world update thread.
             sWorld->QueueCallback([proposalId, guid, accept]()
@@ -2178,12 +2221,12 @@ void ProxyClient::HandleLFGRelay(uint8 sourceNodeId, std::vector<uint8> const& p
         }
 
         default:
-            LOG_WARN("server.worldserver", "ProxyClient: Unknown LFG relay inner type 0x{:02X}", innerType);
+            LOG_WARN("server.worldserver", "NatsBus: Unknown LFG relay inner type 0x{:02X}", innerType);
             break;
     }
 }
 
-void ProxyClient::HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> const& payload)
+void NatsBus::HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> const& payload)
 {
     switch (innerType)
     {
@@ -2201,21 +2244,21 @@ void ProxyClient::HandleLFGRelayResponse(uint8 innerType, std::vector<uint8> con
             uint16 port = static_cast<uint16>(payload[9 + addrLen]) |
                           (static_cast<uint16>(payload[10 + addrLen]) << 8);
 
-            LOG_DEBUG("server.worldserver", "ProxyClient: LFG_INNER_MATCH_NOTIFY guid {:016X} → {}:{}", guid, addr, port);
+            LOG_DEBUG("server.worldserver", "NatsBus: LFG_INNER_MATCH_NOTIFY guid {:016X} → {}:{}", guid, addr, port);
 
             // Reroute the local player to the instance server via the proxy.
             // No position params — the instance server will handle initial placement.
-            sProxyClient.SendReroute(guid, addr, port);
+            sNatsBus.SendReroute(guid, addr, port);
             break;
         }
 
         default:
-            LOG_WARN("server.worldserver", "ProxyClient: Unknown LFG relay response inner type 0x{:02X}", innerType);
+            LOG_WARN("server.worldserver", "NatsBus: Unknown LFG relay response inner type 0x{:02X}", innerType);
             break;
     }
 }
 
-void ProxyClient::DeliverPacketToPlayer(uint64 targetGuid, WorldPacket const& packet)
+void NatsBus::DeliverPacketToPlayer(uint64 targetGuid, WorldPacket const& packet)
 {
     if (!_connected)
         return;
@@ -2266,7 +2309,7 @@ void ProxyClient::DeliverPacketToPlayer(uint64 targetGuid, WorldPacket const& pa
     if (!info)
     {
         LOG_DEBUG("server.worldserver",
-                  "ProxyClient: DeliverPacketToPlayer — GUID {:016X} not in remote cache", targetGuid);
+                  "NatsBus: DeliverPacketToPlayer — GUID {:016X} not in remote cache", targetGuid);
         return;
     }
     uint8 targetNodeId = info->nodeId;
@@ -2286,7 +2329,7 @@ void ProxyClient::DeliverPacketToPlayer(uint64 targetGuid, WorldPacket const& pa
 
 // ── Outgoing: cluster unit update ─────────────────────────────────────────────
 
-void ProxyClient::SendClusterUnitUpdate(Player* player)
+void NatsBus::SendClusterUnitUpdate(Player* player)
 {
     if (!_connected || _nodeId == 0)
         return;
@@ -2348,12 +2391,12 @@ void ProxyClient::SendClusterUnitUpdate(Player* player)
 
 // ── Incoming: cluster unit update ─────────────────────────────────────────────
 
-void ProxyClient::HandleUnitUpdate(std::vector<uint8> const& payload)
+void NatsBus::HandleUnitUpdate(std::vector<uint8> const& payload)
 {
     static constexpr std::size_t FIXED_SIZE = 35; // see wire format
     if (payload.size() < FIXED_SIZE)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleUnitUpdate — payload too small ({})", payload.size());
+        LOG_WARN("server.worldserver", "NatsBus: HandleUnitUpdate — payload too small ({})", payload.size());
         return;
     }
 
@@ -2384,13 +2427,13 @@ void ProxyClient::HandleUnitUpdate(std::vector<uint8> const& payload)
         }
     }
 
-    LOG_DEBUG("server.worldserver", "ProxyClient: UnitUpdate GUID {:016X} HP {}/{}", state.guid, state.health, state.maxHealth);
+    LOG_DEBUG("server.worldserver", "NatsBus: UnitUpdate GUID {:016X} HP {}/{}", state.guid, state.health, state.maxHealth);
     sClusterMgr.UpdateUnitState(std::move(state));
 }
 
 // ── Outgoing: cross-node mail notification ────────────────────────────────────
 
-void ProxyClient::SendMailNotify(uint64 recipientGuid)
+void NatsBus::SendMailNotify(uint64 recipientGuid)
 {
     if (!_connected || _nodeId == 0)
         return;
@@ -2400,7 +2443,7 @@ void ProxyClient::SendMailNotify(uint64 recipientGuid)
     if (!info)
     {
         LOG_DEBUG("server.worldserver",
-                  "ProxyClient: SendMailNotify — GUID {:016X} not in remote cache", recipientGuid);
+                  "NatsBus: SendMailNotify — GUID {:016X} not in remote cache", recipientGuid);
         return;
     }
 
@@ -2410,7 +2453,7 @@ void ProxyClient::SendMailNotify(uint64 recipientGuid)
 }
 
 
-void ProxyClient::HandleAnnounceAck(std::vector<uint8> const& payload)
+void NatsBus::HandleAnnounceAck(std::vector<uint8> const& payload)
 {
     if (payload.size() < 1)
         return;
@@ -2422,16 +2465,16 @@ void ProxyClient::HandleAnnounceAck(std::vector<uint8> const& payload)
 
     _clusterRegistered = true;
     LOG_INFO("server.worldserver",
-             "ProxyClient: Cluster registration acknowledged by node {} — node {} is fully registered",
+             "NatsBus: Cluster registration acknowledged by node {} — node {} is fully registered",
              senderNodeId, _nodeId);
 }
 
 
 // ── Incoming: cross-node mail notification ────────────────────────────────────
 
-void ProxyClient::HandleIncomingMailNotify(uint64 recipientGuid)
+void NatsBus::HandleIncomingMailNotify(uint64 recipientGuid)
 {
-    LOG_DEBUG("server.worldserver", "ProxyClient: IncomingMailNotify for GUID {:016X}", recipientGuid);
+    LOG_DEBUG("server.worldserver", "NatsBus: IncomingMailNotify for GUID {:016X}", recipientGuid);
 
     sWorld->QueueCallback([recipientGuid]()
     {
@@ -2442,7 +2485,7 @@ void ProxyClient::HandleIncomingMailNotify(uint64 recipientGuid)
 
 // ── Outgoing: cross-node chat relay ───────────────────────────────────────────
 
-void ProxyClient::SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const& pkt)
+void NatsBus::SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket const& pkt)
 {
     if (!_connected || _nodeId == 0)
         return;
@@ -2471,13 +2514,13 @@ void ProxyClient::SendChatRelay(uint8 chatMsgType, uint32 zoneId, WorldPacket co
 
 // ── Incoming: cross-node chat relay ───────────────────────────────────────────
 
-void ProxyClient::HandleIncomingChat(std::vector<uint8> const& payload)
+void NatsBus::HandleIncomingChat(std::vector<uint8> const& payload)
 {
     // Payload layout: uint8 chatMsgType | uint32 zoneId | uint16 innerLen | uint8 inner[innerLen]
     static constexpr std::size_t HEADER_SIZE = 7; // 1 + 4 + 2
     if (payload.size() < HEADER_SIZE)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleIncomingChat — payload too small ({})", payload.size());
+        LOG_WARN("server.worldserver", "NatsBus: HandleIncomingChat — payload too small ({})", payload.size());
         return;
     }
 
@@ -2489,7 +2532,7 @@ void ProxyClient::HandleIncomingChat(std::vector<uint8> const& payload)
 
     if (payload.size() < HEADER_SIZE + innerLen)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleIncomingChat — truncated inner packet ({} < {})",
+        LOG_WARN("server.worldserver", "NatsBus: HandleIncomingChat — truncated inner packet ({} < {})",
                  payload.size(), HEADER_SIZE + innerLen);
         return;
     }
@@ -2500,7 +2543,7 @@ void ProxyClient::HandleIncomingChat(std::vector<uint8> const& payload)
     // Copy inner packet bytes into a vector for capture.
     std::vector<uint8> innerData(payload.begin() + HEADER_SIZE, payload.begin() + HEADER_SIZE + innerLen);
 
-    LOG_DEBUG("server.worldserver", "ProxyClient: IncomingChat msgType={} zone={} innerLen={}",
+    LOG_DEBUG("server.worldserver", "NatsBus: IncomingChat msgType={} zone={} innerLen={}",
               chatMsgType, zoneId, innerLen);
 
     sWorld->QueueCallback([zoneId, innerData = std::move(innerData)]()
@@ -2521,7 +2564,7 @@ void ProxyClient::HandleIncomingChat(std::vector<uint8> const& payload)
 
 // ── Outgoing: arena team stat broadcast ───────────────────────────────────────
 
-void ProxyClient::SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames, uint16 weekWins,
+void NatsBus::SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames, uint16 weekWins,
                                   uint16 seasonGames, uint16 seasonWins, uint32 rank)
 {
     if (!_connected || _nodeId == 0)
@@ -2559,14 +2602,14 @@ void ProxyClient::SendArenaResult(uint32 teamId, uint16 rating, uint16 weekGames
 
 // ── Incoming: arena team stat broadcast ───────────────────────────────────────
 
-void ProxyClient::HandleIncomingArenaResult(std::vector<uint8> const& payload)
+void NatsBus::HandleIncomingArenaResult(std::vector<uint8> const& payload)
 {
     // Payload: uint32 teamId | uint16 rating | uint16 weekGames | uint16 weekWins
     //          | uint16 seasonGames | uint16 seasonWins | uint32 rank  → 18 bytes
     static constexpr std::size_t EXPECTED = 18;
     if (payload.size() < EXPECTED)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleIncomingArenaResult — payload too small ({})", payload.size());
+        LOG_WARN("server.worldserver", "NatsBus: HandleIncomingArenaResult — payload too small ({})", payload.size());
         return;
     }
 
@@ -2585,7 +2628,7 @@ void ProxyClient::HandleIncomingArenaResult(std::vector<uint8> const& payload)
     std::memcpy(&seasonWins,  payload.data() + 12, 2);
     std::memcpy(&rank,        payload.data() + 14, 4);
 
-    LOG_DEBUG("server.worldserver", "ProxyClient: IncomingArenaResult team={} rating={} rank={}", teamId, rating, rank);
+    LOG_DEBUG("server.worldserver", "NatsBus: IncomingArenaResult team={} rating={} rank={}", teamId, rating, rank);
 
     sWorld->QueueCallback([teamId, rating, weekGames, weekWins, seasonGames, seasonWins, rank]()
     {
@@ -2615,7 +2658,7 @@ void ProxyClient::HandleIncomingArenaResult(std::vector<uint8> const& payload)
 
 // ── BG queue relay — outgoing ─────────────────────────────────────────────────
 
-void ProxyClient::SendBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam)
+void NatsBus::SendBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId, uint8 teamId, uint8 minPerTeam)
 {
     if (!_connected || _nodeId == 0)
         return;
@@ -2631,7 +2674,7 @@ void ProxyClient::SendBgQueueJoin(uint64 guid, uint32 bgTypeId, uint8 bracketId,
     PublishToNode(_bgCoordNodeId, MSG_CLUSTER_BG_QUEUE_JOIN, payload, 16);
 }
 
-void ProxyClient::SendBgQueueLeave(uint64 guid, uint32 bgTypeId)
+void NatsBus::SendBgQueueLeave(uint64 guid, uint32 bgTypeId)
 {
     if (!_connected || _nodeId == 0)
         return;
@@ -2643,7 +2686,7 @@ void ProxyClient::SendBgQueueLeave(uint64 guid, uint32 bgTypeId)
     PublishToNode(_bgCoordNodeId, MSG_CLUSTER_BG_QUEUE_LEAVE, payload, 12);
 }
 
-void ProxyClient::SendBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId)
+void NatsBus::SendBgInstCreated(uint32 matchId, uint32 instanceId, uint32 mapId, uint32 clientInstanceId)
 {
     if (!_connected || _nodeId == 0)
         return;
@@ -2659,13 +2702,13 @@ void ProxyClient::SendBgInstCreated(uint32 matchId, uint32 instanceId, uint32 ma
 
 // ── BG queue relay — incoming handlers ────────────────────────────────────────
 
-void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
+void NatsBus::HandleBgCreateInst(std::vector<uint8> const& payload)
 {
     // Payload: matchId(4)+bgTypeId(4)+bracketId(1)+allianceCount(1)+hordeCount(1)+guids
     static constexpr std::size_t HDR_SIZE = 11; // 4+4+1+1+1
     if (payload.size() < HDR_SIZE)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleBgCreateInst — payload too small ({})", payload.size());
+        LOG_WARN("server.worldserver", "NatsBus: HandleBgCreateInst — payload too small ({})", payload.size());
         return;
     }
 
@@ -2680,7 +2723,7 @@ void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
     std::size_t expectedSize = HDR_SIZE + static_cast<std::size_t>(allianceCount + hordeCount) * 8;
     if (payload.size() < expectedSize)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleBgCreateInst — payload size mismatch (got {} need {})",
+        LOG_WARN("server.worldserver", "NatsBus: HandleBgCreateInst — payload size mismatch (got {} need {})",
                  payload.size(), expectedSize);
         return;
     }
@@ -2693,7 +2736,7 @@ void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
     for (uint8 i = 0; i < hordeCount; ++i)
         std::memcpy(&hordeGuids[i],    payload.data() + HDR_SIZE + allianceCount * 8 + i * 8, 8);
 
-    LOG_INFO("server.worldserver", "ProxyClient: HandleBgCreateInst matchId={} bgType={} bracket={} ally={} horde={}",
+    LOG_INFO("server.worldserver", "NatsBus: HandleBgCreateInst matchId={} bgType={} bracket={} ally={} horde={}",
              matchId, bgTypeId, bracketId, allianceCount, hordeCount);
 
     sWorld->QueueCallback([matchId, bgTypeId, bracketId, allianceGuids = std::move(allianceGuids),
@@ -2703,7 +2746,7 @@ void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
         Battleground* bgt = sBattlegroundMgr->GetBattlegroundTemplate(bgType);
         if (!bgt)
         {
-            LOG_ERROR("server.worldserver", "ProxyClient: BgCreateInst matchId={} — no template for bgType {}", matchId, bgTypeId);
+            LOG_ERROR("server.worldserver", "NatsBus: BgCreateInst matchId={} — no template for bgType {}", matchId, bgTypeId);
             return;
         }
 
@@ -2711,7 +2754,7 @@ void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
                                                                               static_cast<BattlegroundBracketId>(bracketId));
         if (!bracketEntry)
         {
-            LOG_ERROR("server.worldserver", "ProxyClient: BgCreateInst matchId={} — no bracket {} for mapId {}",
+            LOG_ERROR("server.worldserver", "NatsBus: BgCreateInst matchId={} — no bracket {} for mapId {}",
                       matchId, bracketId, bgt->GetMapId());
             return;
         }
@@ -2719,7 +2762,7 @@ void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
         Battleground* bg = sBattlegroundMgr->CreateNewBattleground(bgType, bracketEntry, 0, false);
         if (!bg)
         {
-            LOG_ERROR("server.worldserver", "ProxyClient: BgCreateInst matchId={} — CreateNewBattleground failed for bgType {}", matchId, bgTypeId);
+            LOG_ERROR("server.worldserver", "NatsBus: BgCreateInst matchId={} — CreateNewBattleground failed for bgType {}", matchId, bgTypeId);
             return;
         }
 
@@ -2729,20 +2772,20 @@ void ProxyClient::HandleBgCreateInst(std::vector<uint8> const& payload)
         uint32 mapId            = bg->GetMapId();
         uint32 clientInstanceId = bg->GetClientInstanceID();
 
-        LOG_INFO("server.worldserver", "ProxyClient: BgCreateInst matchId={} → instanceId={} mapId={} clientId={}",
+        LOG_INFO("server.worldserver", "NatsBus: BgCreateInst matchId={} → instanceId={} mapId={} clientId={}",
                  matchId, instanceId, mapId, clientInstanceId);
 
-        sProxyClient.SendBgInstCreated(matchId, instanceId, mapId, clientInstanceId);
+        sNatsBus.SendBgInstCreated(matchId, instanceId, mapId, clientInstanceId);
     });
 }
 
-void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
+void NatsBus::HandleBgReady(std::vector<uint8> const& payload)
 {
     // Payload: instanceId(4)+bgTypeId(4)+mapId(4)+clientInstanceId(4)+count(1)+{guid(8)+team(1)}×count
     static constexpr std::size_t HDR_SIZE = 17; // 4+4+4+4+1
     if (payload.size() < HDR_SIZE)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — payload too small ({})", payload.size());
+        LOG_WARN("server.worldserver", "NatsBus: HandleBgReady — payload too small ({})", payload.size());
         return;
     }
 
@@ -2758,7 +2801,7 @@ void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
 
     if (payload.size() < HDR_SIZE + static_cast<std::size_t>(count) * 9)
     {
-        LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — payload size mismatch (got {} need {})",
+        LOG_WARN("server.worldserver", "NatsBus: HandleBgReady — payload size mismatch (got {} need {})",
                  payload.size(), HDR_SIZE + count * 9);
         return;
     }
@@ -2771,7 +2814,7 @@ void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
         players[i].teamId = payload[HDR_SIZE + i * 9 + 8];
     }
 
-    LOG_INFO("server.worldserver", "ProxyClient: HandleBgReady instanceId={} bgType={} mapId={} count={}",
+    LOG_INFO("server.worldserver", "NatsBus: HandleBgReady instanceId={} bgType={} mapId={} count={}",
              instanceId, bgTypeId, mapId, count);
 
     sWorld->QueueCallback([instanceId, bgTypeId, mapId, clientInstanceId,
@@ -2812,7 +2855,7 @@ void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
             Player* player = ObjectAccessor::FindConnectedPlayer(guid);
             if (!player)
             {
-                LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — player {:016X} not found locally", entry.guid);
+                LOG_WARN("server.worldserver", "NatsBus: HandleBgReady — player {:016X} not found locally", entry.guid);
                 continue;
             }
 
@@ -2822,7 +2865,7 @@ void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
             GroupQueueInfo ginfo;
             if (!bgQueue.GetPlayerGroupInfoData(player->GetGUID(), &ginfo))
             {
-                LOG_WARN("server.worldserver", "ProxyClient: HandleBgReady — player {} not in local queue", player->GetName());
+                LOG_WARN("server.worldserver", "NatsBus: HandleBgReady — player {} not in local queue", player->GetName());
                 continue;
             }
 
@@ -2856,7 +2899,7 @@ void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
                 player->GetGUID(), instanceId, bgType, bgQueueTypeId, removeTime);
             bgQueue.AddEvent(removeEvent, 60000u);
 
-            LOG_DEBUG("server.worldserver", "ProxyClient: BgReady — invited player {} instanceId={} team={}",
+            LOG_DEBUG("server.worldserver", "NatsBus: BgReady — invited player {} instanceId={} team={}",
                       player->GetName(), instanceId, entry.teamId);
         }
     });
@@ -2864,12 +2907,12 @@ void ProxyClient::HandleBgReady(std::vector<uint8> const& payload)
 
 // ── BG coordinator handlers (coordinator node only) ───────────────────────────
 
-void ProxyClient::HandleBgQueueJoin(std::vector<uint8> const& payload)
+void NatsBus::HandleBgQueueJoin(std::vector<uint8> const& payload)
 {
     // Payload: guid(8)+bgTypeId(4)+bracketId(1)+teamId(1)+minPerTeam(1) = 15 bytes
     if (payload.size() < 15)
     {
-        LOG_WARN("server.worldserver", "ProxyClient::HandleBgQueueJoin — payload too small ({})", payload.size());
+        LOG_WARN("server.worldserver", "NatsBus::HandleBgQueueJoin — payload too small ({})", payload.size());
         return;
     }
 
@@ -2891,7 +2934,7 @@ void ProxyClient::HandleBgQueueJoin(std::vector<uint8> const& payload)
 
     factionQueue.push_back({ guid, srcNodeId, teamId });
 
-    LOG_DEBUG("server.worldserver", "ProxyClient::HandleBgQueueJoin bgType={} bracket={} ally={} horde={} min={}",
+    LOG_DEBUG("server.worldserver", "NatsBus::HandleBgQueueJoin bgType={} bracket={} ally={} horde={} min={}",
               bgTypeId, bracketId, state.alliance.size(), state.horde.size(), state.minPlayersPerTeam);
 
     if (state.alliance.size() < state.minPlayersPerTeam ||
@@ -2917,7 +2960,7 @@ void ProxyClient::HandleBgQueueJoin(std::vector<uint8> const& payload)
     uint8 instNodeId = static_cast<uint8>(sClusterMgr.GetInstanceNodeId());
     if (instNodeId == 0)
     {
-        LOG_ERROR("server.worldserver", "ProxyClient::HandleBgQueueJoin matchId={} — no instance node, cannot create BG", matchId);
+        LOG_ERROR("server.worldserver", "NatsBus::HandleBgQueueJoin matchId={} — no instance node, cannot create BG", matchId);
         _pendingBgMatches.erase(matchId);
         return;
     }
@@ -2942,11 +2985,11 @@ void ProxyClient::HandleBgQueueJoin(std::vector<uint8> const& payload)
 
     PublishToNode(instNodeId, MSG_CLUSTER_BG_CREATE_INST, createPayload.data(), static_cast<int>(createPayload.size()));
 
-    LOG_INFO("server.worldserver", "ProxyClient::HandleBgQueueJoin matchId={} bgType={} bracket={} ally={} horde={} → inst node {}",
+    LOG_INFO("server.worldserver", "NatsBus::HandleBgQueueJoin matchId={} bgType={} bracket={} ally={} horde={} → inst node {}",
              matchId, bgTypeId, bracketId, allianceCount, hordeCount, instNodeId);
 }
 
-void ProxyClient::HandleBgQueueLeave(std::vector<uint8> const& payload)
+void NatsBus::HandleBgQueueLeave(std::vector<uint8> const& payload)
 {
     // Payload: guid(8)+bgTypeId(4) = 12 bytes
     if (payload.size() < 12)
@@ -2971,12 +3014,12 @@ void ProxyClient::HandleBgQueueLeave(std::vector<uint8> const& payload)
     }
 }
 
-void ProxyClient::HandleBgInstCreated(std::vector<uint8> const& payload)
+void NatsBus::HandleBgInstCreated(std::vector<uint8> const& payload)
 {
     // Payload: matchId(4)+instanceId(4)+mapId(4)+clientInstanceId(4) = 16 bytes
     if (payload.size() < 16)
     {
-        LOG_WARN("server.worldserver", "ProxyClient::HandleBgInstCreated — payload too small ({})", payload.size());
+        LOG_WARN("server.worldserver", "NatsBus::HandleBgInstCreated — payload too small ({})", payload.size());
         return;
     }
 
@@ -2989,7 +3032,7 @@ void ProxyClient::HandleBgInstCreated(std::vector<uint8> const& payload)
     auto it = _pendingBgMatches.find(matchId);
     if (it == _pendingBgMatches.end())
     {
-        LOG_WARN("server.worldserver", "ProxyClient::HandleBgInstCreated matchId={} not in pending matches", matchId);
+        LOG_WARN("server.worldserver", "NatsBus::HandleBgInstCreated matchId={} not in pending matches", matchId);
         return;
     }
     PendingBgMatch match = std::move(it->second);
@@ -3027,7 +3070,7 @@ void ProxyClient::HandleBgInstCreated(std::vector<uint8> const& payload)
 
         PublishToNode(targetNodeId, MSG_CLUSTER_BG_READY, readyPayload.data(), static_cast<int>(readyPayload.size()));
 
-        LOG_INFO("server.worldserver", "ProxyClient::HandleBgInstCreated matchId={} instanceId={} → node {} ({} players)",
+        LOG_INFO("server.worldserver", "NatsBus::HandleBgInstCreated matchId={} instanceId={} → node {} ({} players)",
                  matchId, instanceId, targetNodeId, count);
     }
 }

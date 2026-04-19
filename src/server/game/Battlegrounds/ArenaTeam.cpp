@@ -25,7 +25,7 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "ScriptMgr.h"
 #include "World.h"
 #include "WorldPacket.h"
@@ -519,8 +519,8 @@ void ArenaTeam::NotifyStatsChanged()
 
     // Relay updated stats to all other cluster nodes so their in-memory ArenaTeam objects
     // reflect the new rating without requiring a relog.
-    if (sProxyClient.IsConnected())
-        sProxyClient.SendArenaResult(TeamId, Stats.Rating, Stats.WeekGames, Stats.WeekWins,
+    if (sNatsBus.IsConnected())
+        sNatsBus.SendArenaResult(TeamId, Stats.Rating, Stats.WeekGames, Stats.WeekWins,
                                      Stats.SeasonGames, Stats.SeasonWins, Stats.Rank);
 }
 

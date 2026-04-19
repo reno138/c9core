@@ -15,8 +15,8 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef ProxyClient_h__
-#define ProxyClient_h__
+#ifndef NatsBus_h__
+#define NatsBus_h__
 
 #include "AuthDefines.h"
 #include "Define.h"
@@ -27,8 +27,8 @@
 #include <unordered_map>
 #include <vector>
 
-// Forward-declare nats.c opaque types so consumers of ProxyClient.h don't need
-// to include <nats.h> directly (the implementation is in ProxyClient.cpp).
+// Forward-declare nats.c opaque types so consumers of NatsBus.h don't need
+// to include <nats.h> directly (the implementation is in NatsBus.cpp).
 struct __natsConnection;
 struct __natsSubscription;
 struct __natsMsg;
@@ -56,17 +56,17 @@ class WorldLocation;
  *   cluster.announce     — startup broadcast for peer node discovery + routing table
  *
  * Cross-node player rerouting (cross-map travel) is handled by the proxy via
- * ProxyClient::SendReroute, which sends SMSG_TRANSFER_PENDING + SMSG_NEW_WORLD
+ * NatsBus::SendReroute, which sends SMSG_TRANSFER_PENDING + SMSG_NEW_WORLD
  * to the client through the native WoW map-transfer flow.
  */
-class ProxyClient
+class NatsBus
 {
 public:
     /// Re-announce this node after dynamic map change or failover.
     void PublishAnnounce();
-    static ProxyClient& Instance()
+    static NatsBus& Instance()
     {
-        static ProxyClient instance;
+        static NatsBus instance;
         return instance;
     }
 
@@ -272,8 +272,8 @@ public:
     static constexpr uint8 MSG_REDIRECT_TOKEN         = 0x29;  ///< redirect token for proxy-less transfer
 
 private:
-    ProxyClient() = default;
-    ~ProxyClient() = default;
+    NatsBus() = default;
+    ~NatsBus() = default;
 
     // ── NATS publish helpers ──────────────────────────────────────────────────
 
@@ -483,6 +483,6 @@ private:
     uint32 _nextBgMatchId{ 1 };
 };
 
-#define sProxyClient ProxyClient::Instance()
+#define sNatsBus NatsBus::Instance()
 
-#endif // ProxyClient_h__
+#endif // NatsBus_h__

@@ -27,7 +27,7 @@
 #include "MoveSplineInit.h"
 #include "ObjectMgr.h"
 #include "Player.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "Spell.h"
 #include "Transport.h"
 #include "SmartScriptMgr.h"
@@ -668,7 +668,7 @@ void FlightPathMovementGenerator::DoFinalize(Player* player)
     // not hosted by this cluster node, redirect them to the correct node.
     // For standard WoW taxi paths (per-continent) this never triggers, but
     // provides a safety net for custom content or unusual node configurations.
-    if (sProxyClient.IsConnected() && !sClusterMgr.IsMapLocal(player->GetMapId()))
+    if (sNatsBus.IsConnected() && !sClusterMgr.IsMapLocal(player->GetMapId()))
     {
         if (auto nodeInfo = sClusterMgr.GetNodeForMap(player->GetMapId()))
         {
@@ -688,7 +688,7 @@ void FlightPathMovementGenerator::DoFinalize(Player* player)
             stmt->SetData(5, static_cast<uint32>(0));
             stmt->SetData(6, player->GetGUID().GetCounter());
             CharacterDatabase.DirectExecute(stmt);
-            sProxyClient.SendReroute(player->GetGUID().GetRawValue(),
+            sNatsBus.SendReroute(player->GetGUID().GetRawValue(),
                                      nodeInfo->address, nodeInfo->port,
                                      pm, px, py, pz, po);
         }

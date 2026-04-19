@@ -17,7 +17,7 @@
 
 #include "Group.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "AreaDefines.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
@@ -817,8 +817,8 @@ void Group::Disband(bool hideDestroy /* = false */)
     sInstanceSaveMgr->DeleteInstanceSavedData(instanceId);
 
     // Cluster: notify other nodes that this group disbanded.
-    if (sProxyClient.IsConnected() && !isBGGroup() && !isBFGroup())
-        sProxyClient.SendGroupDisband(GetGUID().GetRawValue());
+    if (sNatsBus.IsConnected() && !isBGGroup() && !isBFGroup())
+        sNatsBus.SendGroupDisband(GetGUID().GetRawValue());
 
     sGroupMgr->RemoveGroup(this);
     delete this;
@@ -1762,11 +1762,11 @@ void Group::UpdatePlayerOutOfRange(Player* player)
             member->SendDirectMessage(&data);
     }
     // Deliver stats update to remote group members on other cluster nodes.
-    if (data.size() > 0 && sProxyClient.IsConnected())
+    if (data.size() > 0 && sNatsBus.IsConnected())
     {
         uint64 groupGuid = GetGUID().GetRawValue();
         for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(groupGuid))
-            sProxyClient.DeliverPacketToPlayer(rm.guid, data);
+            sNatsBus.DeliverPacketToPlayer(rm.guid, data);
     }
 }
 
@@ -1783,7 +1783,7 @@ void Group::BroadcastPacket(WorldPacket const* packet, bool ignorePlayersInBGRai
     }
 
     // Deliver to remote group members on other cluster nodes.
-    if (sProxyClient.IsConnected())
+    if (sNatsBus.IsConnected())
     {
         uint64 groupGuid = GetGUID().GetRawValue();
         for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(groupGuid))
@@ -1792,7 +1792,7 @@ void Group::BroadcastPacket(WorldPacket const* packet, bool ignorePlayersInBGRai
                 continue;
             if (group != -1 && rm.subgroup != static_cast<uint8>(group))
                 continue;
-            sProxyClient.DeliverPacketToPlayer(rm.guid, *packet);
+            sNatsBus.DeliverPacketToPlayer(rm.guid, *packet);
         }
     }
 }
@@ -2252,11 +2252,11 @@ void Group::BroadcastGroupUpdate(void)
     }
 
     // Cluster: broadcast membership state to all remote member nodes via proxy.
-    if (!sProxyClient.IsConnected())
+    if (!sNatsBus.IsConnected())
         return;
 
     uint64 groupGuid = GetGUID().GetRawValue();
-    uint8  localNode = sProxyClient.GetNodeId();
+    uint8  localNode = sNatsBus.GetNodeId();
 
     // Build member data: local members + remote members already tracked in ClusterMgr.
     std::vector<uint8> memberData;
@@ -2278,7 +2278,7 @@ void Group::BroadcastGroupUpdate(void)
     for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(groupGuid))
         pushMemberBytes(rm.guid, rm.subgroup, rm.roleFlags, rm.nodeId);
 
-    sProxyClient.SendGroupUpdate(groupGuid, memberData);
+    sNatsBus.SendGroupUpdate(groupGuid, memberData);
 }
 
 void Group::ResetMaxEnchantingLevel()

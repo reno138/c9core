@@ -20,7 +20,7 @@
 #include "Chat.h"
 #include "Config.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "CharacterCache.h"
 #include "Common.h"
 #include "DBCStores.h"
@@ -1931,13 +1931,13 @@ namespace lfg
             grp->AddLfgHeroicFlag();
 
         // Reroute remote cluster players (on other nodes) to the best available instance server.
-        if (sProxyClient.IsConnected())
+        if (sNatsBus.IsConnected())
         {
             // Ask the proxy dynamically for the best (least-recently-used) instance node.
             // Fall back to static config if the proxy query fails (e.g. during startup).
             std::string instanceAddr;
             uint16 instancePort = 0;
-            if (!sProxyClient.QueryBestInstanceAddress(instanceAddr, instancePort))
+            if (!sNatsBus.QueryBestInstanceAddress(instanceAddr, instancePort))
             {
                 instanceAddr = sConfigMgr->GetOption<std::string>("InstanceServer.Address", "127.0.0.1");
                 instancePort = static_cast<uint16>(sConfigMgr->GetOption<int32>("InstanceServer.Port", 8087));
@@ -1976,7 +1976,7 @@ namespace lfg
                 SetState(pguid, LFG_STATE_DUNGEON);
                 LOG_DEBUG("lfg", "LFGMgr::MakeNewGroup: Rerouting remote player [{}] to {}:{} map={}",
                           pguid.ToString(), instanceAddr, instancePort, dungeon->map);
-                sProxyClient.SendReroute(pguid.GetRawValue(), instanceAddr, instancePort,
+                sNatsBus.SendReroute(pguid.GetRawValue(), instanceAddr, instancePort,
                                          dungeon->map, entX, entY, entZ, entOri);
             }
         }
@@ -2845,13 +2845,13 @@ namespace lfg
             player->GetSession()->SendLfgRoleChosen(pguid, roles);
             return;
         }
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
         WorldPacket pkt(SMSG_LFG_ROLE_CHOSEN, 8 + 1 + 4);
         pkt << pguid;
         pkt << uint8(roles > 0);
         pkt << uint32(roles);
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgRoleCheckUpdate(ObjectGuid guid, LfgRoleCheck const& roleCheck)
@@ -2861,7 +2861,7 @@ namespace lfg
             player->GetSession()->SendLfgRoleCheckUpdate(roleCheck);
             return;
         }
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
 
         LfgDungeonSet dungeons;
@@ -2908,7 +2908,7 @@ namespace lfg
                 pkt << uint8(plevel);
             }
         }
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgUpdatePlayer(ObjectGuid guid, LfgUpdateData const& data)
@@ -2918,7 +2918,7 @@ namespace lfg
             player->GetSession()->SendLfgUpdatePlayer(data);
             return;
         }
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
 
         bool queued = false;
@@ -2949,7 +2949,7 @@ namespace lfg
                 pkt << uint32(d);
             pkt << data.comment;
         }
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgUpdateParty(ObjectGuid guid, LfgUpdateData const& data)
@@ -2959,7 +2959,7 @@ namespace lfg
             player->GetSession()->SendLfgUpdateParty(data);
             return;
         }
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
 
         bool join = false, queued = false;
@@ -2996,7 +2996,7 @@ namespace lfg
                 pkt << uint32(d);
             pkt << data.comment;
         }
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgJoinResult(ObjectGuid guid, LfgJoinResultData const& joinData)
@@ -3006,7 +3006,7 @@ namespace lfg
             player->GetSession()->SendLfgJoinResult(joinData);
             return;
         }
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
 
         uint32 size = 0;
@@ -3029,7 +3029,7 @@ namespace lfg
                 }
             }
         }
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgBootProposalUpdate(ObjectGuid guid, LfgPlayerBoot const& boot)
@@ -3039,7 +3039,7 @@ namespace lfg
             player->GetSession()->SendLfgBootProposalUpdate(boot);
             return;
         }
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
 
         auto voteIt = boot.votes.find(guid);
@@ -3065,7 +3065,7 @@ namespace lfg
         pkt << uint32(secsleft);
         pkt << uint32(LFG_GROUP_KICK_VOTES_NEEDED);
         pkt << boot.reason.c_str();
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     void LFGMgr::SendLfgUpdateProposal(ObjectGuid guid, LfgProposal const& proposal)
@@ -3077,7 +3077,7 @@ namespace lfg
         }
 
         // Remote player — build the packet from master's data and deliver via proxy.
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
 
         auto playerIt = proposal.players.find(guid);
@@ -3123,7 +3123,7 @@ namespace lfg
             data << uint8(pp.accept == LFG_ANSWER_AGREE);
         }
 
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), data);
     }
 
     void LFGMgr::SendLfgQueueStatus(ObjectGuid guid, LfgQueueStatusData const& queueData)
@@ -3133,7 +3133,7 @@ namespace lfg
             player->GetSession()->SendLfgQueueStatus(queueData);
             return;
         }
-        if (!sProxyClient.IsConnected())
+        if (!sNatsBus.IsConnected())
             return;
 
         WorldPacket pkt(SMSG_LFG_QUEUE_STATUS, 4 + 4 + 4 + 4 + 4 + 4 + 1 + 1 + 1 + 4);
@@ -3147,7 +3147,7 @@ namespace lfg
         pkt << uint8(queueData.healers);
         pkt << uint8(queueData.dps);
         pkt << uint32(queueData.queuedTime);
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), pkt);
     }
 
     bool LFGMgr::IsLfgGroup(ObjectGuid guid)

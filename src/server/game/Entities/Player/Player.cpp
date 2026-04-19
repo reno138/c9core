@@ -40,7 +40,7 @@
 #include "ConditionMgr.h"
 #include "Config.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "ClientRedirect.h"
 #include <random>
 #include "CreatureAI.h"
@@ -1593,9 +1593,9 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
             LOG_INFO("server.worldserver",
                      "TeleportTo far: player={} mapid={} IsMapLocal={} ProxyConnected={} PlayerLogout={}",
                      GetName(), mapid, sClusterMgr.IsMapLocal(mapid),
-                     sProxyClient.IsConnected(), GetSession()->PlayerLogout());
+                     sNatsBus.IsConnected(), GetSession()->PlayerLogout());
             if (!GetSession()->PlayerLogout()
-                && sProxyClient.IsConnected()
+                && sNatsBus.IsConnected()
                 && !sClusterMgr.IsMapLocal(mapid))
             {
                 // NOTE: transport detach is deferred to the end of this
@@ -1649,7 +1649,7 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 {
                     static std::mt19937 rng(std::random_device{}());
                     uint32 token = rng();
-                    sProxyClient.PublishRedirectToken(
+                    sNatsBus.PublishRedirectToken(
                         GetSession()->GetAccountId(),
                         GetGUID().GetRawValue(),
                         token,
@@ -1662,14 +1662,11 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     // the stale source coordinates.  Must be published BEFORE
                     // SMSG_REDIRECT_CLIENT so the NATS message is in flight
                     // (or already received) by the time the client reconnects.
-                    sProxyClient.SendPlayerTransferForRedirect(
+                    sNatsBus.SendPlayerTransferForRedirect(
                         this, destNode->nodeId, teleportStore_dest);
 
-                    // Resolve address (handles NAT if configured)
-                    auto [redirectIp, redirectPort] = ClientRedirect::ResolveRedirectAddress(
-                        GetSession()->GetRemoteAddress(),
-                        destNode->address, destNode->port,
-                        sClusterMgr.GetExternalAddress(), sClusterMgr.GetExternalPort());
+                    auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
+                        destNode->nodeId, GetSession()->GetRemoteAddress());
 
                     // Send SMSG_NEW_WORLD to put client into loading screen state
                     {
@@ -1712,8 +1709,8 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                         std::vector<uint8> payload(12);
                         std::memcpy(payload.data(),     &member.guid, 8);
                         std::memcpy(payload.data() + 8, &mapid,       4);
-                        sProxyClient.RelayToNode(member.nodeId,
-                                                 ProxyClient::GROUP_INNER_REROUTE_TO_MAP,
+                        sNatsBus.RelayToNode(member.nodeId,
+                                                 NatsBus::GROUP_INNER_REROUTE_TO_MAP,
                                                  payload);
                     }
                 }
@@ -2707,8 +2704,8 @@ void Player::GiveLevel(uint8 level)
 
     sScriptMgr->OnPlayerLevelChanged(this, oldLevel);
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 }
 
 bool Player::IsMaxLevel() const
@@ -3499,8 +3496,8 @@ void Player::learnSpell(uint32 spellId, bool temporary /*= false*/, bool learnFr
             learnSpell(itr2->first, temporary);
     }
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 }
 
 void Player::removeSpell(uint32 spell_id, uint8 removeSpecMask, bool onlyTemporary)
@@ -3967,8 +3964,8 @@ bool Player::resetTalents(bool noResetCost)
         m_resetTalentsTime = GameTime::GetGameTime().count();
     }
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 
     return true;
 }
@@ -4639,8 +4636,8 @@ void Player::ResurrectPlayer(float restore_percent, bool applySickness)
         }
     }
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 }
 
 void Player::KillPlayer()
@@ -4674,8 +4671,8 @@ void Player::KillPlayer()
     // update visibility
     //UpdateObjectVisibility(); // pussywizard: not needed
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 }
 
 void Player::OfflineResurrect(ObjectGuid const& guid, CharacterDatabaseTransaction trans)
@@ -9576,8 +9573,8 @@ void Player::Say(std::string_view text, Language language, WorldObject const* /*
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_SAY));
 
     // Relay to players on other cluster nodes in the same zone.
-    if (sProxyClient.IsConnected())
-        sProxyClient.SendChatRelay(CHAT_MSG_SAY, GetZoneId(), data);
+    if (sNatsBus.IsConnected())
+        sNatsBus.SendChatRelay(CHAT_MSG_SAY, GetZoneId(), data);
 }
 
 void Player::Say(uint32 textId, WorldObject const* target /*= nullptr*/)
@@ -9602,8 +9599,8 @@ void Player::Yell(std::string_view text, Language language, WorldObject const* /
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_YELL));
 
     // Relay to players on other cluster nodes in the same zone.
-    if (sProxyClient.IsConnected())
-        sProxyClient.SendChatRelay(CHAT_MSG_YELL, GetZoneId(), data);
+    if (sNatsBus.IsConnected())
+        sNatsBus.SendChatRelay(CHAT_MSG_YELL, GetZoneId(), data);
 }
 
 void Player::Yell(uint32 textId, WorldObject const* target /*= nullptr*/)
@@ -9628,8 +9625,8 @@ void Player::TextEmote(std::string_view text, WorldObject const* /*= nullptr*/, 
     Cell::VisitObjects(this, notifier, sWorld->getFloatConfig(CONFIG_LISTEN_RANGE_TEXTEMOTE));
 
     // Relay to players on other cluster nodes in the same zone.
-    if (sProxyClient.IsConnected())
-        sProxyClient.SendChatRelay(CHAT_MSG_EMOTE, GetZoneId(), data);
+    if (sNatsBus.IsConnected())
+        sNatsBus.SendChatRelay(CHAT_MSG_EMOTE, GetZoneId(), data);
 }
 
 void Player::TextEmote(uint32 textId, WorldObject const* target /*= nullptr*/, bool /*isBossEmote = false*/)
@@ -14317,8 +14314,8 @@ void Player::LearnTalent(uint32 talentId, uint32 talentRank, bool command /*= fa
 
     sScriptMgr->OnPlayerLearnTalents(this, talentId, talentRank, spellId);
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 }
 
 void Player::LearnPetTalent(ObjectGuid petGuid, uint32 talentId, uint32 talentRank)

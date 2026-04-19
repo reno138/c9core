@@ -29,7 +29,7 @@
 #include <thread>
 #include <vector>
 
-// Forward-declare nats.c opaque types (same pattern as ProxyClient.h).
+// Forward-declare nats.c opaque types (same pattern as NatsBus.h).
 struct __natsConnection;
 struct __natsSubscription;
 struct __natsMsg;

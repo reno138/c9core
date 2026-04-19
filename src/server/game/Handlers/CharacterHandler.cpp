@@ -53,7 +53,7 @@
 #include "ClientRedirect.h"
 #include <random>
 #include "PlayerTransfer.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "SharedPlayerCache.h"
 #include "SharedPlayerState.h"
 #include "SocialMgr.h"
@@ -776,14 +776,14 @@ void WorldSession::HandlePlayerLoginOpcode(WorldPacket& recvData)
             // Do NOT call HandlePlayerLoginToCharInWorld — it sends SMSG_LOGIN_VERIFY_WORLD
             // before verifying map locality, sending the client to the wrong node.
             // Instead, redirect the client directly to the owning node.
-            if (sProxyClient.IsConnected()
+            if (sNatsBus.IsConnected()
                 && !sClusterMgr.IsMapLocal(p->GetMapId()))
             {
                 uint32 const mapId = p->GetMapId();
                 sess->KickPlayer("GAP-1: offline session on non-local map, redirecting to correct node");
                 auto destNode = sClusterMgr.GetNodeForMap(mapId);
                 if (destNode)
-                    sProxyClient.SendReroute(p->GetGUID().GetRawValue(), destNode->address, destNode->port);
+                    sNatsBus.SendReroute(p->GetGUID().GetRawValue(), destNode->address, destNode->port);
                 return;
             }
 
@@ -829,9 +829,9 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     // Cluster: immediately broadcast this player's full state to all nodes.
     // Every node should know about every online player at all times.
     // This must happen before redirect checks so the dest node has data if we redirect.
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
     {
-        sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
+        sNatsBus.BroadcastPlayerTransferFull(pCurrChar);
         LOG_INFO("server.worldserver", "Cluster: Broadcast full state for {} to all nodes immediately after LoadFromDB", pCurrChar->GetName());
     }
 
@@ -845,7 +845,12 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         std::optional<ClusterNodeInfo> destNode;
         std::string reason;
 
-        uint32 checkMap = pCurrChar->GetMapId();   // from DB (saved synchronously before redirect)
+        // The NATS transfer carries the authoritative destination map and arrives
+        // before the client reconnects. The DB map may be stale — the teleporting
+        // node saves asynchronously and the write can lose the race. Use the
+        // transfer map when present; fall back to DB only for cold logins.
+        uint32 checkMap = sClusterMgr.PeekPendingTransferMapId(playerGuid.GetRawValue())
+                              .value_or(pCurrChar->GetMapId());
 
         LOG_INFO("server.worldserver", "CharacterHandler: checkMap={} IsMapLocal={} nodeId={} for player {}",
                  checkMap, sClusterMgr.IsMapLocal(checkMap), sClusterMgr.GetNodeId(), pCurrChar->GetName());
@@ -876,14 +881,14 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                                       pCurrChar->GetPositionY(),
                                       pCurrChar->GetPositionZ(),
                                       pCurrChar->GetOrientation());
-                sProxyClient.SendPlayerTransferForRedirect(
+                sNatsBus.SendPlayerTransferForRedirect(
                     pCurrChar, destNode->nodeId, destLoc);
             }
 
             // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
             static std::mt19937 rng(std::random_device{}());
             uint32 token = rng();
-            sProxyClient.PublishRedirectToken(GetAccountId(), charGuid, token,
+            sNatsBus.PublishRedirectToken(GetAccountId(), charGuid, token,
                                               destNode->nodeId, GetAddonsList());
 
             // Redirect client to destination node
@@ -1027,7 +1032,7 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     if (sClusterMgr.IsEnabled() && !hadNatsTransfer)
     {
         auto cachedState = sSharedPlayerCache.Get(playerGuid.GetRawValue());
-        if (cachedState && cachedState->ownerNodeId != sProxyClient.GetNodeId())
+        if (cachedState && cachedState->ownerNodeId != sNatsBus.GetNodeId())
         {
             LOG_INFO("server.worldserver", "Activating {} from shared cache (from node {})",
                      pCurrChar->GetName(), cachedState->ownerNodeId);
@@ -1093,13 +1098,13 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 
             // Update cache ownership to this node
             sSharedPlayerCache.UpdateFromPlayer(playerGuid.GetRawValue(), [](SharedPlayerState& s) {
-                s.ownerNodeId = sProxyClient.GetNodeId();
+                s.ownerNodeId = sNatsBus.GetNodeId();
                 s.active = true;
             });
 
             // Broadcast updated ownership + full transfer data
-            sProxyClient.BroadcastPlayerStateFull(playerGuid.GetRawValue());
-            sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
+            sNatsBus.BroadcastPlayerStateFull(playerGuid.GetRawValue());
+            sNatsBus.BroadcastPlayerTransferFull(pCurrChar);
         }
     }
 
@@ -1205,13 +1210,20 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         pCurrChar->SetSemaphoreTeleportFar(0);
 
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_CHAR_ONLINE);
-    stmt->SetData(0, pCurrChar->GetGUID().GetCounter());
+    stmt->SetData(0, sClusterMgr.GetNodeId());
+    stmt->SetData(1, pCurrChar->GetGUID().GetCounter());
     CharacterDatabase.Execute(stmt);
 
     LoginDatabasePreparedStatement* loginStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_ACCOUNT_ONLINE);
     loginStmt->SetData(0, realm.Id.Realm);
     loginStmt->SetData(1, GetAccountId());
     LoginDatabase.Execute(loginStmt);
+
+    // After a NATS transfer the source node saved asynchronously — the DB may
+    // still reflect the old map/position. Commit now so the DB is authoritative
+    // before any subsequent login or redirect decision reads it.
+    if (hadNatsTransfer)
+        pCurrChar->SaveToDB(false, false);
 
     pCurrChar->SetInGameTime(GameTime::GetGameTimeMS().count());
 
@@ -1245,8 +1257,8 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     sSocialMgr->SendFriendStatus(pCurrChar, FRIEND_ONLINE, pCurrChar->GetGUID(), true);
 
     // cluster: announce login to other worldserver nodes
-    if (sProxyClient.IsConnected())
-        sProxyClient.AnnounceOnline(pCurrChar);
+    if (sNatsBus.IsConnected())
+        sNatsBus.AnnounceOnline(pCurrChar);
 
     // Place character in world (and load zone) before some object loading
     pCurrChar->LoadCorpse(holder.GetPreparedResult(PLAYER_LOGIN_QUERY_LOAD_CORPSE_LOCATION));
@@ -1569,12 +1581,12 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
     m_playerLoading = false;
 
     // Cluster: populate shared cache with this player's initial state
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
     {
         SharedPlayerState state;
         state.guid = pCurrChar->GetGUID().GetRawValue();
         state.accountId = GetAccountId();
-        state.ownerNodeId = sProxyClient.GetNodeId();
+        state.ownerNodeId = sNatsBus.GetNodeId();
         state.active = true;
         state.mapId = pCurrChar->GetMapId();
         state.zoneId = pCurrChar->GetZoneId();
@@ -1606,9 +1618,9 @@ void WorldSession::HandlePlayerLoginToCharInWorld(Player* pCurrChar)
         }
 
         sSharedPlayerCache.StoreFullState(std::move(state));
-        sProxyClient.BroadcastPlayerStateFull(pCurrChar->GetGUID().GetRawValue());
-        sProxyClient.BroadcastPlayerTransferFull(pCurrChar);
-        sClusterMgr.SetPlayerOwner(pCurrChar->GetGUID().GetRawValue(), sProxyClient.GetNodeId());
+        sNatsBus.BroadcastPlayerStateFull(pCurrChar->GetGUID().GetRawValue());
+        sNatsBus.BroadcastPlayerTransferFull(pCurrChar);
+        sClusterMgr.SetPlayerOwner(pCurrChar->GetGUID().GetRawValue(), sNatsBus.GetNodeId());
 
         LOG_INFO("server.worldserver", "Cluster: Published initial state + full transfer for {} to all nodes", pCurrChar->GetName());
     }

@@ -24,16 +24,16 @@
 #include "ObjectMgr.h"
 #include "Opcodes.h"
 #include "Player.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
 static bool IsLFGNonMasterNode()
 {
-    if (!sProxyClient.IsConnected() || sProxyClient.GetNodeId() == 0)
+    if (!sNatsBus.IsConnected() || sNatsBus.GetNodeId() == 0)
         return false;
     uint8 masterNode = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
-    return sProxyClient.GetNodeId() != masterNode;
+    return sNatsBus.GetNodeId() != masterNode;
 }
 
 void BuildPlayerLockDungeonBlock(WorldPacket& data, lfg::LfgLockMap const& lock)
@@ -84,7 +84,7 @@ void WorldSession::HandleLfgJoinOpcode(WorldPackets::LFG::LFGJoin& packet)
     if (IsLFGNonMasterNode())
     {
         std::vector<uint32> dungeonVec(newDungeons.begin(), newDungeons.end());
-        sProxyClient.SendLFGJoinRelay(GetPlayer()->GetGUID().GetRawValue(), uint8(packet.Roles), dungeonVec);
+        sNatsBus.SendLFGJoinRelay(GetPlayer()->GetGUID().GetRawValue(), uint8(packet.Roles), dungeonVec);
         GetPlayer()->UpdateLFGChannel();
         return;
     }
@@ -107,7 +107,7 @@ void WorldSession::HandleLfgLeaveOpcode(WorldPackets::LFG::LFGLeave& /*packet*/)
         // On non-master cluster nodes relay the leave to the master.
         if (IsLFGNonMasterNode())
         {
-            sProxyClient.SendLFGLeaveRelay(guid.GetRawValue());
+            sNatsBus.SendLFGLeaveRelay(guid.GetRawValue());
             GetPlayer()->UpdateLFGChannel();
             return;
         }
@@ -130,7 +130,7 @@ void WorldSession::HandleLfgProposalResultOpcode(WorldPacket& recvData)
     // On non-master cluster nodes relay the proposal result to the master.
     if (IsLFGNonMasterNode())
     {
-        sProxyClient.SendLFGProposalResultRelay(proposalID, GetPlayer()->GetGUID().GetRawValue(), accept);
+        sNatsBus.SendLFGProposalResultRelay(proposalID, GetPlayer()->GetGUID().GetRawValue(), accept);
         return;
     }
 

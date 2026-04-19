@@ -93,7 +93,7 @@
 #include "WhoListCacheMgr.h"
 #include "ClusterMgr.h"
 #include "ObjectAccessor.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "WorldGlobals.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -1055,8 +1055,8 @@ void World::SetInitialWorldSettings()
 
     METRIC_EVENT("events", "World initialized", "World Initialized In " + std::to_string(startupDuration / 60000) + " Minutes " + std::to_string((startupDuration % 60000) / 1000) + " Seconds");
 
-    if (sProxyClient.IsConnected())
-        sProxyClient.SetWorldReady();
+    if (sNatsBus.IsConnected())
+        sNatsBus.SetWorldReady();
 
     if (sConfigMgr->isDryRun())
     {
@@ -1144,7 +1144,7 @@ void World::Update(uint32 diff)
         CharacterDatabase.Execute(stmt);
 
         // Cluster: send 10s heartbeat + 5min refresh to proxy when due.
-        sProxyClient.Update();
+        sNatsBus.Update();
     }
 
     ///- Update Who List Cache
@@ -1241,7 +1241,7 @@ void World::Update(uint32 diff)
     }
 
     // ── Cluster: process cross-node group invite results ───────────────────────
-    if (sProxyClient.IsConnected())
+    if (sNatsBus.IsConnected())
     {
         auto inviteResults = sClusterMgr.DrainInviteResults();
         for (auto const& res : inviteResults)
@@ -1308,7 +1308,7 @@ void World::Update(uint32 diff)
 
                 for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
                     if (Player* m = itr->GetSource())
-                        pushMember(m->GetGUID().GetRawValue(), sProxyClient.GetNodeId());
+                        pushMember(m->GetGUID().GetRawValue(), sNatsBus.GetNodeId());
 
                 pushMember(res.inviteeGuid, inviteeNodeId);
 
@@ -1316,7 +1316,7 @@ void World::Update(uint32 diff)
                 sClusterMgr.OnGroupUpdate(groupGuid, static_cast<uint8>(memberData.size() / 11), memberData);
 
                 // Broadcast to all member nodes via proxy.
-                sProxyClient.SendGroupUpdate(groupGuid, memberData);
+                sNatsBus.SendGroupUpdate(groupGuid, memberData);
 
                 LOG_DEBUG("server.worldserver", "World: Cross-node group accept: inviter {:016X} invitee {:016X} node={}",
                           invite.inviterGuid, res.inviteeGuid, inviteeNodeId);
@@ -1436,7 +1436,7 @@ void World::Update(uint32 diff)
 
     {
         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process pending callbacks"));
-        // Drain callbacks posted from I/O threads (e.g. ProxyClient → LFGMgr calls)
+        // Drain callbacks posted from I/O threads (e.g. NatsBus → LFGMgr calls)
         ProcessPendingCallbacks();
     }
 

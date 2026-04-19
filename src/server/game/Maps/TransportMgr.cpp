@@ -20,7 +20,7 @@
 #include "InstanceScript.h"
 #include "MapMgr.h"
 #include "MoveSpline.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "QueryResult.h"
 #include "Transport.h"
 #include <chrono>
@@ -383,7 +383,7 @@ MotionTransport* TransportMgr::CreateTransport(uint32 entry, ObjectGuid::LowType
     // Synchronise the spawn position to the real wall-clock (Unix epoch ms) so
     // all cluster nodes agree on transport positions regardless of when each
     // node process started.  If a peer-queried PathProgress is available (set
-    // by SpawnContinentTransports via ProxyClient::QueryTransportSync) it takes
+    // by SpawnContinentTransports via NatsBus::QueryTransportSync) it takes
     // precedence — giving perfect per-transport accuracy without any NTP dependency.
     //
     // Note: continent transports always have a non-zero DB guid; instance transports
@@ -494,9 +494,9 @@ void TransportMgr::SpawnContinentTransports()
     // This ensures all cluster nodes start transports at the same position,
     // with no dependency on the system clock.  If no peer responds within 500 ms
     // (first node, or cluster not yet running) we fall back to wall-clock timing.
-    if (sProxyClient.IsConnected())
+    if (sNatsBus.IsConnected())
     {
-        _spawnSyncData = sProxyClient.QueryTransportSync();
+        _spawnSyncData = sNatsBus.QueryTransportSync();
         if (!_spawnSyncData.empty())
             LOG_INFO("server.loading",
                      "TransportMgr: Received peer-sync data for {} transport(s) "

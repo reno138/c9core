@@ -102,7 +102,7 @@ public:
     virtual void QueueCliCommand(CliCommandHolder* commandHolder) = 0;
 
     /// Thread-safe: post a callback to be executed on the world update thread.
-    /// Safe to call from any thread (e.g. the ProxyClient Asio I/O thread).
+    /// Safe to call from any thread (e.g. the NatsBus Asio I/O thread).
     virtual void QueueCallback(std::function<void()> cb) = 0;
     virtual void ForceGameEventUpdate() = 0;
     virtual void UpdateRealmCharCount(uint32 accid) = 0;

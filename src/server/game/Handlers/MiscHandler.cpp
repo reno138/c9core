@@ -18,7 +18,7 @@
 #include "AccountMgr.h"
 #include "BattlefieldMgr.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CharacterPackets.h"
@@ -418,7 +418,7 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
     }
 
     // Aggregate remote players from other cluster nodes.
-    if (sProxyClient.IsConnected())
+    if (sNatsBus.IsConnected())
     {
         for (ClusterPlayerInfo const& info : sClusterMgr.GetAllRemotePlayers())
         {

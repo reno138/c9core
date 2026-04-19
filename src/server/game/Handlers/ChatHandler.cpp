@@ -20,7 +20,7 @@
 #include "ChannelMgr.h"
 #include "Chat.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "ChatPackets.h"
 #include "Common.h"
 #include "GameTime.h"
@@ -396,14 +396,14 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 if (!receiver)
                 {
                     // Check if the player is on another worldserver node.
-                    if (sProxyClient.IsConnected())
+                    if (sNatsBus.IsConnected())
                     {
                         if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayer(to))
                         {
                             Language whisperLang = (lang == LANG_ADDON) ? Language(lang) : LANG_UNIVERSAL;
                             WorldPacket data;
                             ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, whisperLang, sender, sender, msg);
-                            sProxyClient.DeliverPacketToPlayer(info->guid, data);
+                            sNatsBus.DeliverPacketToPlayer(info->guid, data);
                             ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER_INFORM, whisperLang, sender, sender, msg);
                             sender->SendDirectMessage(&data);
                             return;

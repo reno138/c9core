@@ -31,7 +31,7 @@
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -216,10 +216,10 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
 
         // Cluster mode: relay queue join to proxy for cross-node matching.
         // Skip ScheduleQueueUpdate so the local queue doesn't try to create BG instances.
-        if (sProxyClient.IsConnected())
+        if (sNatsBus.IsConnected())
         {
             uint8 minPerTeam = static_cast<uint8>(bg->GetMinPlayersPerTeam());
-            sProxyClient.SendBgQueueJoin(_player->GetGUID().GetRawValue(), bgTypeId,
+            sNatsBus.SendBgQueueJoin(_player->GetGUID().GetRawValue(), bgTypeId,
                                           static_cast<uint8>(bracketEntry->GetBracketId()),
                                           static_cast<uint8>(_player->GetTeamId()),
                                           minPerTeam);
@@ -305,12 +305,12 @@ void WorldSession::HandleBattlemasterJoinOpcode(WorldPacket& recvData)
 
         // Cluster mode: relay each group member's join to proxy for cross-node matching.
         // Skip ScheduleQueueUpdate so the local queue doesn't try to create BG instances.
-        if (sProxyClient.IsConnected())
+        if (sNatsBus.IsConnected())
         {
             uint8 minPerTeam = static_cast<uint8>(bg->GetMinPlayersPerTeam());
             grp->DoForAllMembers([bgTypeId, bracketEntry, minPerTeam](Player* member)
             {
-                sProxyClient.SendBgQueueJoin(member->GetGUID().GetRawValue(), bgTypeId,
+                sNatsBus.SendBgQueueJoin(member->GetGUID().GetRawValue(), bgTypeId,
                                               static_cast<uint8>(bracketEntry->GetBracketId()),
                                               static_cast<uint8>(member->GetTeamId()),
                                               minPerTeam);
@@ -477,7 +477,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
     {
         if (action)
         {
-            if (!sProxyClient.IsConnected())
+            if (!sNatsBus.IsConnected())
             {
                 LOG_DEBUG("bg.battleground", "CMSG_BATTLEFIELD_PORT {} BgType: {}: BG {} not found locally (not in cluster).",
                     GetPlayerInfo(), bgTypeId_, ginfo.IsInvitedToBGInstanceGUID);
@@ -664,12 +664,12 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
             LOG_DEBUG("bg.battleground", "Battleground: player {} {} left queue for bgtype {}, queue type {}.", player->GetName(), playerGuid.ToString(), bg->GetBgTypeID(), bgQueueTypeId);
 
             // Cluster mode: notify proxy that this player has left the BG queue.
-            if (sProxyClient.IsConnected())
-                sProxyClient.SendBgQueueLeave(playerGuid.GetRawValue(), static_cast<uint32>(bgTypeId));
+            if (sNatsBus.IsConnected())
+                sNatsBus.SendBgQueueLeave(playerGuid.GetRawValue(), static_cast<uint32>(bgTypeId));
         }
 
         // player left queue — skip ScheduleQueueUpdate in cluster mode (proxy handles all matching).
-        if (!ginfo.ArenaType && !sProxyClient.IsConnected())
+        if (!ginfo.ArenaType && !sNatsBus.IsConnected())
             sBattlegroundMgr->ScheduleQueueUpdate(ginfo.ArenaMatchmakerRating, ginfo.ArenaType, bgQueueTypeId, bgTypeId, bracketEntry->GetBracketId());
 
         // track if player refuses to join the BG after being invited

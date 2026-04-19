@@ -19,7 +19,7 @@
 #include "ClusterMgr.h"
 #include "DatabaseEnv.h"
 #include "Group.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "GroupMgr.h"
 #include "LFGMgr.h"
 #include "Language.h"
@@ -82,7 +82,7 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     Player* invitedPlayer = ObjectAccessor::FindPlayerByName(membername, false);
 
     // Check if invitee is on another cluster node.
-    if (!invitedPlayer && sProxyClient.IsConnected())
+    if (!invitedPlayer && sNatsBus.IsConnected())
     {
         if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayer(membername))
         {
@@ -100,7 +100,7 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
 
             // Route the relay to the target node (nodeId is populated from PLAYER_ONLINE broadcast).
             // inner_type 0x01 = CLUSTER_INNER_GROUP_INVITE.
-            sProxyClient.RelayToNode(info->nodeId, 0x01, payload);
+            sNatsBus.RelayToNode(info->nodeId, 0x01, payload);
 
             // Track the pending invite on this node keyed by invitee GUID, so when the
             // GROUP_INVITE_RESULT relays back we can find the inviter.
@@ -252,7 +252,7 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
     recvData.read_skip<uint32>();
 
     // Cross-node invite: no local group object exists — relay result back to inviter's node.
-    if (sProxyClient.IsConnected())
+    if (sNatsBus.IsConnected())
     {
         uint64 myGuid = GetPlayer()->GetGUID().GetRawValue();
         ClusterMgr::CrossNodeInvite crossInvite;
@@ -264,7 +264,7 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
             for (int i = 0; i < 8; ++i)
                 payload[i] = static_cast<uint8>((myGuid >> (i * 8)) & 0xFF);
             payload[8] = 1; // accepted
-            sProxyClient.RelayToNode(targetNodeId, 0x02, payload);
+            sNatsBus.RelayToNode(targetNodeId, 0x02, payload);
             return;
         }
     }
@@ -337,7 +337,7 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
 void WorldSession::HandleGroupDeclineOpcode(WorldPacket& /*recvData*/)
 {
     // Cross-node invite decline: relay result back to inviter's node.
-    if (sProxyClient.IsConnected())
+    if (sNatsBus.IsConnected())
     {
         uint64 myGuid = GetPlayer()->GetGUID().GetRawValue();
         ClusterMgr::CrossNodeInvite crossInvite;
@@ -349,7 +349,7 @@ void WorldSession::HandleGroupDeclineOpcode(WorldPacket& /*recvData*/)
             for (int i = 0; i < 8; ++i)
                 payload[i] = static_cast<uint8>((myGuid >> (i * 8)) & 0xFF);
             payload[8] = 0; // declined
-            sProxyClient.RelayToNode(targetNodeId, 0x02, payload);
+            sNatsBus.RelayToNode(targetNodeId, 0x02, payload);
             return;
         }
     }

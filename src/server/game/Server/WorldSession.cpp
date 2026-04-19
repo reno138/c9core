@@ -43,7 +43,7 @@
 #include "Player.h"
 #include "QueryHolder.h"
 #include "ScriptMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "ClusterMgr.h"
 #include "SharedPlayerCache.h"
 #include "SocialMgr.h"
@@ -648,7 +648,7 @@ void WorldSession::LogoutPlayer(bool save)
     // so just clear the semaphore and skip the worldport ack processing.
     bool _crossNodeReroute = false;
     if (_player && _player->IsBeingTeleportedFar()
-        && sProxyClient.IsConnected()
+        && sNatsBus.IsConnected()
         && !sClusterMgr.IsMapLocal(_player->GetTeleportDest().GetMapId()))
     {
         _crossNodeReroute = true;
@@ -802,8 +802,8 @@ void WorldSession::LogoutPlayer(bool save)
         }
 
         //! Broadcast a logout message to the player's friends
-        if (sProxyClient.IsConnected())
-            sProxyClient.AnnounceOffline(_player->GetGUID().GetRawValue());
+        if (sNatsBus.IsConnected())
+            sNatsBus.AnnounceOffline(_player->GetGUID().GetRawValue());
         sSocialMgr->SendFriendStatus(_player, FRIEND_OFFLINE, _player->GetGUID(), true);
         sSocialMgr->RemovePlayerSocial(_player->GetGUID());
 

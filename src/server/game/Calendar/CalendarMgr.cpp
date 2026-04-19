@@ -23,7 +23,7 @@
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "QueryResult.h"
 #include <unordered_map>
 
@@ -529,8 +529,8 @@ void CalendarMgr::SendCalendarEventInvite(CalendarInvite const& invite)
         ObjectGuid senderGuid = invite.GetSenderGUID();
         if (Player* player = ObjectAccessor::FindConnectedPlayer(senderGuid))
             player->SendDirectMessage(&data);
-        else if (sProxyClient.IsConnected())
-            sProxyClient.DeliverPacketToPlayer(senderGuid.GetRawValue(), data);
+        else if (sNatsBus.IsConnected())
+            sNatsBus.DeliverPacketToPlayer(senderGuid.GetRawValue(), data);
     }
     else
     {
@@ -630,8 +630,8 @@ void CalendarMgr::SendCalendarEventInviteAlert(CalendarEvent const& calendarEven
         ObjectGuid inviteeGuid = invite.GetInviteeGUID();
         if (Player* player = ObjectAccessor::FindConnectedPlayer(inviteeGuid))
             player->SendDirectMessage(&data);
-        else if (sProxyClient.IsConnected())
-            sProxyClient.DeliverPacketToPlayer(inviteeGuid.GetRawValue(), data);
+        else if (sNatsBus.IsConnected())
+            sNatsBus.DeliverPacketToPlayer(inviteeGuid.GetRawValue(), data);
     }
 }
 
@@ -639,7 +639,7 @@ void CalendarMgr::SendCalendarEvent(ObjectGuid guid, CalendarEvent const& calend
 {
     // If player is not on this node, build packet and deliver via cluster proxy.
     Player* player = ObjectAccessor::FindConnectedPlayer(guid);
-    bool isRemote = !player && sProxyClient.IsConnected();
+    bool isRemote = !player && sNatsBus.IsConnected();
     if (!player && !isRemote)
         return;
 
@@ -683,7 +683,7 @@ void CalendarMgr::SendCalendarEvent(ObjectGuid guid, CalendarEvent const& calend
     if (player)
         player->SendDirectMessage(&data);
     else
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendCalendarEventInviteRemoveAlert(ObjectGuid guid, CalendarEvent const& calendarEvent, CalendarInviteStatus status)
@@ -696,8 +696,8 @@ void CalendarMgr::SendCalendarEventInviteRemoveAlert(ObjectGuid guid, CalendarEv
 
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->SendDirectMessage(&data);
-    else if (sProxyClient.IsConnected())
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
+    else if (sNatsBus.IsConnected())
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendCalendarClearPendingAction(ObjectGuid guid)
@@ -706,8 +706,8 @@ void CalendarMgr::SendCalendarClearPendingAction(ObjectGuid guid)
 
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->SendDirectMessage(&data);
-    else if (sProxyClient.IsConnected())
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
+    else if (sNatsBus.IsConnected())
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendCalendarCommandResult(ObjectGuid guid, CalendarError err, char const* param /*= nullptr*/)
@@ -730,8 +730,8 @@ void CalendarMgr::SendCalendarCommandResult(ObjectGuid guid, CalendarError err, 
 
     if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         player->SendDirectMessage(&data);
-    else if (sProxyClient.IsConnected())
-        sProxyClient.DeliverPacketToPlayer(guid.GetRawValue(), data);
+    else if (sNatsBus.IsConnected())
+        sNatsBus.DeliverPacketToPlayer(guid.GetRawValue(), data);
 }
 
 void CalendarMgr::SendPacketToAllEventRelatives(WorldPacket packet, CalendarEvent const& calendarEvent)
@@ -751,11 +751,11 @@ void CalendarMgr::SendPacketToAllEventRelatives(WorldPacket packet, CalendarEven
             if (!calendarEvent.IsGuildEvent() || player->GetGuildId() != calendarEvent.GetGuildId())
                 player->SendDirectMessage(&packet);
         }
-        else if (!calendarEvent.IsGuildEvent() && sProxyClient.IsConnected())
+        else if (!calendarEvent.IsGuildEvent() && sNatsBus.IsConnected())
         {
             // Remote invitee on another node (non-guild events only; guild members
             // were already covered by BroadcastPacketCrossNode above).
-            sProxyClient.DeliverPacketToPlayer(inviteeGuid.GetRawValue(), packet);
+            sNatsBus.DeliverPacketToPlayer(inviteeGuid.GetRawValue(), packet);
         }
     }
 }

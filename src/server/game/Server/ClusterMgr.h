@@ -34,8 +34,8 @@
  * @brief Network identity and map ownership of a peer cluster node.
  *
  * Populated from cluster.announce broadcasts on NATS startup.
- * Used by ProxyClient to route targeted messages directly to the correct
- * node without involving the proxy, and by ProxyClient::SendReroute
+ * Used by NatsBus to route targeted messages directly to the correct
+ * node without involving the proxy, and by NatsBus::SendReroute
  * to obtain the destination IP:port for cross-node player redirection.
  */
 struct ClusterNodeInfo
@@ -43,8 +43,8 @@ struct ClusterNodeInfo
     uint8       nodeId{ 0 };
     std::string address;            ///< LAN IP (e.g. "192.0.2.71")
     uint16      port{ 0 };          ///< WoW game port (typically 8086)
-    std::string externalAddress;    ///< Public/NAT IP for external clients (empty = no NAT)
-    uint16      externalPort{ 0 };  ///< Public port for external clients (0 = same as port)
+    std::string redirectAddress;    ///< Address sent to clients in SMSG_REDIRECT_CLIENT (empty = use LAN address)
+    uint16      redirectPort{ 0 };  ///< Port sent to clients in SMSG_REDIRECT_CLIENT (0 = use game port)
     uint8       type{ 0 };          ///< 0 = regular worldserver, 1 = instance server
     std::unordered_set<uint32> maps; ///< mapIds served by this node
     std::unordered_set<uint32> zones; ///< zoneIds served (empty = all zones on owned maps)
@@ -77,7 +77,7 @@ struct ClusterPlayerInfo
 /**
  * @brief Worldserver-side cache of players on other cluster nodes.
  *
- * All mutating methods are called from ProxyClient (io_context thread).
+ * All mutating methods are called from NatsBus (io_context thread).
  * Read methods (Find*) may be called from the game update loop — protected
  * by a shared_mutex for concurrent reads.
  */
@@ -92,7 +92,7 @@ public:
         return instance;
     }
 
-    // ── Cache updates (called by ProxyClient on io_context thread) ────────────
+    // ── Cache updates (called by NatsBus on io_context thread) ────────────
 
     /// A player on another node just logged in.
     void OnRemotePlayerOnline(uint64 guid, std::string name,
@@ -117,7 +117,7 @@ public:
 
     // ── Peer node routing table ───────────────────────────────────────────────
 
-    /// Register or update a peer node (called from ProxyClient on NATS announce).
+    /// Register or update a peer node (called from NatsBus on NATS announce).
     /// @return true if this was a revival of a previously-dead node.
     bool RegisterRemoteNode(ClusterNodeInfo info);
 
@@ -264,6 +264,9 @@ public:
     /// Retrieve and remove a pending transfer (one-shot consumption).
     std::optional<PlayerTransferData> TakePendingTransfer(uint64 guid);
 
+    /// Peek at the mapId of a pending transfer without consuming it.
+    std::optional<uint32> PeekPendingTransferMapId(uint64 guid);
+
     // ── Client redirect (proxy-less transfers) ──────────────────────────────
 
     /// Pending redirect token from a source node, validated when client reconnects.
@@ -287,8 +290,8 @@ public:
     /// This node's config
     std::string GetGameAddress() const;
     uint16 GetGamePort() const;
-    std::string GetExternalAddress() const;
-    uint16 GetExternalPort() const;
+    std::string GetRedirectAddress() const;
+    uint16 GetRedirectPort() const;
     uint8 GetNodeId() const;
 
     /// @return true if verbose packet + state trace logging is currently
@@ -350,8 +353,8 @@ private:
     // ── This node's config ───────────────────────────────────────────────
     std::string _gameAddress;
     uint16 _gamePort{ 0 };
-    std::string _externalAddress;
-    uint16 _externalPort{ 0 };
+    std::string _redirectAddress;
+    uint16 _redirectPort{ 0 };
     uint8 _nodeId{ 0 };
 
     // ── Packet tracing (diagnostic, see PacketTrace.h) ───────────────────

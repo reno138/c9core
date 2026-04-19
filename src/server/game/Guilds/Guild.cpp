@@ -19,7 +19,7 @@
 #include "Bag.h"
 #include "CalendarMgr.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "Config.h"
@@ -2133,12 +2133,12 @@ void Guild::BroadcastToGuild(WorldSession* session, bool officerOnly, std::strin
                 if (_HasRankRight(player, officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN) && !player->GetSocial()->HasIgnore(session->GetPlayer()->GetGUID()))
                     player->SendDirectMessage(&data);
             }
-            else if (sProxyClient.IsConnected() && sClusterMgr.FindRemotePlayerByGuid(member.GetGUID().GetRawValue()))
+            else if (sNatsBus.IsConnected() && sClusterMgr.FindRemotePlayerByGuid(member.GetGUID().GetRawValue()))
             {
                 // Member is online on another node — deliver if rank permits.
                 uint32 rights = _GetRankRights(member.GetRankId());
                 if (rights & (officerOnly ? GR_RIGHT_OFFCHATLISTEN : GR_RIGHT_GCHATLISTEN))
-                    sProxyClient.DeliverPacketToPlayer(member.GetGUID().GetRawValue(), data);
+                    sNatsBus.DeliverPacketToPlayer(member.GetGUID().GetRawValue(), data);
             }
         }
     }
@@ -2165,8 +2165,8 @@ void Guild::BroadcastPacketCrossNode(WorldPacket const* packet) const
     {
         if (Player* player = member.FindPlayer())
             player->SendDirectMessage(packet);
-        else if (sProxyClient.IsConnected())
-            sProxyClient.DeliverPacketToPlayer(member.GetGUID().GetRawValue(), *packet);
+        else if (sNatsBus.IsConnected())
+            sNatsBus.DeliverPacketToPlayer(member.GetGUID().GetRawValue(), *packet);
     }
 }
 

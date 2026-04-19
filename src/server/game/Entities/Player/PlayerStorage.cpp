@@ -27,7 +27,7 @@
 #include "Common.h"
 #include "ClusterMgr.h"
 #include "Config.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
 #include "GameEventMgr.h"
@@ -2903,8 +2903,8 @@ Item* Player::EquipItem(uint16 pos, Item* pItem, bool update)
     sScriptMgr->OnPlayerEquip(this, pItem, bag, slot, update);
     UpdateForQuestWorldObjects();
 
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
-        sProxyClient.BroadcastPlayerTransferFull(this);
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
+        sNatsBus.BroadcastPlayerTransferFull(this);
 
     return pItem;
 }

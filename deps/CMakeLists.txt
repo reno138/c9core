@@ -49,8 +49,8 @@ if (BUILD_TOOLS_MAPS)
 endif()
 
 # ── NATS C client (cluster control-channel transport) ────────────────────────
-# Used by proxyserver (NatsBus) and worldserver (ProxyClient).
-if (BUILD_APPLICATION_WORLDSERVER OR BUILD_APPLICATION_PROXYSERVER)
+# Used by worldserver (ProxyClient).
+if (BUILD_APPLICATION_WORLDSERVER)
   include(FetchContent)
   FetchContent_Declare(cnats
     GIT_REPOSITORY https://github.com/nats-io/nats.c.git

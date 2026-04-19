@@ -25,7 +25,7 @@
 #include "GridNotifiers.h"
 #include "Group.h"
 #include "ClusterMgr.h"
-#include "ProxyClient.h"
+#include "NatsBus.h"
 #include "SharedPlayerCache.h"
 #include "ClientRedirect.h"
 #include "ObjectAccessor.h"
@@ -453,7 +453,7 @@ void Player::Update(uint32 p_time)
     SendUpdateToOutOfRangeGroupMembers();
 
     // ── Cluster unit update (cross-node party frame sync) ─────────────────
-    if (sProxyClient.IsConnected() && sProxyClient.GetNodeId() != 0)
+    if (sNatsBus.IsConnected() && sNatsBus.GetNodeId() != 0)
     {
         if (m_clusterUnitUpdateTimer <= p_time)
         {
@@ -466,7 +466,7 @@ void Player::Update(uint32 p_time)
                 bool hasRemote = false;
                 for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(grp->GetGUID().GetRawValue()))
                 {
-                    if (rm.nodeId != sProxyClient.GetNodeId())
+                    if (rm.nodeId != sNatsBus.GetNodeId())
                     {
                         hasRemote = true;
                         break;
@@ -476,13 +476,13 @@ void Player::Update(uint32 p_time)
                 if (hasRemote)
                 {
                     // Send our own stats so remote nodes can display us
-                    sProxyClient.SendClusterUnitUpdate(this);
+                    sNatsBus.SendClusterUnitUpdate(this);
 
                     // Synthesise SMSG_PARTY_MEMBER_STATS for each remote group member
                     // so that the local client can display their unit frames
                     for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(grp->GetGUID().GetRawValue()))
                     {
-                        if (rm.nodeId == sProxyClient.GetNodeId())
+                        if (rm.nodeId == sNatsBus.GetNodeId())
                             continue; // local — handled normally
 
                         ClusterMgr::ClusterUnitState state;
@@ -588,21 +588,21 @@ void Player::Update(uint32 p_time)
             m_zoneTransferDwellZone = 0;
 
             auto destNode = sClusterMgr.GetNodeForZone(targetZone);
-            if (destNode && sProxyClient.IsConnected())
+            if (destNode && sNatsBus.IsConnected())
             {
                 LOG_INFO("server.worldserver",
                          "Player {} zone transfer: zone {} -> node {} ({}:{}) [dwell expired]",
                          GetName(), targetZone, destNode->nodeId, destNode->address, destNode->port);
 
                 // 1. Send actual transfer data to SPECIFIC dest node (not broadcast)
-                sProxyClient.SendPlayerTransferSeamless(this, destNode->nodeId,
+                sNatsBus.SendPlayerTransferSeamless(this, destNode->nodeId,
                     destNode->address, destNode->port);
 
                 // 2. Broadcast state sync so all OTHER nodes update their cache
-                sProxyClient.BroadcastPlayerStateFull(GetGUID().GetRawValue());
+                sNatsBus.BroadcastPlayerStateFull(GetGUID().GetRawValue());
 
                 // 3. Claim ownership on destination
-                sProxyClient.ClaimPlayer(GetGUID().GetRawValue());
+                sNatsBus.ClaimPlayer(GetGUID().GetRawValue());
 
                 // 3. Generate redirect token and publish to dest node
                 // NOTE: Do NOT send SMSG_SUSPEND_COMMS before SMSG_REDIRECT_CLIENT!
@@ -610,7 +610,7 @@ void Player::Update(uint32 p_time)
                 // skips the redirect entirely if it's set. Just send the redirect directly.
                 static std::mt19937 rng(std::random_device{}());
                 uint32 token = rng();
-                sProxyClient.PublishRedirectToken(GetSession()->GetAccountId(),
+                sNatsBus.PublishRedirectToken(GetSession()->GetAccountId(),
                                                   GetGUID().GetRawValue(), token, destNode->nodeId);
 
                 // 4. Redirect client to destination node (client disconnects + reconnects)
@@ -639,13 +639,13 @@ void Player::Update(uint32 p_time)
         m_zoneTransferCooldown = (m_zoneTransferCooldown > p_time) ? m_zoneTransferCooldown - p_time : 0;
 
     // Cluster: periodic full state refresh (cold tier — every 2 minutes)
-    if (sClusterMgr.IsEnabled() && sProxyClient.IsConnected())
+    if (sClusterMgr.IsEnabled() && sNatsBus.IsConnected())
     {
         m_clusterFullRefreshTimer += p_time;
         if (m_clusterFullRefreshTimer >= CLUSTER_FULL_REFRESH_MS)
         {
             m_clusterFullRefreshTimer = 0;
-            sProxyClient.BroadcastPlayerTransferFull(this);
+            sNatsBus.BroadcastPlayerTransferFull(this);
         }
     }
 
@@ -1533,7 +1533,7 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     // is done when the dwell EXPIRES (in Player::Update), not here — because
     // UpdateZone only fires on zone change and won't retry if cooldown was active.
     if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
-        && sProxyClient.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
+        && sNatsBus.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
         && !GetVehicle() && !IsBeingTeleportedFar())
     {
@@ -2680,7 +2680,7 @@ void Player::ProcessSpellQueue()
 
 void Player::BroadcastClusterStateIfDirty(uint32 diff)
 {
-    if (!sClusterMgr.IsEnabled() || !sProxyClient.IsConnected())
+    if (!sClusterMgr.IsEnabled() || !sNatsBus.IsConnected())
         return;
 
     m_clusterStateBroadcastTimer += diff;
@@ -2699,7 +2699,7 @@ void Player::BroadcastClusterStateIfDirty(uint32 diff)
     uint64 playerGuid = GetGUID().GetRawValue();
     sSharedPlayerCache.UpdateFromPlayer(playerGuid, [this, dirtyMask](SharedPlayerState& s) {
         s.guid = GetGUID().GetRawValue();
-        s.ownerNodeId = sProxyClient.GetNodeId();
+        s.ownerNodeId = sNatsBus.GetNodeId();
         s.active = true;
 
         if (dirtyMask & STATE_FIELD_POSITION)
@@ -2768,5 +2768,5 @@ void Player::BroadcastClusterStateIfDirty(uint32 diff)
     });
 
     // Broadcast delta to all nodes
-    sProxyClient.BroadcastPlayerStateDelta(playerGuid, dirtyMask);
+    sNatsBus.BroadcastPlayerStateDelta(playerGuid, dirtyMask);
 }
