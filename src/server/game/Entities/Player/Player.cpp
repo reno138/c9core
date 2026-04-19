@@ -1668,18 +1668,11 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
                         destNode->nodeId, GetSession()->GetRemoteAddress());
 
-                    // Send SMSG_NEW_WORLD to put client into loading screen state
-                    {
-                        WorldPacket data(SMSG_NEW_WORLD, 20);
-                        data << uint32(mapid);
-                        data << float(teleportStore_dest.GetPositionX());
-                        data << float(teleportStore_dest.GetPositionY());
-                        data << float(teleportStore_dest.GetPositionZ());
-                        data << float(teleportStore_dest.GetOrientation());
-                        GetSession()->SendPacket(&data);
-                    }
-
-                    // Send SMSG_REDIRECT_CLIENT — client opens second connection to dest
+                    // Do NOT send SMSG_NEW_WORLD before the redirect. Sending it puts the
+                    // client into a loading-screen state while transport DelayedTeleportTransport
+                    // may still fire SMSG_DESTROY_OBJECT for transport NPCs — this races and
+                    // causes a 0xC0000005 crash in the client. The destination node handles
+                    // full world initialization when the client reconnects.
                     ClientRedirect::RedirectClient(GetSession(), redirectIp, redirectPort, token);
 
                     // Send SMSG_SUSPEND_COMMS (0x50F) on the SOURCE (current) connection.
