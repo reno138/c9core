@@ -215,6 +215,7 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
     }
 
     session->SendPacket(&data);
+    session->SetRedirectPending();
 
     LOG_INFO("server.worldserver", "ClientRedirect: Sent SMSG_REDIRECT_CLIENT to {} -> {}:{} (token=0x{:08X})",
              session->GetPlayer() ? session->GetPlayer()->GetName() : "<unknown>",

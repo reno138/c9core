@@ -3025,7 +3025,11 @@ void WorldObject::DestroyForVisiblePlayers()
     {
         Player* player = itr->second;
 
-        DestroyForPlayer(player);
+        // Skip SMSG_DESTROY_OBJECT for players mid-redirect: their source session is
+        // closing and the destination node provides a complete fresh world state on
+        // reconnect, so these packets would only race against the loading screen.
+        if (!player->GetSession() || !player->GetSession()->IsRedirectPending())
+            DestroyForPlayer(player);
 
         // Clean up visibility references now
         itr = GetObjectVisibilityContainer().UnlinkVisibilityFromWorldObject(player, itr);

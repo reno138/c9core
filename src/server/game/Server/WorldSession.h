@@ -403,6 +403,8 @@ public:
     bool PlayerLogout() const { return m_playerLogout; }
     bool PlayerRecentlyLoggedOut() const { return m_playerRecentlyLogout; }
     bool PlayerLogoutWithSave() const { return m_playerLogout && m_playerSave; }
+    bool IsRedirectPending() const { return m_redirectPending; }
+    void SetRedirectPending() { m_redirectPending = true; }
 
     void ReadAddonsInfo(ByteBuffer& data);
     void SendAddonsInfo();
@@ -1272,6 +1274,7 @@ private:
     bool m_playerLogout;                                // code processed in LogoutPlayer
     bool m_playerRecentlyLogout;
     bool m_playerSave;
+    bool m_redirectPending;                             // SMSG_REDIRECT_CLIENT sent; suppress SMSG_DESTROY_OBJECT until session closes
     LocaleConstant m_sessionDbcLocale;
     LocaleConstant m_sessionDbLocaleIndex;
     std::atomic<uint32> m_latency;
