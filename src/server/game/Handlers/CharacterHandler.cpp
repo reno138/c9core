@@ -859,6 +859,24 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         if (destNode)
         {
             uint64 const charGuid = pCurrChar->GetGUID().GetRawValue();
+
+            // If this session arrived via SMSG_REDIRECT_CLIENT the client is already
+            // in mid-redirect state and cannot handle a second SMSG_REDIRECT_CLIENT —
+            // it crashes with ERROR #134. Disconnect cleanly instead; the client will
+            // reconnect cold to the realm and be re-redirected safely from a clean state.
+            if (GetRedirectAutoLoginGuid() != 0)
+            {
+                LOG_WARN("server.worldserver",
+                         "Player {} arrived via redirect but landed on wrong node ({}). "
+                         "Disconnecting without re-redirect to avoid client crash.",
+                         pCurrChar->GetName(), reason);
+                SetPlayer(nullptr);
+                delete pCurrChar;
+                m_playerLoading = false;
+                KickPlayer("wrong-node mid-redirect: disconnect to force clean cold reconnect");
+                return;
+            }
+
             LOG_INFO("server.worldserver", "Player {} on wrong node ({}), redirecting to node {} ({}:{})",
                      pCurrChar->GetName(), reason, destNode->nodeId, destNode->address, destNode->port);
 
