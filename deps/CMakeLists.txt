@@ -49,15 +49,31 @@ if (BUILD_TOOLS_MAPS)
 endif()
 
 # ── NATS C client (cluster control-channel transport) ────────────────────────
-# Used by worldserver (ProxyClient).
+# Vendored at deps/cnats (nats.c v3.8.0). Used by worldserver (NatsBus) and
+# clustermgr (NatsMonitor). EXCLUDE_FROM_ALL suppresses upstream install rules
+# so libnats_static.a and nats headers don't pollute ${CMAKE_INSTALL_PREFIX};
+# the game library still pulls nats_static in via target_link_libraries.
 if (BUILD_APPLICATION_WORLDSERVER)
-  include(FetchContent)
-  FetchContent_Declare(cnats
-    GIT_REPOSITORY https://github.com/nats-io/nats.c.git
-    GIT_TAG        v3.8.0)
-  set(NATS_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
-  set(NATS_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
-  set(NATS_BUILD_STREAMING OFF CACHE BOOL "" FORCE)
-  set(NATS_BUILD_WITH_TLS  OFF CACHE BOOL "" FORCE)
-  FetchContent_MakeAvailable(cnats)
+  set(NATS_BUILD_EXAMPLES   OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_LIB_SHARED OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_LIB_STATIC ON  CACHE BOOL "" FORCE)
+  set(NATS_BUILD_STREAMING  OFF CACHE BOOL "" FORCE)
+  set(NATS_BUILD_WITH_TLS   OFF CACHE BOOL "" FORCE)
+  set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
+  add_subdirectory(cnats EXCLUDE_FROM_ALL)
+
+  # Vendored nats.c forces -std=c99 in NATS_COMMON_C_FLAGS but uses C11
+  # _Generic throughout the source. Override here so the compiler accepts
+  # it without 60+ -Wc11-extensions warnings. Also silence a handful of
+  # const-qualifier warnings in upstream code we don't maintain.
+  if (TARGET nats_static)
+    target_compile_options(nats_static PRIVATE
+      -std=c11
+      -Wno-incompatible-pointer-types-discards-qualifiers)
+  endif()
+
+  # NATS broker (Go source vendored at deps/nats-server, v2.10.24).
+  # Built via the host Go toolchain; produces a static binary installed to
+  # ${CMAKE_INSTALL_PREFIX}/bin/nats-server with a starter config in etc/.
+  add_subdirectory(nats-server)
 endif()

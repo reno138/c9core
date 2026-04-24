@@ -1,0 +1,37 @@
+# =============================================================================
+# C9Core cluster control-channel broker (NATS)
+# =============================================================================
+# Run with:  nats-server -c nats-server.conf
+#
+# Worldserver and clustermgr connect to this broker via ClusterServer.NatsURL.
+# Default URL in worldserver.conf.dist is nats://127.0.0.1:4222 — change
+# `host` below to a LAN-reachable IP and update each node's NatsURL when
+# the broker runs on a different host than the worldserver.
+
+# Listen address for client connections.
+host: "0.0.0.0"
+port: 4222
+
+# Server identity.
+server_name: "c9core-broker"
+
+# HTTP monitoring endpoint (varz, connz, subsz, routez). Bind to localhost
+# unless you've fronted it with auth — it exposes connection details and
+# subject names. Set port to -1 to disable entirely.
+http: "127.0.0.1:8222"
+
+# Operational caps.
+max_connections: 1024
+max_payload: 8MB
+max_pending: 64MB
+ping_interval: "30s"
+ping_max: 3
+
+# Logging — uncomment log_file to capture to disk; otherwise logs go to stdout.
+# log_file: "/var/log/nats-server.log"
+debug: false
+trace: false
+logtime: true
+
+# Optional write-ahead PID file for systemd/init scripts.
+# pid_file: "/var/run/nats-server.pid"

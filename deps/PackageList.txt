@@ -27,6 +27,15 @@ jsonpath (JSONPath implementation in Bash for filtering, merging and modifying J
   https://github.com/mclarkson/JSONPath.sh.git
   Version: 0.0.14
 
+nats.c (C client for the NATS messaging system, used for cluster control channel)
+  https://github.com/nats-io/nats.c
+  Version: v3.8.0
+
+nats-server (NATS messaging broker, vendored Go source — built via host Go toolchain)
+  https://github.com/nats-io/nats-server
+  Version: v2.10.24
+  Build dependency: Go >= 1.21
+
 libMPQ (a library for reading MPQ files)
   https://libmpq.org/
   Version: 0.4.2
