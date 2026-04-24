@@ -4791,15 +4791,38 @@ Respawn.ForceCompatibilityMode = 0
 # INSTANCE SERVER MODE
 #
 #    InstanceServer.Enable
-#        Description: Run this worldserver as an instance server.
-#                     When enabled, only instanced maps (dungeons, raids, battlegrounds, arenas)
-#                     are loaded. Continent maps are skipped entirely.
-#                     This server should NOT be listed in the realmlist — clients connect via
-#                     the proxy server, which routes them here transparently.
+#        Description: Legacy single-purpose instance-server mode (pre-cluster). When enabled,
+#                     MapMgr skips loading non-instanceable maps, BattlefieldMgr is disabled,
+#                     and World init skips global state for continent zones — i.e. this server
+#                     ONLY hosts dungeons/raids/BGs/arenas.
+#                     For cluster-aware instance routing, use ClusterServer.InstanceServer
+#                     instead — it does NOT disable continent map loading and works with the
+#                     pool/reservation systems that depend on the full map set.
 #        Default:     0 - (Normal worldserver mode)
-#                     1 - (Instance server mode)
+#                     1 - (Legacy instance-only mode)
 
 InstanceServer.Enable = 0
+
+#
+#    InstanceServer.Address
+#        Description: LFG fallback address. When the LFG matchmaker forms a group whose
+#                     dungeon lives on a remote instance node, it normally asks the cluster
+#                     (via NATS) for the least-loaded instance node's address. If that query
+#                     fails (e.g. during startup before peers are discovered), it falls back
+#                     to this static address for the SMSG_REDIRECT_CLIENT sent to grouped
+#                     players. Set to a reachable instance node's IP/host.
+#        Default:     "127.0.0.1"
+
+InstanceServer.Address = "127.0.0.1"
+
+#
+#    InstanceServer.Port
+#        Description: LFG fallback port — paired with InstanceServer.Address. Used in the
+#                     same NATS-query-fallback path. Should match the WorldServerPort of
+#                     the configured instance node.
+#        Default:     8087
+
+InstanceServer.Port = 8087
 
 #
 ###################################################################################################
@@ -4807,15 +4830,10 @@ InstanceServer.Enable = 0
 ###################################################################################################
 # CLUSTER SERVER
 #
-#    ClusterServer.Enable
-#        Description: Enable cluster mode. When enabled this worldserver joins a NATS-based
-#                     cluster and participates in cross-node player routing, BG queues, chat
-#                     relay, and group updates. Set to 0 for standalone (single-node) operation.
-#        Default:     0 - (Disabled — standalone)
-#                     1 - (Enabled)
-
-ClusterServer.Enable = 0
-
+# Cluster mode is always on in c9core — there is no master enable flag.
+# A worldserver becomes a cluster participant by virtue of having a NodeId
+# and a reachable NatsURL. Set ClusterServer.Maps = "" and run a single node
+# for "standalone" behavior (one node owns all maps).
 #
 #    ClusterServer.NodeId
 #        Description: Unique integer ID for this node within the cluster. Must be distinct
@@ -4893,23 +4911,17 @@ ClusterServer.Maps = ""
 ClusterServer.Zones = ""
 
 #
-#    ClusterServer.InstanceNode
-#        Description: Set to 1 if this node is an instance server (handles dungeons/raids/BGs
-#                     only). Instance nodes are excluded from BG coordinator election and do
-#                     not claim orphaned maps from dead nodes.
-#        Default:     0 - (Regular world node)
-#                     1 - (Instance node)
+#    ClusterServer.InstanceServer
+#        Description: Designates this node as the cluster's instance handler. When set,
+#                     ClusterMgr ignores ClusterServer.Maps and claims ALL instanceable maps
+#                     (dungeons, raids, battlegrounds, arenas) for routing. Continent maps
+#                     are still loaded — this is the cluster-aware mode and is the correct
+#                     flag for a multi-node cluster's instance node. Do NOT use this
+#                     together with InstanceServer.Enable (the legacy global flag).
+#        Default:     0 - (Regular world node — owns maps from ClusterServer.Maps)
+#                     1 - (Instance node — owns all instanceable maps)
 
-ClusterServer.InstanceNode = 0
-
-#
-#    ClusterServer.BgCoordinator
-#        Description: Set to 1 to allow this node to act as BG queue coordinator.
-#                     The coordinator is elected as the lowest-ID alive non-instance node.
-#                     Typically all non-instance nodes should have this enabled.
-#        Default:     1
-
-ClusterServer.BgCoordinator = 1
+ClusterServer.InstanceServer = 0
 
 #
 #    ClusterServer.BgCoordinatorNode
@@ -4926,24 +4938,6 @@ ClusterServer.BgCoordinatorNode = 1
 #        Default:     1
 
 ClusterServer.LFGMasterNode = 1
-
-#
-#    ClusterServer.LfgCoordinator
-#        Description: Set to 1 to allow this node to coordinate LFG matching.
-#                     Only the LFGMasterNode actually runs the queue; others relay to it.
-#        Default:     1
-
-ClusterServer.LfgCoordinator = 1
-
-#
-#    ClusterServer.ClaimOrphanedMaps
-#        Description: Set to 1 to allow this node to claim maps from a dead peer node.
-#                     The lowest-ID alive non-instance node automatically claims orphaned maps
-#                     so players can still reach those zones during a partial cluster outage.
-#                     Set to 0 on instance nodes or nodes that should never serve extra maps.
-#        Default:     1
-
-ClusterServer.ClaimOrphanedMaps = 1
 
 #
 #    ClusterServer.NodeDeadThreshold
