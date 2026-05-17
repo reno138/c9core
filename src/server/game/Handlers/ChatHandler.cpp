@@ -17,6 +17,7 @@
 
 #include "AccountMgr.h"
 #include "CellImpl.h"
+#include "RBAC.h"
 #include "ChannelMgr.h"
 #include "Chat.h"
 #include "ClusterMgr.h"
@@ -114,7 +115,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
     }
 
     // pussywizard: chatting on most chat types requires 2 hours played to prevent spam/abuse
-    if (AccountMgr::IsPlayerAccount(GetSecurity()))
+    if (!HasPermission(rbac::RBAC_PERM_SKIP_CHECK_CHAT_CHANNEL_REQ))
     {
         switch (type)
         {
@@ -384,8 +385,8 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 }
 
                 Player* receiver = ObjectAccessor::FindPlayerByName(to, false);
-                bool senderIsPlayer = AccountMgr::IsPlayerAccount(GetSecurity());
-                bool receiverIsPlayer = AccountMgr::IsPlayerAccount(receiver ? receiver->GetSession()->GetSecurity() : SEC_PLAYER);
+                bool senderIsPlayer = !HasPermission(rbac::RBAC_PERM_TWO_SIDE_INTERACTION_CHAT);
+                bool receiverIsPlayer = receiver ? !receiver->GetSession()->HasPermission(rbac::RBAC_PERM_TWO_SIDE_INTERACTION_CHAT) : true;
 
                 if (sender->GetLevel() < sWorld->getIntConfig(CONFIG_CHAT_WHISPER_LEVEL_REQ) && receiver != sender && receiver && !receiver->IsGameMaster())
                 {
@@ -395,7 +396,9 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
 
                 if (!receiver)
                 {
-                    // Check if the player is on another worldserver node.
+                    // c9core cluster: if no local receiver, try to
+                    // forward the whisper to the player's node before
+                    // giving up.
                     if (sNatsBus.IsConnected())
                     {
                         if (ClusterPlayerInfo const* info = sClusterMgr.FindRemotePlayer(to))
@@ -413,7 +416,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                     return;
                 }
 
-                if (senderIsPlayer && !receiverIsPlayer && !receiver->isAcceptWhispers() && !receiver->IsInWhisperWhiteList(sender->GetGUID()))
+                if (lang != LANG_ADDON && !receiver->isAcceptWhispers() && receiver->GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !receiver->IsInWhisperWhiteList(sender->GetGUID()))
                 {
                     SendPlayerNotFoundNotice(to);
                     return;
@@ -426,7 +429,6 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                         return;
                     }
 
-                // pussywizard: optimization
                 if (GetPlayer()->HasAura(1852) && !receiver->IsGameMaster())
                 {
                     ChatHandler(this).SendNotification(LANG_GM_SILENCE, GetPlayer()->GetName());
@@ -434,7 +436,9 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
                 }
 
                 // If player is a Gamemaster and doesn't accept whisper, we auto-whitelist every player that the Gamemaster is talking to
-                if (!senderIsPlayer && !sender->isAcceptWhispers() && !sender->IsInWhisperWhiteList(receiver->GetGUID()))
+                // We also do that if a player is under the required level for whispers.
+                if (receiver->GetLevel() < sWorld->getIntConfig(CONFIG_CHAT_WHISPER_LEVEL_REQ) ||
+                    (HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !sender->isAcceptWhispers() && !sender->IsInWhisperWhiteList(receiver->GetGUID())))
                     sender->AddWhisperWhiteList(receiver->GetGUID());
 
                 GetPlayer()->Whisper(msg, Language(lang), receiver);
@@ -576,7 +580,7 @@ void WorldSession::HandleMessagechatOpcode(WorldPacket& recvData)
             break;
         case CHAT_MSG_CHANNEL:
             {
-                if (AccountMgr::IsPlayerAccount(GetSecurity()))
+                if (!HasPermission(rbac::RBAC_PERM_SKIP_CHECK_CHAT_CHANNEL_REQ))
                 {
                     if (sender->GetLevel() < sWorld->getIntConfig(CONFIG_CHAT_CHANNEL_LEVEL_REQ))
                     {
