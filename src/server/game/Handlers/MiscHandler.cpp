@@ -408,8 +408,10 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         ++displaycount;
     }
 
-    // Cross-faction /who gate for remote players. The upstream declaration was
-    // dropped in the merge while the cluster block below still relies on it.
+    // Cross-faction /who gate + requester security for the remote-player block.
+    // Both declarations were dropped in the merge while the cluster block below
+    // still relies on them.
+    AccountTypes security = GetSecurity();
     bool allowTwoSideWhoList = HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST);
 
     // Aggregate remote players from other cluster nodes.

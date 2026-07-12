@@ -493,7 +493,7 @@ void WorldSession::HandleBattleFieldPortOpcode(WorldPacket& recvData)
             }
 
             // Deserter debuff blocks BG entry.
-            if (ginfo.ArenaType == 0 && !_player->CanJoinToBattleground())
+            if (ginfo.ArenaType == 0 && !_player->CanJoinToBattleground(bgt))
             {
                 WorldPacket errData;
                 sBattlegroundMgr->BuildGroupJoinedBattlegroundPacket(&errData, ERR_GROUP_JOIN_BATTLEGROUND_DESERTERS);
