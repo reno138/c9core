@@ -408,6 +408,10 @@ void WorldSession::HandleWhoOpcode(WorldPacket& recvData)
         ++displaycount;
     }
 
+    // Cross-faction /who gate for remote players. The upstream declaration was
+    // dropped in the merge while the cluster block below still relies on it.
+    bool allowTwoSideWhoList = HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST);
+
     // Aggregate remote players from other cluster nodes.
     if (sNatsBus.IsConnected())
     {

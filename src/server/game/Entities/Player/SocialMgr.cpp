@@ -306,6 +306,9 @@ void SocialMgr::BroadcastToFriendListers(Player* player, WorldPacket* packet)
 
     TeamId teamId = player->GetTeamId();
     AccountTypes gmLevelInWhoList = AccountTypes(sWorld->getIntConfig(CONFIG_GM_LEVEL_IN_WHO_LIST));
+    // Cross-faction gate for the cross-node friend-status block below (restored:
+    // dropped in the merge). Uses the broadcasting player's session permission.
+    bool allowTwoSideWhoList = player->GetSession() && player->GetSession()->HasPermission(rbac::RBAC_PERM_TWO_SIDE_WHO_LIST);
 
     for (auto const& itr : m_socialMap)
     {
