@@ -3,6 +3,7 @@
  */
 
 #include "ClientRedirect.h"
+#include "ClusterMgr.h"
 #include "WorldSession.h"
 #include "WorldPacket.h"
 #include "Opcodes.h"
@@ -82,7 +83,10 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
          hmacInput, sizeof(hmacInput),
          hmacResult, &hmacLen);
 
-    // === DETAILED REDIRECT DEBUG LOGGING ===
+    // === DETAILED REDIRECT DEBUG LOGGING (ClusterServer.RedirectDebug) ===
+    // RE scaffolding: dumps session-key material and HMAC inputs. Off by
+    // default — never enable on a production node (see conf security note).
+    if (sClusterMgr.IsRedirectDebugEnabled())
     {
         // Log FULL session key (40 bytes)
         std::string skHex;
@@ -158,7 +162,10 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
     data << uint32(token);                    // Token
     data.append(hmacResult, 20);              // HMAC-SHA1 proof
 
-    // DIAGNOSTIC: Also log what the HMAC would be with REVERSED session key
+    // DIAGNOSTIC: candidate HMAC variants (ClusterServer.RedirectDebug).
+    // Computed only for log comparison during RE — none of these is sent; the
+    // transmitted proof is hmacResult, built above. Off by default.
+    if (sClusterMgr.IsRedirectDebugEnabled())
     {
         SessionKey reversedKey;
         for (size_t i = 0; i < sessionKey.size(); ++i)

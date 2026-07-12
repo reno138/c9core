@@ -4989,4 +4989,27 @@ ClusterServer.MgmtPlayersInterval = 3
 ClusterServer.PacketTrace.Enable = 0
 
 #
+#    ClusterServer.RedirectDebug
+#        Description: Verbose diagnostics for cross-node client redirects, emitted
+#                     from ClientRedirect::RedirectClient on every redirect when
+#                     enabled. Logs the full account session key, the HMAC input
+#                     bytes, and five candidate HMAC variants (reverse-key,
+#                     key+token, byte-swapped ip/port, and auth-seed-only) that
+#                     were used to reverse-engineer the 3.3.5a client's redirect
+#                     handshake. Output goes to logger "server.worldserver".
+#                     This does NOT change the packet sent to the client — the
+#                     transmitted HMAC proof is the same whether enabled or not;
+#                     only logging (and the extra throwaway HMAC computations) is
+#                     gated. Reads live: change it and run ".reload config" to
+#                     toggle without restarting.
+#                     SECURITY: enabling this writes the raw 40-byte session key
+#                     to the log on every transfer. Never enable on a production
+#                     node with real accounts — use only for protocol debugging
+#                     on an isolated test realm.
+#        Default:     0 - (Disabled)
+#                     1 - (Enabled)
+
+ClusterServer.RedirectDebug = 0
+
+#
 ###################################################################################################

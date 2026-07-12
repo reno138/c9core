@@ -295,6 +295,16 @@ void World::LoadConfigSettings(bool reload)
     VMAP::VMapFactory::createOrGetVMapMgr()->setEnableHeightCalc(enableHeight);
     LOG_INFO("server.loading", "WORLD: VMap support included. LineOfSight:{}, getHeight:{}, indoorCheck:{} PetLOS:{}", enableLOS, enableHeight, enableIndoor, enablePetLOS);
 
+    // Refresh cached cluster tunables so ".reload config" applies them live
+    // (redirect-debug / packet-trace flags and the NatsBus interval/node cache).
+    // Only on reload — at startup these are primed by ClusterMgr::LoadLocalMaps
+    // and NatsBus::Initialize, which run after this during worldserver Main.
+    if (reload)
+    {
+        sClusterMgr.RefreshPacketTraceConfig();
+        sNatsBus.RefreshConfigCache();
+    }
+
     // call ScriptMgr if we're reloading the configuration
     sScriptMgr->OnAfterConfigLoad(reload);
 }

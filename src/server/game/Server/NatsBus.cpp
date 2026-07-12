@@ -49,6 +49,7 @@
 #include "WorldSessionMgr.h"
 #include <chrono>
 #include <cstring>
+#include <memory>
 #include <shared_mutex>
 
 // ── Initialize (peer-to-peer NATS) ───────────────────────────────────────────
@@ -80,6 +81,10 @@ void NatsBus::Initialize(std::string const& natsUrl, uint8 serverType,
 
     // Initialize BG coordinator to the configured node (may change on failover).
     _bgCoordNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.BgCoordinatorNode", 1));
+
+    // Cache the tunables that Update()/relay send-paths would otherwise read from
+    // the config map every tick. Re-read live on ".reload config".
+    RefreshConfigCache();
 
     if (!ConnectNATS())
     {
@@ -960,11 +965,23 @@ void NatsBus::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 t
              accountId, playerGuid, destNodeId, token, addonCount);
 }
 
+void NatsBus::RefreshConfigCache()
+{
+    // Defaults mirror the historical inline sConfigMgr->GetOption calls exactly.
+    // NOTE: HeartbeatInterval intentionally drives BOTH the heartbeat send and
+    // the dead-node check interval, as it did before this caching change.
+    _heartbeatIntervalMs   = sConfigMgr->GetOption<uint32>("ClusterServer.HeartbeatInterval", 300);
+    _nodeDeadTimeoutMs     = sConfigMgr->GetOption<uint32>("ClusterServer.NodeDeadTimeout", 3000);
+    _mgmtStatusIntervalMs  = static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.MgmtStatusInterval", 5)) * 1000u;
+    _mgmtPlayersIntervalMs = static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.MgmtPlayersInterval", 3)) * 1000u;
+    _lfgMasterNodeId       = static_cast<uint8>(sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
+}
+
 void NatsBus::Update()
 {
     constexpr uint32 NATS_RETRY_INTERVAL_MS     = 10 * 1000;    //  10 seconds
     constexpr uint32 ANNOUNCE_RETRY_INTERVAL_MS = 10 * 1000;    //  10 seconds
-    uint32 const HEARTBEAT_INTERVAL_MS = sConfigMgr->GetOption<uint32>("ClusterServer.HeartbeatInterval", 300);    //  10 seconds
+    uint32 const HEARTBEAT_INTERVAL_MS = _heartbeatIntervalMs;
     constexpr uint32 REFRESH_INTERVAL_MS        = 5 * 60 * 1000; //  5 minutes
 
     uint32 now = getMSTime();
@@ -1027,29 +1044,26 @@ void NatsBus::Update()
         _lastTransportSyncMs = now;
     }
 
-    // Dead-node detection: check every 15 seconds whether any known peer has gone silent.
-    uint32 const DEAD_CHECK_INTERVAL_MS = sConfigMgr->GetOption<uint32>("ClusterServer.HeartbeatInterval", 300);
+    // Dead-node detection: check every heartbeat interval whether any known peer has gone silent.
+    uint32 const DEAD_CHECK_INTERVAL_MS = _heartbeatIntervalMs;
     if (now - _lastDeadCheckMs >= DEAD_CHECK_INTERVAL_MS)
     {
         _lastDeadCheckMs = now;
-        uint32 deadThresholdMs = sConfigMgr->GetOption<uint32>("ClusterServer.NodeDeadTimeout", 3000);
-
+        uint32 deadThresholdMs = _nodeDeadTimeoutMs;
 
         for (uint8 deadNodeId : sClusterMgr.GetStaleNodeIds(deadThresholdMs, now))
             HandleNodeDead(deadNodeId);
     }
 
     // Management monitoring publishes (consumed by clustermgr).
-    uint32 mgmtStatusIntervalMs =
-        static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.MgmtStatusInterval", 5)) * 1000u;
+    uint32 mgmtStatusIntervalMs = _mgmtStatusIntervalMs;
     if (mgmtStatusIntervalMs > 0 && now - _lastMgmtStatusMs >= mgmtStatusIntervalMs)
     {
         SendMgmtStatus();
         _lastMgmtStatusMs = now;
     }
 
-    uint32 mgmtPlayersIntervalMs =
-        static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.MgmtPlayersInterval", 3)) * 1000u;
+    uint32 mgmtPlayersIntervalMs = _mgmtPlayersIntervalMs;
     if (mgmtPlayersIntervalMs > 0 && now - _lastMgmtPlayersMs >= mgmtPlayersIntervalMs)
     {
         SendMgmtPlayers();
@@ -1230,10 +1244,14 @@ static void RACommandFinished(void* arg, bool /*success*/)
 
 void NatsBus::HandleRACommand(uint32 reqId, std::string const& cmd)
 {
-    auto* state = new RACommandState();
+    // RAII ownership: if the CliCommandHolder ctor throws, unique_ptr frees the
+    // state. On success, ownership passes to RACommandFinished (which deletes it
+    // exactly once) via the CLI callback chain, so we release() here.
+    auto state = std::make_unique<RACommandState>();
     state->reqId = reqId;
-    auto* holder = new CliCommandHolder(state, cmd.c_str(), RACommandPrint, RACommandFinished);
+    auto* holder = new CliCommandHolder(state.get(), cmd.c_str(), RACommandPrint, RACommandFinished);
     sWorld->QueueCliCommand(holder);
+    state.release();
 }
 
 void NatsBus::SendRAReply(uint32 reqId, std::string const& output)
@@ -1388,8 +1406,15 @@ void NatsBus::RestoreBgCoordIfNeeded(uint8 revivedNodeId)
 void NatsBus::SendNodeStatus()
 {
     uint32 playerCount = static_cast<uint32>(sWorldSessionMgr->GetActiveSessionCount());
-    uint32 natsBytesTx = _natsBytesTx.exchange(0, std::memory_order_relaxed);
-    uint32 natsBytesRx = _natsBytesRx.exchange(0, std::memory_order_relaxed);
+    // Delta since the previous heartbeat against a monotonic counter (no reset),
+    // so the mgmt-status consumer is not disturbed. Unsigned wraparound yields
+    // the correct delta across the ~49-day uint32 rollover.
+    uint32 totalTx = _natsBytesTx.load(std::memory_order_relaxed);
+    uint32 totalRx = _natsBytesRx.load(std::memory_order_relaxed);
+    uint32 natsBytesTx = totalTx - _hbLastBytesTx;
+    uint32 natsBytesRx = totalRx - _hbLastBytesRx;
+    _hbLastBytesTx = totalTx;
+    _hbLastBytesRx = totalRx;
 
     // Wire: [nodeId:1][playerCount:4][natsBytesTx:4][natsBytesRx:4] = 13 bytes
     // nodeId is prepended so receiving nodes know which peer sent this heartbeat.
@@ -1510,8 +1535,19 @@ void NatsBus::SendMgmtStatus()
     uint32 uptimeSecs  = (getMSTime() - _startupTimeMs) / 1000u;
     uint32 memUsageMB  = ReadMemUsageMB();
     uint8  cpuPercent  = ComputeCpuPercent(_lastCpuJiffies, _lastCpuCheckMs);
-    uint32 natsTxBps   = _natsBytesTx.load(std::memory_order_relaxed) / 10u;  // ÷ heartbeat interval
-    uint32 natsRxBps   = _natsBytesRx.load(std::memory_order_relaxed) / 10u;
+    // True bytes/sec: delta against this consumer's own snapshot over the actual
+    // elapsed interval (not a hard-coded /10). Independent of the heartbeat.
+    uint32 nowBpsMs    = getMSTime();
+    uint32 totalTxB    = _natsBytesTx.load(std::memory_order_relaxed);
+    uint32 totalRxB    = _natsBytesRx.load(std::memory_order_relaxed);
+    uint32 elapsedMs   = nowBpsMs - _mgmtRateLastMs;
+    uint32 natsTxBps   = (_mgmtRateLastMs != 0 && elapsedMs > 0)
+                         ? (totalTxB - _mgmtLastBytesTx) * 1000u / elapsedMs : 0u;
+    uint32 natsRxBps   = (_mgmtRateLastMs != 0 && elapsedMs > 0)
+                         ? (totalRxB - _mgmtLastBytesRx) * 1000u / elapsedMs : 0u;
+    _mgmtLastBytesTx   = totalTxB;
+    _mgmtLastBytesRx   = totalRxB;
+    _mgmtRateLastMs    = nowBpsMs;
 
     // Maps list.
     std::unordered_set<uint32> localMaps = sClusterMgr.GetLocalMaps();
@@ -2063,8 +2099,7 @@ void NatsBus::SendLFGJoinRelay(uint64 playerGuid, uint8 roles, std::vector<uint3
     if (!_connected)
         return;
 
-    uint8 lfgMasterNodeId = static_cast<uint8>(
-        sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
+    uint8 lfgMasterNodeId = _lfgMasterNodeId;
 
     uint8 dungeonCount = static_cast<uint8>(dungeons.size());
     // payload: sourceNodeId(1)+payloadLen(2)+inner_type(1)+guid(8)+roles(1)+count(1)+dungeons
@@ -2095,8 +2130,7 @@ void NatsBus::SendLFGLeaveRelay(uint64 playerGuid)
     if (!_connected)
         return;
 
-    uint8 lfgMasterNodeId = static_cast<uint8>(
-        sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
+    uint8 lfgMasterNodeId = _lfgMasterNodeId;
 
     // payload: sourceNodeId(1)+innerLen(2)+inner_type(1)+guid(8) = 12 bytes
     std::vector<uint8> msg;
@@ -2114,8 +2148,7 @@ void NatsBus::SendLFGProposalResultRelay(uint32 proposalId, uint64 playerGuid, b
     if (!_connected)
         return;
 
-    uint8 lfgMasterNodeId = static_cast<uint8>(
-        sConfigMgr->GetOption<int32>("ClusterServer.LFGMasterNode", 1));
+    uint8 lfgMasterNodeId = _lfgMasterNodeId;
 
     // payload: sourceNodeId(1)+innerLen(2)+inner_type(1)+proposalId(4)+guid(8)+accept(1) = 17 bytes
     std::vector<uint8> msg;
@@ -2865,7 +2898,7 @@ void NatsBus::HandleBgReady(std::vector<uint8> const& payload)
 
         for (auto const& entry : players)
         {
-            ObjectGuid guid{ HighGuid::Player, static_cast<uint32>(entry.guid) };
+            ObjectGuid guid(entry.guid);
             Player* player = ObjectAccessor::FindConnectedPlayer(guid);
             if (!player)
             {

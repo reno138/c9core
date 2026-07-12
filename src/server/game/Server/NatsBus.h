@@ -84,6 +84,12 @@ public:
 
     bool IsConnected() const { return _connected; }
 
+    /// Re-read the cluster tunables that Update() and the relay send-paths use,
+    /// caching them so those hot paths don't hit the config map every tick/send.
+    /// Called from Initialize() and again from World::LoadConfigSettings() on a
+    /// ".reload config" so the values stay live-tunable without a restart.
+    void RefreshConfigCache();
+
     /// Assigned node ID (0 = not yet assigned by proxy).
     uint8 GetNodeId() const { return _nodeId; }
 
@@ -434,6 +440,16 @@ private:
     uint32 _lastRefreshMs{ 0 };          ///< getMSTime() at last MSG_NODE_REFRESH send
     uint32 _lastTransportSyncMs{ 0 };    ///< getMSTime() at last MSG_TRANSPORT_SYNC broadcast
     uint32 _transportSyncIntervalMs{ 60000 }; ///< broadcast interval (from config, ms)
+
+    // ── Cached cluster tunables (refreshed in RefreshConfigCache) ────────────
+    // Cached so NatsBus::Update() and the LFG relay send-paths don't hit the
+    // string-keyed config map every world tick / every relay. Defaults mirror
+    // the historical inline sConfigMgr->GetOption calls exactly.
+    uint32 _heartbeatIntervalMs{ 300 };     ///< ClusterServer.HeartbeatInterval (also drives dead-check)
+    uint32 _nodeDeadTimeoutMs{ 3000 };      ///< ClusterServer.NodeDeadTimeout
+    uint32 _mgmtStatusIntervalMs{ 5000 };   ///< ClusterServer.MgmtStatusInterval * 1000
+    uint32 _mgmtPlayersIntervalMs{ 3000 };  ///< ClusterServer.MgmtPlayersInterval * 1000
+    uint8  _lfgMasterNodeId{ 1 };           ///< ClusterServer.LFGMasterNode
     uint32 _lastDeadCheckMs{ 0 };        ///< getMSTime() at last dead-node check
     uint32 _lastMgmtStatusMs{ 0 };       ///< getMSTime() at last cluster.mgmt.status publish
     uint32 _lastMgmtPlayersMs{ 0 };      ///< getMSTime() at last cluster.mgmt.players publish
@@ -454,9 +470,18 @@ private:
     // ── Dynamic BG coordinator tracking ──────────────────────────────────────
     uint8  _bgCoordNodeId{ 0 };        ///< Currently elected BG coordinator node (from config, updated on failover)
 
-    // ── NATS bandwidth counters (reset after each MSG_NODE_STATUS) ────────────
-    std::atomic<uint32> _natsBytesTx{ 0 }; ///< bytes published via NATS since last heartbeat
-    std::atomic<uint32> _natsBytesRx{ 0 }; ///< bytes received via NATS since last heartbeat
+    // ── NATS bandwidth counters (monotonic totals; never reset) ──────────────
+    // Each consumer (heartbeat, mgmt) computes its own delta against its own
+    // snapshot below, so they no longer race over a shared exchange(0).
+    std::atomic<uint32> _natsBytesTx{ 0 }; ///< cumulative bytes published via NATS
+    std::atomic<uint32> _natsBytesRx{ 0 }; ///< cumulative bytes received via NATS
+    // Heartbeat (MSG_NODE_STATUS) snapshot — reports bytes since last heartbeat.
+    uint32 _hbLastBytesTx{ 0 };
+    uint32 _hbLastBytesRx{ 0 };
+    // Mgmt (MSG_MGMT_STATUS) snapshot + timestamp — reports true bytes/sec.
+    uint32 _mgmtLastBytesTx{ 0 };
+    uint32 _mgmtLastBytesRx{ 0 };
+    uint32 _mgmtRateLastMs{ 0 };
 
     // ── BG coordinator state (world-thread-only; no mutex needed) ─────────────
     struct BgQueueEntry

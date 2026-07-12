@@ -231,9 +231,15 @@ void ClusterMgr::RefreshPacketTraceConfig()
     bool const enabled = sConfigMgr->GetOption<bool>("ClusterServer.PacketTrace.Enable", false);
     _packetTraceEnabled.store(enabled, std::memory_order_relaxed);
 
+    // Cross-node redirect diagnostics (session key + candidate HMAC dumps).
+    // Cached here so ClientRedirect's gate is a lock-free atomic load, and so
+    // it is refreshed on the same config-reload path as PacketTrace.
+    bool const redirectDebug = sConfigMgr->GetOption<bool>("ClusterServer.RedirectDebug", false);
+    _redirectDebugEnabled.store(redirectDebug, std::memory_order_relaxed);
+
     LOG_INFO("server.worldserver",
-             "ClusterMgr: PacketTrace.Enable = {} (trace output -> 'cluster.packettrace' logger)",
-             enabled ? "ENABLED" : "disabled");
+             "ClusterMgr: PacketTrace.Enable = {} (trace output -> 'cluster.packettrace' logger), RedirectDebug = {}",
+             enabled ? "ENABLED" : "disabled", redirectDebug ? "ENABLED" : "disabled");
 }
 
 void ClusterMgr::LoadLocalMaps()

@@ -304,6 +304,11 @@ public:
     /// in PacketTrace.h to gate every trace point.
     bool IsPacketTraceEnabled() const { return _packetTraceEnabled.load(std::memory_order_relaxed); }
 
+    /// @return true if verbose cross-node redirect diagnostics are enabled via
+    ///         ClusterServer.RedirectDebug. Gates the RE-scaffolding logging in
+    ///         ClientRedirect (session key + candidate HMAC variants). Lock-free.
+    bool IsRedirectDebugEnabled() const { return _redirectDebugEnabled.load(std::memory_order_relaxed); }
+
     /// Refresh the cached PacketTrace flag from the live config. Called at
     /// init time (from LoadLocalMaps) and safe to call again on config reload.
     void RefreshPacketTraceConfig();
@@ -366,6 +371,11 @@ private:
     /// init and on config reload via RefreshPacketTraceConfig().
     /// Atomic so the hot-path IsPacketTraceEnabled() accessor is lock-free.
     std::atomic<bool> _packetTraceEnabled{ false };
+
+    /// Cached snapshot of ClusterServer.RedirectDebug. Refreshed alongside
+    /// _packetTraceEnabled in RefreshPacketTraceConfig(). Atomic so the
+    /// IsRedirectDebugEnabled() accessor is lock-free on the redirect path.
+    std::atomic<bool> _redirectDebugEnabled{ false };
 };
 
 #define sClusterMgr ClusterMgr::Instance()
