@@ -45,7 +45,8 @@ public:
     /// If useGdb is true, the worldserver is spawned under GDB in batch mode so
     /// crash backtraces are written to the log file automatically.
     void Configure(std::string worldserverBin, std::string worldserverConf,
-                   std::string logFile, bool useGdb = false);
+                   std::string logFile, bool useGdb = false,
+                   uint32 killTimeoutSecs = 15);
 
     /// NodeState values matching the wire protocol.
     enum class State : uint8
@@ -61,17 +62,38 @@ public:
     /// Start the worldserver process (noop if already running).
     bool Start();
 
-    /// Gracefully stop the worldserver process (SIGTERM, then wait up to 30s).
+    /// Gracefully stop the worldserver process: SIGTERM, escalating to SIGKILL
+    /// after NodeMgr.KillTimeout seconds. The escalation is what makes this
+    /// usable against a HUNG worldserver — a process wedged in a game-loop
+    /// deadlock never services SIGTERM, and the previous implementation would
+    /// sit in Stopping forever.
     void Stop();
+
+    /// Immediate SIGKILL, no grace period. For the operator "kill" action when
+    /// the node is known-hung and waiting out the timeout serves no purpose.
+    void Kill();
+
+    /// Stop (with escalation) then Start once the child has actually reaped.
+    /// Only latches intent; Poll() performs the restart when the child exits.
+    void Restart();
 
     /// Poll worldserver health; update state. Call periodically (e.g. every 5s).
     void Poll();
+
+    /// True while a Restart() is waiting for the child to exit.
+    [[nodiscard]] bool IsRestartPending() const { return _restartPending; }
 
     State   GetState()    const { return _state; }
     uint32  GetPid()      const { return _pid; }
     uint32  GetUptime()   const;
 
 private:
+    /// When Stop() sent SIGTERM; Poll() escalates to SIGKILL after _killTimeoutSecs.
+    std::chrono::steady_clock::time_point _stopRequestedAt{};
+    bool   _sigkillSent{ false };
+    bool   _restartPending{ false };
+    uint32 _killTimeoutSecs{ 15 };
+
     std::string _worldserverBin;
     std::string _worldserverConf;
     std::string _logFile;

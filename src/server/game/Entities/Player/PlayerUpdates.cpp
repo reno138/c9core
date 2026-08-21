@@ -462,11 +462,19 @@ void Player::Update(uint32 p_time)
             Group const* grp = GetGroup();
             if (grp)
             {
-                // Check if any group member is on a remote node
+                // GetGroupRemoteMembers() takes ClusterMgr::_groupMutex and returns
+                // the member vector BY VALUE. Calling it twice per player per tick
+                // therefore cost two lock acquisitions and two heap allocations on
+                // a path that runs for every grouped player. Fetch once and reuse.
+                std::vector<ClusterMgr::CrossNodeGroupMember> const remoteMembers =
+                    sClusterMgr.GetGroupRemoteMembers(grp->GetGUID().GetRawValue());
+
+                uint8 const localNodeId = sNatsBus.GetNodeId();
+
                 bool hasRemote = false;
-                for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(grp->GetGUID().GetRawValue()))
+                for (auto const& rm : remoteMembers)
                 {
-                    if (rm.nodeId != sNatsBus.GetNodeId())
+                    if (rm.nodeId != localNodeId)
                     {
                         hasRemote = true;
                         break;
@@ -480,9 +488,9 @@ void Player::Update(uint32 p_time)
 
                     // Synthesise SMSG_PARTY_MEMBER_STATS for each remote group member
                     // so that the local client can display their unit frames
-                    for (auto const& rm : sClusterMgr.GetGroupRemoteMembers(grp->GetGUID().GetRawValue()))
+                    for (auto const& rm : remoteMembers)
                     {
-                        if (rm.nodeId == sNatsBus.GetNodeId())
+                        if (rm.nodeId == localNodeId)
                             continue; // local — handled normally
 
                         ClusterMgr::ClusterUnitState state;

@@ -16,6 +16,7 @@
  */
 
 #include "NatsBus.h"
+#include "ClusterAuth.h"
 #include <nats.h>
 #include <cstdio>
 #include <fstream>
@@ -69,6 +70,20 @@ void NatsBus::Initialize(std::string const& natsUrl, uint8 serverType,
     {
         LOG_ERROR("server.worldserver",
                   "NatsBus: ClusterServer.NodeId not set or is 0 — cluster disabled");
+        return;
+    }
+
+    // Cluster bus authentication. This fails CLOSED: without a usable key the
+    // bus does not come up at all. Running unauthenticated is not a supported
+    // configuration — MSG_RA_COMMAND alone makes it equivalent to handing out
+    // a root console to anyone who can reach the NATS port.
+    std::string const authKey = sConfigMgr->GetOption<std::string>("ClusterServer.AuthKey", "");
+    if (!ClusterAuth::Init(authKey))
+    {
+        LOG_FATAL("server.worldserver",
+                  "NatsBus: ClusterServer.AuthKey missing or shorter than {} bytes — cluster bus refuses to start. "
+                  "Generate one with: openssl rand -hex 32",
+                  ClusterAuth::MIN_KEY_BYTES);
         return;
     }
 
@@ -186,12 +201,18 @@ void NatsBus::PublishToNode(uint8 targetNodeId, uint8 msgType,
     if (!_nc || !_connected)
         return;
 
-    // Wire format: [msgType:1][payload] on subject cluster.node.{targetNodeId}
-    std::vector<uint8> buf;
-    buf.reserve(1 + payloadLen);
-    buf.push_back(msgType);
-    if (payloadLen > 0)
-        buf.insert(buf.end(), payload, payload + payloadLen);
+    // Wire format: authenticated frame (see ClusterAuth.h). The legacy
+    // [msgType:1][payload] format is no longer emitted or accepted — an
+    // unauthenticated bus allows any host that can reach NATS to execute
+    // MSG_RA_COMMAND console commands on every node.
+    std::vector<uint8> buf = ClusterAuth::Seal(_nodeId, msgType,
+                                               payloadLen > 0 ? payload : nullptr,
+                                               static_cast<std::size_t>(payloadLen));
+    if (buf.empty())
+    {
+        LOG_ERROR("server.worldserver", "NatsBus: refusing to publish msgType 0x{:02X} — cluster auth not initialised", msgType);
+        return;
+    }
 
     std::string subject = "cluster.node." + std::to_string(targetNodeId);
     natsStatus s = natsConnection_Publish(_nc, subject.c_str(),
@@ -208,12 +229,15 @@ void NatsBus::PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadL
     if (!_nc || !_connected)
         return;
 
-    // Wire format: [msgType:1][payload] on subject cluster.broadcast
-    std::vector<uint8> buf;
-    buf.reserve(1 + payloadLen);
-    buf.push_back(msgType);
-    if (payloadLen > 0)
-        buf.insert(buf.end(), payload, payload + payloadLen);
+    // Wire format: authenticated frame (see ClusterAuth.h).
+    std::vector<uint8> buf = ClusterAuth::Seal(_nodeId, msgType,
+                                               payloadLen > 0 ? payload : nullptr,
+                                               static_cast<std::size_t>(payloadLen));
+    if (buf.empty())
+    {
+        LOG_ERROR("server.worldserver", "NatsBus: refusing to broadcast msgType 0x{:02X} — cluster auth not initialised", msgType);
+        return;
+    }
 
     natsStatus s = natsConnection_Publish(_nc, "cluster.broadcast",
                                           buf.data(), static_cast<int>(buf.size()));
@@ -432,14 +456,32 @@ void NatsBus::OnNatsMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
         return;
     }
 
-    uint8 msgType = d[0];
-    std::vector<uint8> payload(d + 1, d + n);
     self->_natsBytesRx.fetch_add(static_cast<uint32>(n), std::memory_order_relaxed);
+
+    // Authenticate before anything else looks at the contents. A frame that
+    // fails the tag, clock-skew or replay check is dropped without dispatch.
+    uint8 msgType = 0;
+    uint8 srcNodeId = 0;
+    std::vector<uint8> payload;
+    bool const authentic = ClusterAuth::Open(d, static_cast<std::size_t>(n),
+                                             srcNodeId, msgType, payload);
     natsMsg_Destroy(msg);
 
-    // Marshal all messages to world thread.
-    sWorld->QueueCallback([self, msgType, pl = std::move(payload)]() mutable
+    if (!authentic)
     {
+        LOG_WARN("server.worldserver", "NatsBus: dropped unauthenticated/replayed cluster frame ({} bytes)", n);
+        return;
+    }
+
+    // A node must not be able to impersonate us; self-addressed frames are a
+    // sign of either a loop or a forgery attempt.
+    if (srcNodeId == self->_nodeId)
+        return;
+
+    // Marshal all messages to world thread.
+    sWorld->QueueCallback([self, msgType, srcNodeId, pl = std::move(payload)]() mutable
+    {
+        self->_lastFrameSrcNode = srcNodeId;
         self->Dispatch(msgType, std::move(pl));
     });
 }
@@ -598,6 +640,16 @@ void NatsBus::Dispatch(uint8 msgType, std::vector<uint8> payload)
             break;
         case MSG_RA_COMMAND:
         {
+            // Remote console execution. Even with an authenticated bus this is
+            // the highest-privilege message in the protocol, so it is opt-in per
+            // node rather than always-on.
+            if (!sConfigMgr->GetOption<bool>("ClusterServer.AllowRemoteConsole", false))
+            {
+                LOG_WARN("server.worldserver",
+                         "NatsBus: rejected MSG_RA_COMMAND from node {} — ClusterServer.AllowRemoteConsole is disabled",
+                         _lastFrameSrcNode);
+                break;
+            }
             // reqId(4) + cmdLen(2) + cmd[cmdLen]
             if (payload.size() < 6) break;
             uint32 reqId;  std::memcpy(&reqId,  payload.data(),     4);

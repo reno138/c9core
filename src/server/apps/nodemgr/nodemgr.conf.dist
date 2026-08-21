@@ -87,3 +87,74 @@ Logger.nodemgr=4,Console NodeMgr
 
 #
 ###################################################################################################
+
+#
+#    NodeMgr.KillTimeout
+#        Description: Seconds to wait after SIGTERM before escalating to SIGKILL
+#                     when stopping the worldserver.
+#
+#                     A worldserver wedged in a game-loop deadlock never reaches
+#                     its signal handler, so SIGTERM alone leaves the supervisor
+#                     stuck in Stopping indefinitely. This escalation is what makes
+#                     a hung node recoverable without shell access.
+#
+#                     Set high enough that a healthy server completes its normal
+#                     shutdown (player saves, DB flush) first.
+#
+#        Default:     15 - (seconds)
+#
+
+NodeMgr.KillTimeout = 15
+
+#
+#    NodeMgr.NodeId
+#        Description: Cluster node ID this supervisor manages. MUST match the
+#                     ClusterServer.NodeId of the worldserver it launches.
+#                     Used to build the control subject cluster.nodemgr.{NodeId}.
+#
+#        Default:     0 - (remote control disabled)
+#
+
+NodeMgr.NodeId = 0
+
+#
+#    NodeMgr.NatsUrl
+#        Description: NATS URL for the supervisor control channel,
+#                     e.g. "nats://192.0.2.20:4222".
+#
+#                     When set together with NodeMgr.NodeId and NodeMgr.AuthKey,
+#                     the supervisor subscribes to cluster.nodemgr.{NodeId} for
+#                     start/stop/kill/restart commands and publishes its own state
+#                     to cluster.mgmt.nodemgr.
+#
+#                     This is deliberately a SEPARATE NATS connection from the
+#                     worldserver's — the entire point is that it keeps working
+#                     when the worldserver does not.
+#
+#                     A failure to connect is NOT fatal; the supervisor continues
+#                     to manage the local process.
+#
+#        Default:     "" - (remote control disabled)
+#
+
+NodeMgr.NatsUrl = ""
+
+#
+#    NodeMgr.AuthKey
+#        Description: Shared secret authenticating supervisor control frames. MUST
+#                     match ClusterServer.AuthKey on the worldservers and clustermgr.
+#
+#                     Frames are HMAC-SHA256 authenticated with a timestamp and
+#                     nonce (30-second replay window). Without it, anyone able to
+#                     reach NATS could SIGKILL every worldserver in the cluster.
+#
+#                     Must be at least 32 bytes. If unset or too short, remote
+#                     control is disabled and a warning is logged — the supervisor
+#                     never accepts unauthenticated commands.
+#
+#                     Generate with:  openssl rand -hex 32
+#
+#        Default:     "" - (remote control disabled)
+#
+
+NodeMgr.AuthKey = ""

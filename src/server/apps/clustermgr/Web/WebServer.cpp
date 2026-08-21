@@ -55,12 +55,17 @@ static std::string JsonStr(std::string const& s)
 
 static std::string NodeToJson(NodeInfo const& n,
                               std::vector<NodeSample> const* samples = nullptr,
-                              std::vector<CrashEvent>  const* crashes = nullptr)
+                              std::vector<CrashEvent>  const* crashes = nullptr,
+                              bool hung = false)
 {
     std::ostringstream j;
     j << "{"
       << "\"nodeId\":"     << static_cast<int>(n.nodeId)      << ","
       << "\"state\":"      << static_cast<int>(n.state)       << ","
+      // "hung" means the supervisor still reports the process as Running while
+      // the worldserver itself has stopped publishing mgmt.status — the case an
+      // operator most needs to see, and the one a plain state field cannot show.
+      << "\"hung\":"       << (hung ? "true" : "false")       << ","
       << "\"playerCount\":" << n.playerCount                   << ","
       << "\"maxPlayers\":" << n.maxPlayers                    << ","
       << "\"pid\":"        << n.pid                           << ","
@@ -207,6 +212,12 @@ private:
         if (_req.method() == http::verb::post && target == "/api/deploy")
             return HandleApiDeploy();
 
+        // Node control: POST /api/nodes/{id}/{start|stop|kill|restart}
+        // These are POST, not GET, deliberately — a GET that SIGKILLs a game
+        // server would be triggerable by any prefetcher or crawler.
+        if (_req.method() == http::verb::post && target.rfind("/api/nodes/", 0) == 0)
+            return HandleApiNodeAction(target.substr(11));
+
         // 404
         SendError(http::status::not_found, "Not found");
     }
@@ -221,7 +232,7 @@ private:
             if (i) j << ',';
             auto samples = _history->GetSamples(nodes[i].nodeId);
             auto crashes = _history->GetCrashes(nodes[i].nodeId);
-            j << NodeToJson(nodes[i], &samples, &crashes);
+            j << NodeToJson(nodes[i], &samples, &crashes, _monitor->IsNodeHung(nodes[i].nodeId));
         }
         j << "]}";
         SendString(j.str(), "application/json");
@@ -237,11 +248,45 @@ private:
             {
                 auto samples = _history->GetSamples(nodeId);
                 auto crashes = _history->GetCrashes(nodeId);
-                SendString(NodeToJson(n, &samples, &crashes), "application/json");
+                SendString(NodeToJson(n, &samples, &crashes, _monitor->IsNodeHung(nodeId)), "application/json");
                 return;
             }
         }
         SendError(http::status::not_found, "Node not found");
+    }
+
+    void HandleApiNodeAction(std::string const& rest)
+    {
+        // rest looks like "3/kill"
+        auto slash = rest.find('/');
+        if (slash == std::string::npos)
+            return SendError(http::status::bad_request, "Expected /api/nodes/{id}/{action}");
+
+        uint8 nodeId;
+        try
+        {
+            nodeId = static_cast<uint8>(std::stoi(rest.substr(0, slash)));
+        }
+        catch (std::exception const&)
+        {
+            return SendError(http::status::bad_request, "Bad node id");
+        }
+
+        std::string const action = rest.substr(slash + 1);
+
+        if      (action == "start")   _monitor->SendStartNode(nodeId);
+        else if (action == "stop")    _monitor->SendStopNode(nodeId);
+        else if (action == "kill")    _monitor->SendKillNode(nodeId);
+        else if (action == "restart") _monitor->SendRestartNode(nodeId);
+        else
+            return SendError(http::status::bad_request, "Unknown action");
+
+        // The command is fire-and-forget over NATS; the supervisor's next status
+        // heartbeat is what confirms it landed. Report accepted, not completed.
+        std::ostringstream j;
+        j << "{\"accepted\":true,\"node\":" << int(nodeId)
+          << ",\"action\":\"" << action << "\"}";
+        SendString(j.str(), "application/json");
     }
 
     void HandleApiPlayers()

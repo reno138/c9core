@@ -33,6 +33,8 @@
 #include "GitRevision.h"
 #include "Log.h"
 #include "NodeMgr.h"
+#include "NodeMgrControl.h"
+#include "ClusterAuth.h"
 #include "OpenSSLCrypto.h"
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/signal_set.hpp>
@@ -102,12 +104,45 @@ int main(int argc, char** argv)
     // Maximum consecutive crash restarts before giving up (0 = unlimited).
     int maxRestarts = sConfigMgr->GetOption<int32>("NodeMgr.MaxRestarts", 10);
 
+    // Seconds to wait after SIGTERM before escalating to SIGKILL.
+    int killTimeoutSecs = sConfigMgr->GetOption<int32>("NodeMgr.KillTimeout", 15);
+
+    // Remote control channel (clustermgr -> this supervisor).
+    uint8       ctlNodeId = static_cast<uint8>(sConfigMgr->GetOption<int32>("NodeMgr.NodeId", 0));
+    std::string ctlNatsUrl = sConfigMgr->GetOption<std::string>("NodeMgr.NatsUrl", "");
+    std::string ctlAuthKey = sConfigMgr->GetOption<std::string>("NodeMgr.AuthKey", "");
+
     if (useGdb)
         LOG_INFO("server.nodemgr", "nodemgr: GDB mode ENABLED — crash backtraces will appear in {}", worldserverLog);
 
     // ── Create NodeMgr (process manager) ──────────────────────────────────────
     NodeMgr nodeMgr;
-    nodeMgr.Configure(worldserverBin, worldserverConf, worldserverLog, useGdb);
+    nodeMgr.Configure(worldserverBin, worldserverConf, worldserverLog, useGdb,
+                      static_cast<uint32>(killTimeoutSecs));
+
+    // ── Remote control channel ────────────────────────────────────────────────
+    // Optional: if NodeMgr.NatsUrl/NodeId/AuthKey are unset the supervisor still
+    // runs, it just cannot be driven remotely. We do NOT fail closed here — a
+    // misconfigured control channel must never prevent a node from starting.
+    NodeMgrControl nodeCtl;
+    if (!ctlNatsUrl.empty() && ctlNodeId != 0)
+    {
+        if (!ClusterAuth::Init(ctlAuthKey))
+        {
+            LOG_ERROR("server.nodemgr",
+                      "nodemgr: NodeMgr.AuthKey missing or shorter than {} bytes — remote control DISABLED. "
+                      "Generate one with: openssl rand -hex 32",
+                      ClusterAuth::MIN_KEY_BYTES);
+        }
+        else if (nodeCtl.Start(ctlNatsUrl, ctlNodeId, &nodeMgr))
+        {
+            LOG_INFO("server.nodemgr", "nodemgr: remote control active on cluster.nodemgr.{}", ctlNodeId);
+        }
+    }
+    else
+    {
+        LOG_INFO("server.nodemgr", "nodemgr: remote control not configured (NodeMgr.NatsUrl / NodeMgr.NodeId unset)");
+    }
 
     LOG_INFO("server.nodemgr", "nodemgr: worldserver={} startupDelay={}s maxRestarts={}",
              worldserverBin, startupDelaySecs, maxRestarts);
@@ -132,6 +167,11 @@ int main(int argc, char** argv)
             if (ec) return; // cancelled (shutdown)
 
             nodeMgr.Poll();
+
+            // Heartbeat the supervisor's own view of the world. This is what
+            // lets the UI tell "worldserver hung" (supervisor Running, but the
+            // worldserver stopped publishing mgmt.status) from "node down".
+            nodeCtl.PublishStatus();
 
             NodeMgr::State state = nodeMgr.GetState();
 

@@ -64,6 +64,9 @@ void ClusterUI::InitColors()
     init_pair(COLOR_CONNECTED,    COLOR_GREEN,   COLOR_BLUE);
     init_pair(COLOR_DISCONNECTED, COLOR_RED,     COLOR_BLUE);
     init_pair(COLOR_CRASH_SUB,    COLOR_RED,     COLOR_BLACK);
+    init_pair(COLOR_MAP_BORDER,   COLOR_CYAN,    COLOR_BLACK);
+    init_pair(COLOR_MAP_PLAYER,   COLOR_GREEN,   COLOR_BLACK);
+    init_pair(COLOR_HUNG,         COLOR_MAGENTA, COLOR_BLACK);
 }
 
 void ClusterUI::Run()
@@ -145,6 +148,8 @@ void ClusterUI::Draw()
     }
     DrawTitle();
     DrawNodeTable();
+    if (_showMap)
+        DrawMapPanel();
     DrawStatusBar();
     DrawFkeyBar();
     refresh();
@@ -317,6 +322,93 @@ void ClusterUI::DrawStatusBar()
     attroff(COLOR_PAIR(COLOR_STATUS));
 }
 
+void ClusterUI::DrawMapPanel()
+{
+    // Panel occupies the lower half of the screen, above the status/fkey bars.
+    int const top    = LINES / 2;
+    int const bottom = LINES - 3;          // leave the status + fkey rows
+    int const height = bottom - top - 1;   // minus the border/title row
+    int const width  = COLS - 2;
+
+    if (height < 4 || width < 20)
+        return;                            // not enough room to be useful
+
+    // Which node is selected, and which maps does it serve?
+    uint8 nodeId = 0;
+    std::vector<uint32> mapIds;
+    {
+        std::lock_guard<std::mutex> lock(_nodesMutex);
+        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
+            return;
+        nodeId = _nodes[_selectedRow].nodeId;
+        mapIds = _nodes[_selectedRow].mapIds;
+    }
+
+    // Only players on the selected node — the panel answers "who is on THIS
+    // node and where", which is the question an operator asks before draining it.
+    std::vector<PlayerInfo> all = _monitor ? _monitor->GetPlayers() : std::vector<PlayerInfo>{};
+    std::vector<PlayerInfo> mine;
+    mine.reserve(all.size());
+    for (auto const& pl : all)
+        if (pl.nodeId == nodeId)
+            mine.push_back(pl);
+
+    // Title row
+    attron(COLOR_PAIR(COLOR_MAP_BORDER));
+    mvhline(top, 0, ACS_HLINE, COLS);
+    std::string mapList;
+    for (size_t i = 0; i < mapIds.size(); ++i)
+    {
+        if (i) mapList += ",";
+        mapList += std::to_string(mapIds[i]);
+    }
+    if (mapList.empty())
+        mapList = "none";
+
+    std::string title = " node " + std::to_string(nodeId) +
+                        "  maps [" + mapList + "]  players " + std::to_string(mine.size()) + " ";
+    mvprintw(top, 2, "%s", title.c_str());
+    attroff(COLOR_PAIR(COLOR_MAP_BORDER));
+
+    if (mine.empty())
+    {
+        mvprintw(top + 1 + height / 2, (COLS - 22) / 2, "(no players on this node)");
+        return;
+    }
+
+    // Normalise to the actual extent of the players rather than the theoretical
+    // +/-17066 map bounds — otherwise everyone in one city collapses to a dot.
+    float minX = mine[0].x, maxX = mine[0].x;
+    float minY = mine[0].y, maxY = mine[0].y;
+    for (auto const& pl : mine)
+    {
+        minX = std::min(minX, pl.x); maxX = std::max(maxX, pl.x);
+        minY = std::min(minY, pl.y); maxY = std::max(maxY, pl.y);
+    }
+    float spanX = std::max(1.0f, maxX - minX);
+    float spanY = std::max(1.0f, maxY - minY);
+
+    attron(COLOR_PAIR(COLOR_MAP_PLAYER));
+    for (auto const& pl : mine)
+    {
+        // WoW's +X is north and +Y is west, so map X->row and Y->column, with
+        // Y inverted to put west on the left as a player expects.
+        int row = top + 1 + static_cast<int>((1.0f - (pl.x - minX) / spanX) * (height - 1));
+        int col = 1     + static_cast<int>((1.0f - (pl.y - minY) / spanY) * (width  - 1));
+
+        row = std::max(top + 1, std::min(row, bottom - 1));
+        col = std::max(1,       std::min(col, COLS - 2));
+
+        chtype existing = mvinch(row, col) & A_CHARTEXT;
+        // Overlapping players escalate . -> o -> O so density is visible.
+        char glyph = '.';
+        if (existing == '.') glyph = 'o';
+        else if (existing == 'o' || existing == 'O') glyph = 'O';
+        mvaddch(row, col, glyph);
+    }
+    attroff(COLOR_PAIR(COLOR_MAP_PLAYER));
+}
+
 void ClusterUI::DrawFkeyBar()
 {
     attron(COLOR_PAIR(COLOR_FKEY));
@@ -328,6 +420,9 @@ void ClusterUI::DrawFkeyBar()
         { "F3",  " Stop  " },
         { "F4",  " Deploy" },
         { "F5",  " Refr  " },
+        { "F6",  " Kill  " },
+        { "F7",  " Restrt" },
+        { "F8",  " Map   " },
         { "F10", " Quit  " },
     };
 
@@ -375,9 +470,43 @@ void ClusterUI::HandleInput(int key)
         case KEY_F(5):
             Refresh();
             break;
+        case KEY_F(6):
+            KillSelected();
+            break;
+        case KEY_F(7):
+            RestartSelected();
+            break;
+        case KEY_F(8):
+            _showMap = !_showMap;
+            _dirty.store(true);
+            break;
         default:
             break;
     }
+}
+
+void ClusterUI::KillSelected()
+{
+    uint8 nodeId;
+    {
+        std::lock_guard<std::mutex> lock(_nodesMutex);
+        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
+            return;
+        nodeId = _nodes[_selectedRow].nodeId;
+    }
+    _monitor->SendKillNode(nodeId);
+}
+
+void ClusterUI::RestartSelected()
+{
+    uint8 nodeId;
+    {
+        std::lock_guard<std::mutex> lock(_nodesMutex);
+        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
+            return;
+        nodeId = _nodes[_selectedRow].nodeId;
+    }
+    _monitor->SendRestartNode(nodeId);
 }
 
 void ClusterUI::StartSelected()

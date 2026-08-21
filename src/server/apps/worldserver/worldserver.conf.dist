@@ -4820,6 +4820,53 @@ InstanceServer.Port = 8087
 ClusterServer.NodeId = 1
 
 #
+#    ClusterServer.AuthKey
+#        Description: Shared secret authenticating every message on the NATS cluster
+#                     bus. All nodes in a cluster MUST share the same value.
+#
+#                     The bus carries privileged control messages, including
+#                     MSG_RA_COMMAND (executes an arbitrary server console command)
+#                     and MSG_CLUSTER_PLAYER_ONLINE (disconnects a matching local
+#                     session). Without a key, any host able to reach the NATS port
+#                     can do both on every node.
+#
+#                     Frames are authenticated with HMAC-SHA256 and carry a
+#                     timestamp and nonce, giving a 30-second replay window.
+#                     This provides authenticity and integrity, NOT confidentiality
+#                     — enable TLS on NATS itself if the bus crosses an untrusted
+#                     network.
+#
+#                     Must be at least 32 bytes. If unset or too short the cluster
+#                     bus refuses to start (fail-closed by design).
+#
+#                     Generate with:  openssl rand -hex 32
+#
+#        Default:     "" - (disabled; cluster bus will NOT start)
+#
+
+ClusterServer.AuthKey = ""
+
+#
+#    ClusterServer.AllowRemoteConsole
+#        Description: Allow this node to execute console commands received over the
+#                     cluster bus (MSG_RA_COMMAND) from clustermgr.
+#
+#                     This is the highest-privilege message in the cluster protocol
+#                     — it is equivalent to granting console access to whoever holds
+#                     ClusterServer.AuthKey. Commands run with full server authority
+#                     (account creation, GM level changes, shutdown).
+#
+#                     Enable only on nodes you intend to administer remotely, and
+#                     only when ClusterServer.AuthKey is set to a strong secret.
+#
+#        Default:     0 - (disabled, commands are rejected and logged)
+#                     1 - (enabled)
+#
+
+ClusterServer.AllowRemoteConsole = 0
+
+
+#
 #    ClusterServer.NatsURL
 #        Description: NATS server URL for the cluster control channel. All inter-node messages
 #                     (player directory, BG queues, chat relay, group updates, transport sync,

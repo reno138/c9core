@@ -34,6 +34,7 @@
 #include "Errors.h"
 #include "GitRevision.h"
 #include "Log.h"
+#include "ClusterAuth.h"
 #include "NatsMonitor.h"
 #include "HistoryStore.h"
 #include "WebServer.h"
@@ -88,6 +89,16 @@ int main(int argc, char** argv)
 
     // ── Read config ────────────────────────────────────────────────────────────
     std::string natsUrl      = sConfigMgr->GetOption<std::string>("ClusterServer.NatsUrl", "nats://127.0.0.1:4222");
+
+    // Cluster bus authentication. Required to issue supervisor commands
+    // (start/stop/kill/restart) — monitoring still works without it, but any
+    // control action will be refused rather than sent unauthenticated.
+    std::string authKey = sConfigMgr->GetOption<std::string>("ClusterMgr.AuthKey", "");
+    if (!ClusterAuth::Init(authKey))
+        LOG_WARN("clustermgr",
+                 "ClusterMgr.AuthKey missing or shorter than {} bytes — node control is DISABLED "
+                 "(monitoring still works). Generate one with: openssl rand -hex 32",
+                 ClusterAuth::MIN_KEY_BYTES);
     bool        webEnabled   = sConfigMgr->GetOption<bool>("Web.Enabled", true);
     uint16      webPort      = static_cast<uint16>(sConfigMgr->GetOption<int32>("Web.Port",     9191));
     std::string webBind      = sConfigMgr->GetOption<std::string>("Web.BindAddr", "0.0.0.0");

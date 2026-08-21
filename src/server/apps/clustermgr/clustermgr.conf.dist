@@ -127,3 +127,24 @@ Logger.clustermgr.web=4,Console ClusterMgr
 
 #
 ###################################################################################################
+
+#
+#    ClusterMgr.AuthKey
+#        Description: Shared secret used to authenticate cluster-bus frames.
+#                     MUST match ClusterServer.AuthKey on the worldservers and
+#                     NodeMgr.AuthKey on the supervisors.
+#
+#                     Required to issue node control actions (F2 Start, F3 Stop,
+#                     F6 Kill, F7 Restart, and the web /api/nodes endpoints).
+#                     Monitoring — node table, player map, history — works without
+#                     it; only control is gated, and an unauthenticated control
+#                     frame is never sent.
+#
+#                     Must be at least 32 bytes.
+#
+#                     Generate with:  openssl rand -hex 32
+#
+#        Default:     "" - (monitoring only; control actions refused and logged)
+#
+
+ClusterMgr.AuthKey = ""

@@ -475,6 +475,11 @@ private:
     // snapshot below, so they no longer race over a shared exchange(0).
     std::atomic<uint32> _natsBytesTx{ 0 }; ///< cumulative bytes published via NATS
     std::atomic<uint32> _natsBytesRx{ 0 }; ///< cumulative bytes received via NATS
+
+    /// Authenticated source node of the frame currently being dispatched.
+    /// Written on the world thread immediately before Dispatch() and read
+    /// only inside it, so no synchronisation is required.
+    uint8 _lastFrameSrcNode{ 0 };
     // Heartbeat (MSG_NODE_STATUS) snapshot — reports bytes since last heartbeat.
     uint32 _hbLastBytesTx{ 0 };
     uint32 _hbLastBytesRx{ 0 };

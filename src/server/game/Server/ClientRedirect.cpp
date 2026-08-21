@@ -11,7 +11,9 @@
 #include "Log.h"
 
 #include <openssl/hmac.h>
+#include <openssl/rand.h>
 #include <openssl/evp.h>
+#include <openssl/sha.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -30,9 +32,17 @@ uint32 SuspendClient(WorldSession* session)
     if (!session || !session->GetPlayer())
         return 0;
 
-    // Generate random suspension token
-    thread_local static std::mt19937 rng(std::random_device{}());
-    uint32 token = rng();
+    // Generate random suspension token.
+    // MUST be a CSPRNG: this token is the bearer credential the destination node
+    // uses to bind a reconnecting socket to a pre-authorised session. mt19937 is
+    // fully reconstructible from ~624 observed outputs, which would let an
+    // observer predict a future token and hijack the redirected session.
+    uint32 token = 0;
+    if (RAND_bytes(reinterpret_cast<unsigned char*>(&token), sizeof(token)) != 1)
+    {
+        LOG_ERROR("server.worldserver", "ClientRedirect: RAND_bytes failed — refusing to redirect");
+        return 0;
+    }
 
     // SMSG_SUSPEND_COMMS (0x50F) — payload: uint32 token
     WorldPacket data(SMSG_SUSPEND_COMMS, 4);
@@ -54,12 +64,16 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
     SessionKey const& sessionKey = session->GetSessionKey();
 
     // Convert IP string to network byte order uint32
-    uint32 ipNetOrder = inet_addr(destIp.c_str());
-    if (ipNetOrder == INADDR_NONE)
+    // inet_pton, not inet_addr: inet_addr accepts shorthand ("10.1" -> 10.0.0.1)
+    // and octal components, and returns INADDR_NONE for both an error and the
+    // legitimate address 255.255.255.255.
+    struct in_addr parsed{};
+    if (inet_pton(AF_INET, destIp.c_str(), &parsed) != 1)
     {
         LOG_ERROR("server.worldserver", "ClientRedirect: Invalid destination IP '{}'", destIp);
         return;
     }
+    uint32 ipNetOrder = parsed.s_addr;
 
     // Build HMAC-SHA1 input: ip(4) || port(2) = 6 bytes ONLY.
     // Binary analysis of Wow.exe (0x632E30) confirmed:
@@ -88,10 +102,15 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
     // default — never enable on a production node (see conf security note).
     if (sClusterMgr.IsRedirectDebugEnabled())
     {
-        // Log FULL session key (40 bytes)
+        // NEVER log session-key material. The original code logged all 40 bytes
+        // (despite the "first 8" label below), which put a full session-hijack
+        // credential into the server log for every redirect. A truncated SHA-256
+        // fingerprint is enough to correlate the two nodes' views of a session.
+        uint8 skDigest[32];
+        SHA256(sessionKey.data(), sessionKey.size(), skDigest);
         std::string skHex;
-        for (size_t i = 0; i < sessionKey.size(); ++i)
-            skHex += fmt::format("{:02X}", sessionKey[i]);
+        for (size_t i = 0; i < 4; ++i)
+            skHex += fmt::format("{:02X}", skDigest[i]);
 
         // Log HMAC input bytes (6 bytes: ip + port only, no token)
         std::string inputHex;
@@ -106,7 +125,7 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
         LOG_INFO("server.worldserver", "ClientRedirect DEBUG:");
         LOG_INFO("server.worldserver", "  destIp={} destPort={} token=0x{:08X}", destIp, destPort, token);
         LOG_INFO("server.worldserver", "  ipNetOrder=0x{:08X} portRaw=0x{:04X}", ipNetOrder, portRaw);
-        LOG_INFO("server.worldserver", "  sessionKey (first 8): {}", skHex);
+        LOG_INFO("server.worldserver", "  sessionKey fingerprint (sha256[0:4]): {}", skHex);
         LOG_INFO("server.worldserver", "  HMAC input (6 bytes): {}", inputHex);
         LOG_INFO("server.worldserver", "  HMAC result (20 bytes): {}", resultHex);
 
@@ -162,64 +181,11 @@ void RedirectClient(WorldSession* session, std::string const& destIp, uint16 des
     data << uint32(token);                    // Token
     data.append(hmacResult, 20);              // HMAC-SHA1 proof
 
-    // DIAGNOSTIC: candidate HMAC variants (ClusterServer.RedirectDebug).
-    // Computed only for log comparison during RE — none of these is sent; the
-    // transmitted proof is hmacResult, built above. Off by default.
-    if (sClusterMgr.IsRedirectDebugEnabled())
-    {
-        SessionKey reversedKey;
-        for (size_t i = 0; i < sessionKey.size(); ++i)
-            reversedKey[i] = sessionKey[sessionKey.size() - 1 - i];
-        uint8 revHmac[20];
-        unsigned int revLen = 20;
-        HMAC(EVP_sha1(), reversedKey.data(), static_cast<int>(reversedKey.size()),
-             hmacInput, sizeof(hmacInput), revHmac, &revLen);
-        std::string revHex;
-        for (int i = 0; i < 20; ++i) revHex += fmt::format("{:02X} ", revHmac[i]);
-        LOG_INFO("server.worldserver", "  HMAC with REVERSED key: {}", revHex);
-
-        // Also try HMAC with token included (ip+port+token = 10 bytes)
-        uint8 hmacInputWithToken[10];
-        std::memcpy(hmacInputWithToken, &ipNetOrder, 4);
-        std::memcpy(hmacInputWithToken + 4, &portRaw, 2);
-        std::memcpy(hmacInputWithToken + 6, &token, 4);
-        uint8 tokenHmac[20];
-        unsigned int tokenLen = 20;
-        HMAC(EVP_sha1(), sessionKey.data(), static_cast<int>(sessionKey.size()),
-             hmacInputWithToken, 10, tokenHmac, &tokenLen);
-        std::string tokHex;
-        for (int i = 0; i < 20; ++i) tokHex += fmt::format("{:02X} ", tokenHmac[i]);
-        LOG_INFO("server.worldserver", "  HMAC with TOKEN included: {}", tokHex);
-
-        // And try with ip+port in SWAPPED byte order
-        uint32 ipLE = ntohl(ipNetOrder);  // swap to LE/host order
-        uint16 portLE = ntohs(portRaw);
-        uint8 hmacSwapped[6];
-        std::memcpy(hmacSwapped, &ipLE, 4);
-        std::memcpy(hmacSwapped + 4, &portLE, 2);
-        uint8 swapHmac[20];
-        unsigned int swapLen = 20;
-        HMAC(EVP_sha1(), sessionKey.data(), static_cast<int>(sessionKey.size()),
-             hmacSwapped, 6, swapHmac, &swapLen);
-        std::string swapHex;
-        for (int i = 0; i < 20; ++i) swapHex += fmt::format("{:02X} ", swapHmac[i]);
-        LOG_INFO("server.worldserver", "  HMAC with SWAPPED ip/port: {}", swapHex);
-
-        // Try HMAC with auth seed as key (4 bytes + 36 zeros = 40 bytes)
-        auto const& authSeed = session->GetAuthSeed();
-        uint8 seedKey[40] = {};
-        std::memcpy(seedKey, authSeed.data(), 4);
-        uint8 seedHmac[20];
-        unsigned int seedHmacLen = 20;
-        HMAC(EVP_sha1(), seedKey, 40,
-             hmacInput, sizeof(hmacInput), seedHmac, &seedHmacLen);
-        std::string seedHmacHex;
-        for (int i = 0; i < 20; ++i) seedHmacHex += fmt::format("{:02X} ", seedHmac[i]);
-        std::string authSeedHex;
-        for (auto b : authSeed) authSeedHex += fmt::format("{:02X}", b);
-        LOG_INFO("server.worldserver", "  AuthSeed: {}", authSeedHex);
-        LOG_INFO("server.worldserver", "  HMAC with SEED-ONLY key: {}", seedHmacHex);
-    }
+    // NOTE: the reverse-engineering scaffolding that previously lived here
+    // (four alternative HMAC constructions, including one over a reversed
+    // session key, all written to the log) has been removed. It served its
+    // purpose during protocol discovery, but every variant is derived from
+    // secret key material and none was ever transmitted.
 
     session->SendPacket(&data);
     session->SetRedirectPending();
@@ -248,9 +214,10 @@ std::pair<std::string, uint16> ResolveRedirectAddress(
 
 bool IsLocalAddress(std::string const& ip)
 {
-    uint32 addr = ntohl(inet_addr(ip.c_str()));
-    if (addr == INADDR_NONE)
+    struct in_addr parsed{};
+    if (inet_pton(AF_INET, ip.c_str(), &parsed) != 1)
         return false;
+    uint32 addr = ntohl(parsed.s_addr);
 
     // RFC1918 private ranges
     // 10.0.0.0/8
@@ -265,6 +232,12 @@ bool IsLocalAddress(std::string const& ip)
     // 127.0.0.0/8 (loopback)
     if ((addr & 0xFF000000) == 0x7F000000)
         return true;
+    // 169.254.0.0/16 (link-local) — a client here is on the same L2 segment.
+    if ((addr & 0xFFFF0000) == 0xA9FE0000)
+        return true;
+    // 100.64.0.0/10 (CGNAT / RFC6598) — carrier-side, treat as external.
+    // Deliberately NOT returned as local: handing such a client the LAN
+    // address would both fail to connect and disclose internal topology.
 
     return false;
 }

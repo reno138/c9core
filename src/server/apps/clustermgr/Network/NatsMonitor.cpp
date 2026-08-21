@@ -16,6 +16,7 @@
  */
 
 #include "NatsMonitor.h"
+#include "ClusterAuth.h"
 #include "Log.h"
 #include <nats.h>
 #include <cstring>
@@ -76,6 +77,14 @@ void NatsMonitor::Start(std::string const& natsUrl, StatusCallback statusCb,
     }
 
     _connected = true;
+    // Supervisor heartbeats. Separate from cluster.mgmt.status (published by the
+    // worldserver) precisely so the two can disagree — that disagreement is the
+    // hung-node signal.
+    s = natsConnection_Subscribe(&_subNodeMgr, _nc, "cluster.mgmt.nodemgr", OnNodeMgrMsg, this);
+    if (s != NATS_OK)
+        LOG_WARN("clustermgr", "NatsMonitor: Failed to subscribe to cluster.mgmt.nodemgr — {}",
+                 natsStatus_GetText(s));
+
     LOG_INFO("clustermgr", "NatsMonitor: Connected to NATS at {} and subscribed.", natsUrl);
 
     _watchdogRunning = true;
@@ -291,12 +300,120 @@ std::vector<PlayerInfo> NatsMonitor::GetPlayers() const
     return _players;
 }
 
+void NatsMonitor::SendNodeMgrCommand(uint8 nodeId, uint8 cmd, char const* what)
+{
+    if (!_nc || !_connected.load())
+    {
+        LOG_WARN("clustermgr", "NatsMonitor: cannot {} node {} — not connected to NATS", what, nodeId);
+        return;
+    }
+
+    if (!ClusterAuth::IsInitialised())
+    {
+        LOG_ERROR("clustermgr", "NatsMonitor: cannot {} node {} — cluster auth not initialised "
+                                "(set ClusterMgr.AuthKey)", what, nodeId);
+        return;
+    }
+
+    // Commands are addressed to the SUPERVISOR, not the worldserver. A hung
+    // worldserver cannot act on its own stop request; NodeMgr can.
+    std::vector<uint8> frame = ClusterAuth::Seal(0 /*console*/, cmd, nullptr, 0);
+    if (frame.empty())
+    {
+        LOG_ERROR("clustermgr", "NatsMonitor: failed to seal {} command for node {}", what, nodeId);
+        return;
+    }
+
+    std::string subject = "cluster.nodemgr." + std::to_string(nodeId);
+    natsStatus st = natsConnection_Publish(_nc, subject.c_str(),
+                                           frame.data(), static_cast<int>(frame.size()));
+    if (st != NATS_OK)
+        LOG_ERROR("clustermgr", "NatsMonitor: publish {} to {} failed — {}",
+                  what, subject, natsStatus_GetText(st));
+    else
+        LOG_INFO("clustermgr", "NatsMonitor: sent {} to node {}", what, nodeId);
+}
+
 void NatsMonitor::SendStartNode(uint8 nodeId)
 {
-    LOG_INFO("clustermgr", "NatsMonitor::SendStartNode({}) — not yet implemented via NATS control channel", nodeId);
+    SendNodeMgrCommand(nodeId, 0x01 /*CMD_START*/, "START");
 }
 
 void NatsMonitor::SendStopNode(uint8 nodeId)
 {
-    LOG_INFO("clustermgr", "NatsMonitor::SendStopNode({}) — not yet implemented via NATS control channel", nodeId);
+    SendNodeMgrCommand(nodeId, 0x02 /*CMD_STOP*/, "STOP");
+}
+
+void NatsMonitor::SendKillNode(uint8 nodeId)
+{
+    SendNodeMgrCommand(nodeId, 0x03 /*CMD_KILL*/, "KILL");
+}
+
+void NatsMonitor::SendRestartNode(uint8 nodeId)
+{
+    SendNodeMgrCommand(nodeId, 0x04 /*CMD_RESTART*/, "RESTART");
+}
+
+std::vector<NatsMonitor::SupervisorInfo> NatsMonitor::GetSupervisors() const
+{
+    std::lock_guard<std::mutex> lock(_supMutex);
+    std::vector<SupervisorInfo> out;
+    out.reserve(_supervisors.size());
+    for (auto const& kv : _supervisors)
+        out.push_back(kv.second);
+    return out;
+}
+
+bool NatsMonitor::IsNodeHung(uint8 nodeId, uint32 staleSecs) const
+{
+    // Supervisor says the process is Running (3)...
+    bool supervisorRunning = false;
+    {
+        std::lock_guard<std::mutex> lock(_supMutex);
+        auto it = _supervisors.find(nodeId);
+        if (it == _supervisors.end())
+            return false;              // no supervisor data — cannot judge
+        supervisorRunning = (it->second.state == 3);
+    }
+    if (!supervisorRunning)
+        return false;
+
+    // ...but the worldserver itself has gone quiet on cluster.mgmt.status.
+    std::lock_guard<std::mutex> lock(_nodesMutex);
+    auto it = _nodes.find(nodeId);
+    if (it == _nodes.end())
+        return true;                   // process up, never announced — hung
+
+    auto age = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - it->second.lastSeen).count();
+    return age >= static_cast<long long>(staleSecs);
+}
+
+/*static*/
+void NatsMonitor::OnNodeMgrMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
+                               natsMsg* msg, void* closure)
+{
+    auto* self = static_cast<NatsMonitor*>(closure);
+
+    uint8 const* d = reinterpret_cast<uint8 const*>(natsMsg_GetData(msg));
+    int          n = natsMsg_GetDataLength(msg);
+
+    uint8 srcNode = 0, msgType = 0;
+    std::vector<uint8> body;
+    bool const ok = ClusterAuth::Open(d, static_cast<std::size_t>(n), srcNode, msgType, body);
+    natsMsg_Destroy(msg);
+
+    if (!ok || msgType != 0x40 /*MSG_NODEMGR_STATUS*/ || body.size() < 11)
+        return;
+
+    SupervisorInfo info;
+    info.nodeId = body[0];
+    info.state  = body[1];
+    info.pid    = uint32(body[2]) | (uint32(body[3]) << 8) | (uint32(body[4]) << 16) | (uint32(body[5]) << 24);
+    info.uptimeSecs = uint32(body[6]) | (uint32(body[7]) << 8) | (uint32(body[8]) << 16) | (uint32(body[9]) << 24);
+    info.restartPending = body[10] != 0;
+    info.lastSeen = std::chrono::steady_clock::now();
+
+    std::lock_guard<std::mutex> lock(self->_supMutex);
+    self->_supervisors[info.nodeId] = info;
 }

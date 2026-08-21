@@ -132,9 +132,13 @@ foreach(APPLICATION_NAME ${APPLICATIONS_BUILD_LIST})
       PUBLIC
         shared)
   elseif(${APP_PROJECT_NAME} MATCHES "nodemgr")
+    # nats_static: NodeMgrControl exposes the supervisor on the cluster bus so a
+    # HUNG worldserver can still be killed/restarted remotely — the worldserver
+    # itself cannot service that command once it is wedged.
     target_link_libraries(${APP_PROJECT_NAME}
       PUBLIC
-        shared)
+        shared
+        nats_static)
   elseif(${APP_PROJECT_NAME} MATCHES "clustermgr")
     find_package(Curses REQUIRED)
     find_package(Threads REQUIRED)

@@ -73,8 +73,16 @@ private:
 
     void StartSelected();
     void StopSelected();
+    void KillSelected();      ///< immediate SIGKILL via the supervisor
+    void RestartSelected();
     void OpenDeployWizard();
     void Refresh();
+
+    /// Scatter-plot of live player positions for the selected node's maps.
+    /// Worldserver coordinates are roughly +/-17066 on both axes; positions are
+    /// normalised to the panel rather than assuming a fixed extent, so a map
+    /// whose players are clustered still fills the view.
+    void DrawMapPanel();
 
     std::string FormatUptime(uint32 secs) const;
     std::string FormatState(uint8 state) const;
@@ -99,7 +107,8 @@ private:
     std::atomic<bool>     _connected{ false };
 
     // ── Selection state ────────────────────────────────────────────────────────
-    int _selectedRow { 0 };
+    int  _selectedRow { 0 };
+    bool _showMap     { true };   ///< F8 toggles the map/player panel
 
     // ── Connection info ────────────────────────────────────────────────────────
     std::string _natsUrl;
@@ -121,6 +130,9 @@ private:
     static constexpr int COLOR_CONNECTED    = 10;
     static constexpr int COLOR_DISCONNECTED = 11;
     static constexpr int COLOR_CRASH_SUB    = 12;  ///< Dim red for crashed sub-row
+    static constexpr int COLOR_MAP_BORDER   = 13;
+    static constexpr int COLOR_MAP_PLAYER   = 14;
+    static constexpr int COLOR_HUNG         = 15;  ///< supervisor up, worldserver silent
 };
 
 #endif // ClusterUI_h__

@@ -110,8 +110,34 @@ public:
     std::vector<PlayerInfo> GetPlayers() const;
 
     /// No-op stubs — kept for ClusterUI F2/F3 key wiring (will be a NATS control message later).
+    /// Supervisor control. These publish ClusterAuth-sealed frames to
+    /// cluster.nodemgr.{nodeId}, which NodeMgr (a SEPARATE process from the
+    /// worldserver) services. That separation is the point: a wedged worldserver
+    /// cannot service its own stop command, so control must terminate elsewhere.
     void SendStartNode(uint8 nodeId);
-    void SendStopNode(uint8 nodeId);
+    void SendStopNode(uint8 nodeId);     ///< SIGTERM, escalating to SIGKILL
+    void SendKillNode(uint8 nodeId);     ///< immediate SIGKILL
+    void SendRestartNode(uint8 nodeId);
+
+    /// Supervisor-reported state, keyed by nodeId. Present even while the
+    /// worldserver is hung and no longer publishing cluster.mgmt.status —
+    /// which is exactly how the UI distinguishes "hung" from "down".
+    struct SupervisorInfo
+    {
+        uint8  nodeId{ 0 };
+        uint8  state{ 0 };            ///< NodeMgr::State
+        uint32 pid{ 0 };
+        uint32 uptimeSecs{ 0 };
+        bool   restartPending{ false };
+        std::chrono::steady_clock::time_point lastSeen;
+    };
+
+    std::vector<SupervisorInfo> GetSupervisors() const;
+
+    /// True when the supervisor says Running but the worldserver has not
+    /// published mgmt.status within @p staleSecs — i.e. the process is up but
+    /// not servicing its loop.
+    bool IsNodeHung(uint8 nodeId, uint32 staleSecs = 30) const;
 
 private:
     static void OnStatusMsg(natsConnection* nc, natsSubscription* sub,
@@ -128,6 +154,16 @@ private:
     natsConnection*   _nc{ nullptr };
     natsSubscription* _subStatus{ nullptr };
     natsSubscription* _subPlayers{ nullptr };
+    natsSubscription* _subNodeMgr{ nullptr };
+
+    /// Publish a sealed one-byte command to cluster.nodemgr.{nodeId}.
+    void SendNodeMgrCommand(uint8 nodeId, uint8 cmd, char const* what);
+
+    static void OnNodeMgrMsg(natsConnection* nc, natsSubscription* sub,
+                             natsMsg* msg, void* closure);
+
+    mutable std::mutex _supMutex;
+    std::map<uint8, SupervisorInfo> _supervisors;
 
     StatusCallback _statusCb;
     uint32         _deadThresholdSecs{ 30 };

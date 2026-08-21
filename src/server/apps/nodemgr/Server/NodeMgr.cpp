@@ -19,6 +19,7 @@
 #include "Log.h"
 #include "BoostProcess.h"
 #include <csignal>
+#include <chrono>
 
 NodeMgr::~NodeMgr()
 {
@@ -30,12 +31,13 @@ NodeMgr::~NodeMgr()
 }
 
 void NodeMgr::Configure(std::string worldserverBin, std::string worldserverConf,
-                        std::string logFile, bool useGdb)
+                        std::string logFile, bool useGdb, uint32 killTimeoutSecs)
 {
     _worldserverBin  = std::move(worldserverBin);
     _worldserverConf = std::move(worldserverConf);
     _logFile         = std::move(logFile);
     _useGdb          = useGdb;
+    _killTimeoutSecs = killTimeoutSecs ? killTimeoutSecs : 15;
 }
 
 bool NodeMgr::Start()
@@ -104,8 +106,11 @@ void NodeMgr::Stop()
         return;
     }
 
-    _state = State::Stopping;
-    LOG_INFO("nodemgr", "NodeMgr: Sending SIGTERM to worldserver PID={}", _pid);
+    _state           = State::Stopping;
+    _stopRequestedAt = std::chrono::steady_clock::now();
+    _sigkillSent     = false;
+    LOG_INFO("nodemgr", "NodeMgr: Sending SIGTERM to worldserver PID={} (SIGKILL in {}s if it does not exit)",
+             _pid, _killTimeoutSecs);
 
 #if defined(_WIN32) || defined(_WIN64)
     _child.terminate();
@@ -114,16 +119,84 @@ void NodeMgr::Stop()
 #endif
 }
 
+void NodeMgr::Kill()
+{
+    if (!_child.valid() || !_child.running())
+    {
+        LOG_INFO("nodemgr", "NodeMgr::Kill — no running worldserver to kill");
+        _state = State::Stopped;
+        _pid   = 0;
+        return;
+    }
+
+    _state           = State::Stopping;
+    _stopRequestedAt = std::chrono::steady_clock::now();
+    _sigkillSent     = true;
+    LOG_WARN("nodemgr", "NodeMgr: Sending SIGKILL to worldserver PID={} (operator kill)", _pid);
+
+#if defined(_WIN32) || defined(_WIN64)
+    _child.terminate();
+#else
+    ::kill(static_cast<pid_t>(_child.id()), SIGKILL);
+#endif
+}
+
+void NodeMgr::Restart()
+{
+    LOG_INFO("nodemgr", "NodeMgr: Restart requested (state={})", static_cast<int>(_state));
+    _restartPending = true;
+
+    if (_child.valid() && _child.running())
+        Stop();          // Poll() starts the new process once this one reaps
+    // If it is already down, Poll() picks up _restartPending immediately.
+}
+
 void NodeMgr::Poll()
 {
+    // A pending restart must be serviced even from Stopped/Unknown, otherwise a
+    // Restart() issued against an already-dead process would never fire.
     if (_state == State::Stopped || _state == State::Unknown)
+    {
+        if (_restartPending)
+        {
+            _restartPending = false;
+            LOG_INFO("nodemgr", "NodeMgr: restart — starting worldserver");
+            Start();
+        }
         return;
+    }
 
     if (!_child.valid())
     {
         _state = State::Stopped;
         _pid   = 0;
+        if (_restartPending)
+        {
+            _restartPending = false;
+            Start();
+        }
         return;
+    }
+
+    // SIGTERM escalation. A worldserver wedged in a deadlock never reaches its
+    // signal handler, so without this the supervisor sits in Stopping forever
+    // and the operator has no in-band way to recover the node.
+    if (_state == State::Stopping && !_sigkillSent && _child.running())
+    {
+        auto waited = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - _stopRequestedAt).count();
+        if (waited >= static_cast<long long>(_killTimeoutSecs))
+        {
+            _sigkillSent = true;
+            LOG_WARN("nodemgr",
+                     "NodeMgr: worldserver PID={} ignored SIGTERM for {}s — escalating to SIGKILL",
+                     _pid, waited);
+#if defined(_WIN32) || defined(_WIN64)
+            _child.terminate();
+#else
+            ::kill(static_cast<pid_t>(_child.id()), SIGKILL);
+#endif
+        }
     }
 
     if (!_child.running())
@@ -141,7 +214,15 @@ void NodeMgr::Poll()
             LOG_ERROR("nodemgr", "NodeMgr: worldserver CRASHED (exit={})", exitCode);
             _state = State::Crashed;
         }
-        _pid = 0;
+        _pid         = 0;
+        _sigkillSent = false;
+
+        if (_restartPending)
+        {
+            _restartPending = false;
+            LOG_INFO("nodemgr", "NodeMgr: restart — child reaped, starting worldserver");
+            Start();
+        }
     }
     else if (_state == State::Starting)
     {
