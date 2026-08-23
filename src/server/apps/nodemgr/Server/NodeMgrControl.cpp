@@ -20,7 +20,7 @@
 #include "ClusterAuth.h"
 #include "Log.h"
 
-#include <nats/nats.h>
+#include <nats.h>
 #include <cstring>
 #include <vector>
 

@@ -11786,7 +11786,13 @@ void Player::SendInitialPacketsAfterAddToMap()
     GetSession()->ResetTimeSync();
     GetSession()->SendTimeSync();
 
-    CastSpell(this, 836, true);                             // LOGINEFFECT
+    // Cluster: a redirect arrival is a migration, not a real login. The client is
+    // already in-world visually, so the LOGINEFFECT sparkle fires on every zone/map
+    // handoff and breaks the illusion of a seamless transfer. _redirectAutoLoginGuid
+    // is set in WorldSocket during the redirect handshake and is never cleared, so it
+    // reliably identifies a redirected session here.
+    if (!GetSession() || GetSession()->GetRedirectAutoLoginGuid() == 0)
+        CastSpell(this, 836, true);                         // LOGINEFFECT
 
     // set some aura effects that send packet to player client after add player to map
     // SendMessageToSet not send it to player not it map, only for aura that not changed anything at re-apply

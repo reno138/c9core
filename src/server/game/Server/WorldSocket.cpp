@@ -169,6 +169,10 @@ void WorldSocket::CheckIpCallback(PreparedQueryResult result)
 
 bool WorldSocket::Update()
 {
+    // Redirect auth deferred waiting on its NATS token — retry before anything else.
+    if (_redirectAwaitingToken)
+        TryCompleteRedirectAuth();
+
     EncryptableAndCompressiblePacket* queued;
     if (_bufferQueue.Dequeue(queued))
     {
@@ -630,22 +634,56 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
         return;
     }
 
-    AccountInfo account(result->Fetch());
+    _redirectAccount = std::make_unique<AccountInfo>(result->Fetch());
+    _redirectWaitStartMs = getMSTime();
+    TryCompleteRedirectAuth();
+}
+
+/// How long to hold a redirect connection waiting for its NATS token before
+/// giving up. The token is published by the source node immediately before it
+/// sends SMSG_REDIRECT_CLIENT, so it is already in flight when we get here.
+static constexpr uint32 REDIRECT_TOKEN_WAIT_MS = 3000;
+
+void WorldSocket::TryCompleteRedirectAuth()
+{
+    if (!_redirectAccount)
+        return;
+
+    AccountInfo const& account = *_redirectAccount;
 
     // Verify there's a pending redirect token for this account
     uint64 redirectPlayerGuid = 0;
     auto redirect = sClusterMgr.TakePendingRedirect(account.Id);
     if (!redirect)
     {
-        LOG_WARN("network", "WorldSocket::HandleRedirectionAuthProof: No pending redirect for account {} ({})",
-                 account.Id, _redirectAccountName);
+        // The client's TCP reconnect can outrun the token's NATS delivery. Do NOT
+        // fall through without a GUID: that authenticates the session but never
+        // fires the auto-login, leaving the client on a finished loading screen
+        // forever. Hold the connection briefly and retry from Update() instead.
+        if (GetMSTimeDiffToNow(_redirectWaitStartMs) < REDIRECT_TOKEN_WAIT_MS)
+        {
+            if (!_redirectAwaitingToken)
+            {
+                _redirectAwaitingToken = true;
+                LOG_INFO("network", "WorldSocket::TryCompleteRedirectAuth: Token for account {} ({}) not here yet - waiting up to {}ms",
+                         account.Id, _redirectAccountName, REDIRECT_TOKEN_WAIT_MS);
+            }
+            return;
+        }
+
+        LOG_ERROR("network", "WorldSocket::TryCompleteRedirectAuth: No redirect token for account {} ({}) after {}ms - closing",
+                  account.Id, _redirectAccountName, REDIRECT_TOKEN_WAIT_MS);
+        _redirectAwaitingToken = false;
+        _redirectAccount.reset();
+        SendAuthResponseError(AUTH_FAILED);
+        DelayedCloseSocket();
+        return;
     }
-    else
-    {
-        redirectPlayerGuid = redirect->playerGuid;
-        LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Validated redirect token for account {} GUID {:016X}",
-                 account.Id, redirectPlayerGuid);
-    }
+
+    _redirectAwaitingToken = false;
+    redirectPlayerGuid = redirect->playerGuid;
+    LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Validated redirect token for account {} GUID {:016X} (waited {}ms)",
+             account.Id, redirectPlayerGuid, GetMSTimeDiffToNow(_redirectWaitStartMs));
 
     // Initialize encryption with redirect-specific key derivation.
     _sessionKey = account.SessionKey;
@@ -705,6 +743,7 @@ void WorldSocket::HandleRedirectionAuthProofCallback(PreparedQueryResult result)
     LOG_INFO("network", "WorldSocket::HandleRedirectionAuthProof: Account {} authenticated via redirect from {}",
              account.Id, GetRemoteIpAddress().to_string());
 
+    _redirectAccount.reset();
     AsyncRead();
 }
 

@@ -1876,6 +1876,9 @@ public:
     }
     void UpdatePvP(bool state, bool _override = false);
     void UpdateZone(uint32 newZone, uint32 newArea, bool force = false);
+    // Cluster: arm/cancel the zone-transfer dwell timer for the given zone.
+    // Safe to call repeatedly; re-arming is guarded internally.
+    void UpdateClusterZoneRouting(uint32 zoneId);
     void UpdateArea(uint32 newArea);
     void SetNeedZoneUpdate(bool needUpdate) { m_needZoneUpdate = needUpdate; }
 

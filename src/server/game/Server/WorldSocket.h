@@ -67,6 +67,7 @@ struct ClientPktHeader
 #pragma pack(pop)
 
 struct ClientAuthSession;
+struct AccountInfo;
 
 class C9_GAME_API WorldSocket final : public Socket<WorldSocket>
 {
@@ -120,12 +121,18 @@ private:
     void HandleAuthSessionCallback(std::shared_ptr<ClientAuthSession> authSession, PreparedQueryResult result);
     void HandleRedirectionAuthProof(WorldPacket& recvPacket);
     void HandleRedirectionAuthProofCallback(PreparedQueryResult result);
+    /// Completes redirect auth once the NATS redirect token is present.
+    /// Retried from Update() while the token is still in flight.
+    void TryCompleteRedirectAuth();
     void LoadSessionPermissionsCallback(PreparedQueryResult result);
     void SendAuthResponseError(uint8 code);
 
     bool HandlePing(WorldPacket& recvPacket);
 
     std::string _redirectAccountName;  ///< stored between HandleRedirectionAuthProof and callback
+    std::unique_ptr<AccountInfo> _redirectAccount; ///< held while awaiting the redirect token
+    bool _redirectAwaitingToken{ false };          ///< true while TryCompleteRedirectAuth is retrying
+    uint32 _redirectWaitStartMs{ 0 };              ///< getMSTime() when the wait began
     std::array<uint8, 4> _authSeed;
     std::array<uint8, 32> _encryptionSeeds{}; ///< random seeds from SMSG_AUTH_CHALLENGE for redirect ARC4
     AuthCrypt _authCrypt;

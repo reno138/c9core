@@ -364,6 +364,12 @@ void Player::Update(uint32 p_time)
                 // needed for free far all arenas for example
                 if (m_areaUpdateId != newarea)
                     UpdateArea(newarea);
+
+                // Cluster: the zone did not change, but routing still must be
+                // evaluated — a player who logs in already standing inside a
+                // non-local zone never fires a zone-change event, so UpdateZone
+                // is never called and the dwell timer would never arm.
+                UpdateClusterZoneRouting(newzone);
             }
 
             m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
@@ -601,6 +607,21 @@ void Player::Update(uint32 p_time)
                 LOG_INFO("server.worldserver",
                          "Player {} zone transfer: zone {} -> node {} ({}:{}) [dwell expired]",
                          GetName(), targetZone, destNode->nodeId, destNode->address, destNode->port);
+
+                // 0. Full save before handoff — mirrors the map-transfer path in
+                //    Player::TeleportTo. LogoutPlayer's redirect-out fast path
+                //    deliberately skips SaveToDB, and the NATS transfer payload only
+                //    carries Player fields (position/level/health/auras) — NOT session
+                //    or account state such as tutorial flags, nor quests/reputation/
+                //    glyphs/actions. Without this, anything changed since the last
+                //    periodic save is silently discarded on every zone handoff, which
+                //    is why dismissed tutorials kept reappearing after a transfer.
+                //    Commit is async (drains in ~20ms) so the map thread is not blocked.
+                {
+                    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+                    SaveToDB(trans, false, false);
+                    CharacterDatabase.CommitTransaction(trans);
+                }
 
                 // 1. Send actual transfer data to SPECIFIC dest node (not broadcast)
                 sNatsBus.SendPlayerTransferSeamless(this, destNode->nodeId,
@@ -1504,6 +1525,39 @@ void Player::UpdateArea(uint32 newArea)
         RemoveRestFlag(REST_FLAG_IN_FACTION_AREA);
 }
 
+void Player::UpdateClusterZoneRouting(uint32 zoneId)
+{
+    // Cluster: zone-based transfer with hysteresis (dwell timer + cooldown)
+    // Start the dwell timer when entering a non-local zone. The cooldown check
+    // is done when the dwell EXPIRES (in Player::Update), not here — because
+    // UpdateZone only fires on zone change and won't retry if cooldown was active.
+    if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(zoneId)
+        && sNatsBus.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
+        && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
+        && !GetVehicle() && !IsBeingTeleportedFar())
+    {
+        if (m_zoneTransferDwellZone != zoneId)
+        {
+            // Entered a new non-local zone — start dwell timer
+            m_zoneTransferDwellZone = zoneId;
+            m_zoneTransferDwellTimer = ZONE_TRANSFER_DWELL_MS;
+            LOG_INFO("server.worldserver", "Player {} entered non-local zone {} — dwell timer started ({}ms)",
+                     GetName(), zoneId, ZONE_TRANSFER_DWELL_MS);
+        }
+        // Dwell timer is decremented in Player::Update; transfer triggers when it expires
+    }
+    else
+    {
+        // Back in local zone or conditions not met — cancel dwell
+        if (m_zoneTransferDwellZone != 0)
+        {
+            LOG_DEBUG("server.worldserver", "Player {} returned to local zone — dwell cancelled", GetName());
+            m_zoneTransferDwellZone = 0;
+            m_zoneTransferDwellTimer = 0;
+        }
+    }
+}
+
 void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
 {
     if (!newZone)
@@ -1536,35 +1590,8 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea, bool force)
     uint32 oldZoneUpdateId = m_zoneUpdateId;
     m_zoneUpdateId    = newZone;
     m_zoneUpdateTimer = ZONE_UPDATE_INTERVAL;
-    // Cluster: zone-based transfer with hysteresis (dwell timer + cooldown)
-    // Start the dwell timer when entering a non-local zone. The cooldown check
-    // is done when the dwell EXPIRES (in Player::Update), not here — because
-    // UpdateZone only fires on zone change and won't retry if cooldown was active.
-    if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(newZone)
-        && sNatsBus.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
-        && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
-        && !GetVehicle() && !IsBeingTeleportedFar())
-    {
-        if (m_zoneTransferDwellZone != newZone)
-        {
-            // Entered a new non-local zone — start dwell timer
-            m_zoneTransferDwellZone = newZone;
-            m_zoneTransferDwellTimer = ZONE_TRANSFER_DWELL_MS;
-            LOG_INFO("server.worldserver", "Player {} entered non-local zone {} — dwell timer started ({}ms)",
-                     GetName(), newZone, ZONE_TRANSFER_DWELL_MS);
-        }
-        // Dwell timer is decremented in Player::Update; transfer triggers when it expires
-    }
-    else
-    {
-        // Back in local zone or conditions not met — cancel dwell
-        if (m_zoneTransferDwellZone != 0)
-        {
-            LOG_DEBUG("server.worldserver", "Player {} returned to local zone — dwell cancelled", GetName());
-            m_zoneTransferDwellZone = 0;
-            m_zoneTransferDwellTimer = 0;
-        }
-    }
+    UpdateClusterZoneRouting(newZone);
+
     // zone changed, so area changed as well, update it
     UpdateArea(newArea);
 
