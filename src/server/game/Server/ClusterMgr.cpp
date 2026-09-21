@@ -738,17 +738,24 @@ void ClusterMgr::StorePendingRedirect(uint32 accountId, PendingRedirect&& redire
 {
     std::lock_guard<std::mutex> lock(_redirectMutex);
     redirect.timestampMs = getMSTime();
+    LOG_INFO("server.worldserver", "ClusterMgr: Stored redirect token for account {} (GUID {:016X} from node {}, client {})",
+             accountId, redirect.playerGuid, redirect.sourceNodeId, redirect.clientIp);
     _pendingRedirects[accountId] = std::move(redirect);
-    LOG_INFO("server.worldserver", "ClusterMgr: Stored redirect token for account {} (GUID {:016X} from node {})",
-             accountId, redirect.playerGuid, redirect.sourceNodeId);
 }
 
-std::optional<ClusterMgr::PendingRedirect> ClusterMgr::TakePendingRedirect(uint32 accountId)
+std::optional<ClusterMgr::PendingRedirect> ClusterMgr::TakePendingRedirect(uint32 accountId, std::string const& clientIp)
 {
     std::lock_guard<std::mutex> lock(_redirectMutex);
     auto it = _pendingRedirects.find(accountId);
     if (it == _pendingRedirects.end())
         return std::nullopt;
+    if (!it->second.clientIp.empty() && it->second.clientIp != clientIp)
+    {
+        LOG_WARN("server.worldserver",
+                 "ClusterMgr: redirect for account {} presented from {} but was issued to {} — refused, entry kept",
+                 accountId, clientIp, it->second.clientIp);
+        return std::nullopt;
+    }
     PendingRedirect data = std::move(it->second);
     _pendingRedirects.erase(it);
     return data;

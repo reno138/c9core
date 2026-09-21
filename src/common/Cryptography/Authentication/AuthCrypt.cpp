@@ -73,35 +73,10 @@ void AuthCrypt::InitRedirect(SessionKey const& K, std::array<uint8, 32> const& e
 
     _initialized = true;
 
-    // === DIAGNOSTIC: dump all key material for manual verification ===
-    {
-        std::string seedsHex, skHex, encSeedHex, decSeedHex, encKeyHex, decKeyHex;
-        for (size_t i = 0; i < 32; ++i) seedsHex += fmt::format("{:02X}", encryptionSeeds[i]);
-        for (size_t i = 0; i < K.size(); ++i) skHex += fmt::format("{:02X}", K[i]);
-        for (int i = 0; i < 16; ++i) encSeedHex += fmt::format("{:02X}", encryptSeed[i]);
-        for (int i = 0; i < 16; ++i) decSeedHex += fmt::format("{:02X}", decryptSeed[i]);
-        for (size_t i = 0; i < encDigest.size(); ++i) encKeyHex += fmt::format("{:02X}", encDigest[i]);
-        for (size_t i = 0; i < decDigest.size(); ++i) decKeyHex += fmt::format("{:02X}", decDigest[i]);
-
-        LOG_INFO("network", "AuthCrypt::InitRedirect KEY DUMP:");
-        LOG_INFO("network", "  SessionKey:     {}", skHex);
-        LOG_INFO("network", "  EncryptionSeeds: {}", seedsHex);
-        LOG_INFO("network", "  EncryptSeed (seeds[16..31]): {}", encSeedHex);
-        LOG_INFO("network", "  DecryptSeed (seeds[0..15]):  {}", decSeedHex);
-        LOG_INFO("network", "  ServerEncrypt HMAC digest:   {}", encKeyHex);
-        LOG_INFO("network", "  ClientDecrypt HMAC digest:   {}", decKeyHex);
-
-        // Also dump what standard Init(K) would produce for comparison
-        uint8 stdEncKey[] = { 0xCC, 0x98, 0xAE, 0x04, 0xE8, 0x97, 0xEA, 0xCA, 0x12, 0xDD, 0xC0, 0x93, 0x42, 0x91, 0x53, 0x57 };
-        uint8 stdDecKey[] = { 0xC2, 0xB3, 0x72, 0x3C, 0xC6, 0xAE, 0xD9, 0xB5, 0x34, 0x3C, 0x53, 0xEE, 0x2F, 0x43, 0x67, 0xCE };
-        auto stdEncDigest = Acore::Crypto::HMAC_SHA1::GetDigestOf(stdEncKey, K);
-        auto stdDecDigest = Acore::Crypto::HMAC_SHA1::GetDigestOf(stdDecKey, K);
-        std::string stdEncHex, stdDecHex;
-        for (size_t i = 0; i < stdEncDigest.size(); ++i) stdEncHex += fmt::format("{:02X}", stdEncDigest[i]);
-        for (size_t i = 0; i < stdDecDigest.size(); ++i) stdDecHex += fmt::format("{:02X}", stdDecDigest[i]);
-        LOG_INFO("network", "  StdInit encrypt HMAC digest: {}", stdEncHex);
-        LOG_INFO("network", "  StdInit decrypt HMAC digest: {}", stdDecHex);
-    }
+    // The RE-era key dump that used to live here (session key, seeds, both
+    // derived ARC4 keys, at LOG_INFO on every redirect) is gone. The derivation
+    // above is the verified one; anyone re-deriving it should log fingerprints
+    // behind ClusterServer.RedirectDebug in ClientRedirect.cpp, never raw keys.
 }
 
 void AuthCrypt::DecryptRecv(uint8* data, std::size_t len)

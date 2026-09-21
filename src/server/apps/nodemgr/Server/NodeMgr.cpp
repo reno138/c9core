@@ -54,15 +54,19 @@ bool NodeMgr::Start()
         if (_useGdb)
         {
             // Launch under GDB in batch mode: crash backtraces are written to the log.
-            // Command: gdb -batch -ex run -ex 'bt full' --args <bin> -c <conf> >> <log> 2>&1
-            std::string gdbCmd =
-                "gdb -batch -ex run -ex 'bt full' --args \""
-                + _worldserverBin + "\" -c \"" + _worldserverConf
-                + "\" >> \"" + _logFile + "\" 2>&1";
-
+            // Equivalent to: gdb -batch -ex run -ex 'bt full' --args <bin> -c <conf> > <log> 2>&1
+            // Passed as an argv vector on purpose: the three paths come from
+            // nodemgr.conf, and inside a `bash -c "..."` string $(...) and
+            // backticks would still expand, turning a config typo into
+            // command execution as the supervisor user.
+            std::vector<std::string> gdbArgs = {
+                "-batch", "-ex", "run", "-ex", "bt full", "--args",
+                _worldserverBin, "-c", _worldserverConf
+            };
             _child = bp::child(
-                bp::search_path("bash"),
-                std::vector<std::string>{"-c", gdbCmd},
+                bp::search_path("gdb"),
+                bp::args(gdbArgs),
+                (bp::std_out & bp::std_err) > _logFile,
                 bp::std_in < bp::null
             );
             LOG_INFO("nodemgr", "NodeMgr: Launched worldserver under GDB PID={}", _child.id());

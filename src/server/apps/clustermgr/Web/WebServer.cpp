@@ -146,12 +146,14 @@ public:
     HttpSession(tcp::socket socket, std::shared_ptr<WsHub> hub,
                 std::shared_ptr<NatsMonitor> monitor,
                 std::shared_ptr<HistoryStore> history,
-                std::string tilesPath)
+                std::string tilesPath,
+                std::string authToken)
         : _stream(std::move(socket))
         , _hub(std::move(hub))
         , _monitor(std::move(monitor))
         , _history(std::move(history))
         , _tilesPath(std::move(tilesPath))
+        , _authToken(std::move(authToken))
     {}
 
     void Run()
@@ -167,9 +169,60 @@ private:
         http::async_read(_stream, _buf, _req,
             [self = shared_from_this()](beast::error_code ec, std::size_t)
             {
-                if (!ec) self->HandleRequest();
-                // else: connection closed
+                if (ec)
+                    return; // connection closed
+
+                // Nothing a request does may escape this handler: an exception
+                // here propagates out of io_context::run() on the web thread and
+                // std::terminate()s the whole process. GET /api/nodes/ used to
+                // do exactly that via an unguarded std::stoi.
+                try
+                {
+                    self->HandleRequest();
+                }
+                catch (std::exception const& e)
+                {
+                    LOG_WARN("clustermgr.web", "WebServer: request {} {} failed: {}",
+                             std::string(self->_req.method_string()), std::string(self->_req.target()), e.what());
+                    self->SendError(http::status::bad_request, "Bad request");
+                }
+                catch (...)
+                {
+                    self->SendError(http::status::internal_server_error, "Internal error");
+                }
             });
+    }
+
+    /// Mutating routes require `Authorization: Bearer <Web.AuthToken>`.
+    /// Returns true if the request may proceed; otherwise the error has been sent.
+    bool RequireAuth()
+    {
+        if (_authToken.empty())
+        {
+            SendError(http::status::forbidden,
+                      "Node control over HTTP is disabled (Web.AuthToken is not set)");
+            return false;
+        }
+        auto it = _req.find(http::field::authorization);
+        if (it == _req.end())
+        {
+            SendError(http::status::unauthorized, "Authorization: Bearer <token> required");
+            return false;
+        }
+        std::string const value(it->value());
+        static constexpr char PREFIX[] = "Bearer ";
+        if (value.size() != sizeof(PREFIX) - 1 + _authToken.size() ||
+            value.compare(0, sizeof(PREFIX) - 1, PREFIX) != 0 ||
+            value.compare(sizeof(PREFIX) - 1, std::string::npos, _authToken) != 0)
+        {
+            beast::error_code epEc;
+            auto ep = beast::get_lowest_layer(_stream).socket().remote_endpoint(epEc);
+            LOG_WARN("clustermgr.web", "WebServer: rejected control request from {} (bad token)",
+                     epEc ? std::string("?") : ep.address().to_string());
+            SendError(http::status::unauthorized, "Bad token");
+            return false;
+        }
+        return true;
     }
 
     void HandleRequest()
@@ -210,13 +263,21 @@ private:
         }
 
         if (_req.method() == http::verb::post && target == "/api/deploy")
+        {
+            if (!RequireAuth()) return;
             return HandleApiDeploy();
+        }
 
         // Node control: POST /api/nodes/{id}/{start|stop|kill|restart}
         // These are POST, not GET, deliberately — a GET that SIGKILLs a game
-        // server would be triggerable by any prefetcher or crawler.
+        // server would be triggerable by any prefetcher or crawler — and they
+        // require the bearer token, so neither a cross-site form post nor
+        // anyone who can merely reach the port can stop a node.
         if (_req.method() == http::verb::post && target.rfind("/api/nodes/", 0) == 0)
+        {
+            if (!RequireAuth()) return;
             return HandleApiNodeAction(target.substr(11));
+        }
 
         // 404
         SendError(http::status::not_found, "Not found");
@@ -240,7 +301,18 @@ private:
 
     void HandleApiNode(std::string const& idStr)
     {
-        uint8 nodeId = static_cast<uint8>(std::stoi(idStr));
+        uint8 nodeId = 0;
+        try
+        {
+            int v = std::stoi(idStr);
+            if (v < 0 || v > 255)
+                throw std::out_of_range("node id");
+            nodeId = static_cast<uint8>(v);
+        }
+        catch (std::exception const&)
+        {
+            return SendError(http::status::bad_request, "Bad node id");
+        }
         auto nodes = _monitor->GetNodes();
         for (auto const& n : nodes)
         {
@@ -262,10 +334,13 @@ private:
         if (slash == std::string::npos)
             return SendError(http::status::bad_request, "Expected /api/nodes/{id}/{action}");
 
-        uint8 nodeId;
+        uint8 nodeId = 0;
         try
         {
-            nodeId = static_cast<uint8>(std::stoi(rest.substr(0, slash)));
+            int v = std::stoi(rest.substr(0, slash));
+            if (v < 0 || v > 255)
+                throw std::out_of_range("node id");
+            nodeId = static_cast<uint8>(v);
         }
         catch (std::exception const&)
         {
@@ -315,7 +390,9 @@ private:
 
     void HandleTile(std::string const& tileSubpath)
     {
-        // tileSubpath = "{continent}/{z}/{x}/{y}.png"
+        // tileSubpath = "{mapId}/{z}/{x}/{y}.png", or "maps.json" (the tile
+        // generator's index the SPA reads to learn which maps have tiles and
+        // their extents). Only those two types are served from TilesPath.
         if (_tilesPath.empty())
         {
             SendError(http::status::not_found, "Tiles directory not configured (Map.TilesPath)");
@@ -324,18 +401,33 @@ private:
 
         fs::path tilePath = fs::path(_tilesPath) / tileSubpath;
 
-        // Safety: no path traversal
-        auto canon = fs::weakly_canonical(tilePath);
-        auto base  = fs::weakly_canonical(_tilesPath);
-        std::string canonStr = canon.string();
-        std::string baseStr  = base.string();
-        if (canonStr.rfind(baseStr, 0) != 0)
+        std::string const ext = tilePath.extension().string();
+        bool const isPng  = (ext == ".png");
+        bool const isJson = (ext == ".json");
+        if (!isPng && !isJson)
+        {
+            SendError(http::status::not_found, "Not found");
+            return;
+        }
+
+        // Safety: no path traversal. Compare by path component, not by string
+        // prefix — "/srv/tiles-backup/x" string-prefix-matches "/srv/tiles".
+        std::error_code ec1, ec2;
+        auto canon = fs::weakly_canonical(tilePath, ec1);
+        auto base  = fs::weakly_canonical(_tilesPath, ec2);
+        auto rel   = canon.lexically_relative(base);
+        if (ec1 || ec2 || rel.empty() || rel.begin()->string() == "..")
         {
             SendError(http::status::forbidden, "Forbidden");
             return;
         }
 
         std::ifstream tileFile(tilePath, std::ios::binary);
+        if (!tileFile && isJson)
+        {
+            SendError(http::status::not_found, "Not found");
+            return;
+        }
         if (!tileFile)
         {
             // Return a 1×1 transparent PNG rather than 404 so Leaflet renders empty tiles cleanly.
@@ -353,14 +445,15 @@ private:
 
         std::string tileData((std::istreambuf_iterator<char>(tileFile)),
                               std::istreambuf_iterator<char>());
-        SendRaw(std::move(tileData), "image/png");
+        SendRaw(std::move(tileData), isJson ? "application/json" : "image/png");
     }
 
     template<class Body>
     void Send(http::response<Body>&& res)
     {
         res.set(http::field::server, "C9Core-ClusterMgr");
-        res.set(http::field::access_control_allow_origin, "*");
+        // No Access-Control-Allow-Origin: the SPA is served from this origin.
+        // A wildcard here let any page the operator visited read cluster state.
         res.prepare_payload();
 
         auto sp = std::make_shared<http::response<Body>>(std::move(res));
@@ -404,6 +497,7 @@ private:
     std::shared_ptr<NatsMonitor>              _monitor;
     std::shared_ptr<HistoryStore>             _history;
     std::string                               _tilesPath;
+    std::string                               _authToken;
 };
 
 // ── WebServer ─────────────────────────────────────────────────────────────────
@@ -412,12 +506,14 @@ WebServer::WebServer(std::shared_ptr<NatsMonitor> monitor,
                      std::shared_ptr<HistoryStore> history,
                      std::string tilesPath,
                      uint16 port,
-                     std::string bindAddr)
+                     std::string bindAddr,
+                     std::string authToken)
     : _monitor(std::move(monitor))
     , _history(std::move(history))
     , _tilesPath(std::move(tilesPath))
     , _port(port)
     , _bindAddr(std::move(bindAddr))
+    , _authToken(std::move(authToken))
     , _acceptor(_ioc)
     , _hub(std::make_shared<WsHub>(_ioc))
 {
@@ -439,7 +535,8 @@ void WebServer::Start()
         _acceptor.bind(endpoint);
         _acceptor.listen(net::socket_base::max_listen_connections);
         DoAccept();
-        LOG_INFO("clustermgr", "WebServer: Listening on {}:{}", _bindAddr, _port);
+        LOG_INFO("clustermgr", "WebServer: Listening on {}:{} (node control over HTTP: {})",
+                 _bindAddr, _port, _authToken.empty() ? "DISABLED — Web.AuthToken unset" : "bearer token");
     }
     catch (std::exception const& e)
     {
@@ -459,7 +556,20 @@ void WebServer::Stop()
 
 void WebServer::Run()
 {
-    _ioc.run();
+    // Belt and braces for anything that still escapes a handler: keep the
+    // web thread alive rather than letting the exception terminate the process.
+    for (;;)
+    {
+        try
+        {
+            _ioc.run();
+            return;
+        }
+        catch (std::exception const& e)
+        {
+            LOG_ERROR("clustermgr.web", "WebServer: exception escaped io_context: {} — continuing", e.what());
+        }
+    }
 }
 
 void WebServer::DoAccept()
@@ -471,7 +581,7 @@ void WebServer::DoAccept()
             if (!ec)
             {
                 auto session = std::make_shared<HttpSession>(
-                    std::move(socket), _hub, _monitor, _history, _tilesPath);
+                    std::move(socket), _hub, _monitor, _history, _tilesPath, _authToken);
                 session->Run();
             }
             DoAccept();

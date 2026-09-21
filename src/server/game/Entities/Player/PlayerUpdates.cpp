@@ -637,10 +637,13 @@ void Player::Update(uint32 p_time)
                 // NOTE: Do NOT send SMSG_SUSPEND_COMMS before SMSG_REDIRECT_CLIENT!
                 // Binary analysis shows the client checks the suspended flag (0x538) and
                 // skips the redirect entirely if it's set. Just send the redirect directly.
-                static std::mt19937 rng(std::random_device{}());
-                uint32 token = rng();
+                uint32 const token = ClientRedirect::GenerateToken();
+                if (token == 0)
+                    return; // CSPRNG failure — abort this handoff, retry next zone tick
                 sNatsBus.PublishRedirectToken(GetSession()->GetAccountId(),
-                                                  GetGUID().GetRawValue(), token, destNode->nodeId);
+                                                  GetGUID().GetRawValue(), token, destNode->nodeId,
+                                                  GetSession()->GetRemoteAddress(),
+                                                  GetSession()->GetAddonsList());
 
                 // 4. Redirect client to destination node (client disconnects + reconnects)
                 auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(

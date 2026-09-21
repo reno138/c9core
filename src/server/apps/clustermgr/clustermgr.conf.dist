@@ -44,6 +44,24 @@ ClusterServer.MgmtStatusInterval = 5
 ###################################################################################################
 
 ###################################################################################################
+# UI
+#
+#    UI.Enabled
+#        Description: Run the ncurses terminal UI on the main thread.
+#                     Set to 0 to run headless — e.g. as a systemd service
+#                     (see c9-clustermgr.service): the process keeps the NATS
+#                     monitor and the web server running and exits on
+#                     SIGINT/SIGTERM. With UI.Enabled=0 and Web.Enabled=0 there is
+#                     nothing to do and clustermgr exits with an error.
+#        Default:     1 - (Enabled: interactive TUI)
+#                     0 - (Disabled: headless, web UI only)
+
+UI.Enabled = 1
+
+#
+###################################################################################################
+
+###################################################################################################
 # WEB UI
 #
 #    Web.Enabled
@@ -63,18 +81,46 @@ Web.Port = 9191
 #
 #    Web.BindAddr
 #        Description: IP address to bind the web server to.
-#                     "0.0.0.0" = all interfaces; "127.0.0.1" = localhost only.
-#        Default:     "0.0.0.0"
+#                     "127.0.0.1" = this host only; "0.0.0.0" = all interfaces
+#                     (needed when the operator browses from another VLAN).
+#
+#                     Everything the web UI serves is READ-ONLY unless
+#                     Web.AuthToken is set — node names, states, history and
+#                     player positions are visible to anyone who can reach the
+#                     port, but nothing can be started, stopped or killed.
+#        Default:     "127.0.0.1"
 
-Web.BindAddr = "0.0.0.0"
+Web.BindAddr = "127.0.0.1"
+
+#
+#    Web.AuthToken
+#        Description: Bearer token required on every mutating HTTP route:
+#                     POST /api/nodes/{id}/{start|stop|kill|restart} and
+#                     POST /api/deploy. Clients send it as
+#                         Authorization: Bearer <token>
+#                     Requests without it get 401; if this option is empty those
+#                     routes answer 403 and node control over HTTP is disabled
+#                     entirely (the TUI and the NATS-level control still work).
+#
+#                     The web UI has no login page; a browser client is expected
+#                     to be a script or a reverse proxy that injects the header.
+#
+#                     Generate with:  openssl rand -hex 24
+#        Default:     "" - (node control over HTTP disabled)
+
+Web.AuthToken = ""
 
 #
 #    Map.TilesPath
-#        Description: Local directory containing WoW 3.3.5a map tiles (Keira3-format).
+#        Description: Local directory containing WoW 3.3.5a map tiles.
 #                     Directory structure: {TilesPath}/{mapId}/{z}/{x}/{y}.png
 #                     Leave empty to serve empty placeholder tiles (map viewer shows labels only).
+#                     Only *.png tiles and *.json index files (e.g. maps.json
+#                     written by the tile generator) are served from here.
+#                     Requests are confined to this directory by path component;
+#                     a sibling directory sharing the prefix is not reachable.
 #        Default:     ""
-#        Example:     "/home/wow/wowcluster/map-tiles"
+#        Example:     "/home/wow/335/map-tiles"
 
 Map.TilesPath = ""
 
@@ -96,7 +142,12 @@ History.RetentionSeconds = 3600
 
 ###################################################################################################
 # DEPLOY DEFAULTS
-#    Pre-filled values for the Deploy Wizard (TUI F4 or web UI modal).
+#    Pre-filled values for the Deploy Wizard (TUI F4). The wizard copies the two
+#    binaries and two confs, then sets ClusterServer.NodeId/NatsURL/AuthKey and
+#    ClusterServer.InstanceServer in worldserver.conf and NodeMgr.NodeId/NatsUrl/
+#    AuthKey plus the Worldserver* paths in nodemgr.conf on the remote host.
+#    NatsURL comes from ClusterServer.NatsUrl above and AuthKey from
+#    ClusterMgr.AuthKey below. Any step that fails fails the deployment.
 #
 
 Deploy.WorldserverBin  = "./worldserver"
@@ -134,17 +185,19 @@ Logger.clustermgr.web=4,Console ClusterMgr
 #                     MUST match ClusterServer.AuthKey on the worldservers and
 #                     NodeMgr.AuthKey on the supervisors.
 #
-#                     Required to issue node control actions (F2 Start, F3 Stop,
-#                     F6 Kill, F7 Restart, and the web /api/nodes endpoints).
-#                     Monitoring — node table, player map, history — works without
-#                     it; only control is gated, and an unauthenticated control
-#                     frame is never sent.
+#                     Required for everything: the status, player and supervisor
+#                     feeds are all sealed by their publishers and are dropped
+#                     here if they do not verify, so without the key clustermgr
+#                     sees no nodes at all. It is also what seals the control
+#                     actions (F2 Start, F3 Stop, F6 Kill, F7 Restart, and the
+#                     web /api/nodes endpoints); an unauthenticated control frame
+#                     is never sent.
 #
 #                     Must be at least 32 bytes.
 #
 #                     Generate with:  openssl rand -hex 32
 #
-#        Default:     "" - (monitoring only; control actions refused and logged)
+#        Default:     "" - (nothing verifies; no nodes shown, control refused)
 #
 
 ClusterMgr.AuthKey = ""

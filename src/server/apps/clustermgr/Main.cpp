@@ -39,6 +39,8 @@
 #include "HistoryStore.h"
 #include "WebServer.h"
 #include "ClusterUI.h"
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/signal_set.hpp>
 #include <boost/program_options.hpp>
 #include <boost/version.hpp>
 #include <chrono>
@@ -99,10 +101,20 @@ int main(int argc, char** argv)
                  "ClusterMgr.AuthKey missing or shorter than {} bytes — node control is DISABLED "
                  "(monitoring still works). Generate one with: openssl rand -hex 32",
                  ClusterAuth::MIN_KEY_BYTES);
+    bool        uiEnabled    = sConfigMgr->GetOption<bool>("UI.Enabled", true);
     bool        webEnabled   = sConfigMgr->GetOption<bool>("Web.Enabled", true);
     uint16      webPort      = static_cast<uint16>(sConfigMgr->GetOption<int32>("Web.Port",     9191));
-    std::string webBind      = sConfigMgr->GetOption<std::string>("Web.BindAddr", "0.0.0.0");
+    std::string webBind      = sConfigMgr->GetOption<std::string>("Web.BindAddr", "127.0.0.1");
+    std::string webToken     = sConfigMgr->GetOption<std::string>("Web.AuthToken", "");
     std::string tilesPath    = sConfigMgr->GetOption<std::string>("Map.TilesPath", "");
+
+    if (!uiEnabled && !webEnabled)
+    {
+        std::cerr << "clustermgr: UI.Enabled=0 and Web.Enabled=0 — nothing to run\n";
+        return 1;
+    }
+    if (webEnabled && webToken.empty())
+        LOG_WARN("clustermgr", "Web.AuthToken is empty — the web UI is read-only (node control over HTTP disabled)");
     uint32      retentionSec = static_cast<uint32>(sConfigMgr->GetOption<int32>("History.RetentionSeconds", 3600));
     uint32      deadThresh   = static_cast<uint32>(sConfigMgr->GetOption<int32>("ClusterServer.NodeDeadThreshold", 30));
 
@@ -115,19 +127,25 @@ int main(int argc, char** argv)
     auto monitor = std::make_shared<NatsMonitor>();
 
     // ── Create WebServer (optional) ────────────────────────────────────────────
-    std::unique_ptr<WebServer> webServer;
+    // shared_ptr rather than unique_ptr so the NATS callbacks can hold it by
+    // value; NatsMonitor::Stop() is what guarantees no callback outlives main.
+    std::shared_ptr<WebServer> webServer;
     if (webEnabled)
-        webServer = std::make_unique<WebServer>(monitor, history, tilesPath, webPort, webBind);
+        webServer = std::make_shared<WebServer>(monitor, history, tilesPath, webPort, webBind, webToken);
 
-    // ── Create TUI ────────────────────────────────────────────────────────────
-    auto ui = std::make_shared<ClusterUI>(natsUrl, monitor);
+    // ── Create TUI (optional — UI.Enabled=0 runs headless as a service) ───────
+    std::shared_ptr<ClusterUI> ui;
+    if (uiEnabled)
+        ui = std::make_shared<ClusterUI>(natsUrl, monitor);
 
     // ── Wire NatsMonitor callbacks ────────────────────────────────────────────
     //
     // These lambdas run on NATS internal threads — all UI / WebServer calls
-    // are thread-safe (mutex-protected or posted to io_context).
+    // are thread-safe (mutex-protected or posted to io_context). Everything is
+    // captured by value: the previous [&] captured stack objects that were
+    // destroyed before NatsMonitor stopped delivering.
     //
-    NatsMonitor::StatusCallback statusCb = [&](std::vector<NodeInfo> nodes)
+    NatsMonitor::StatusCallback statusCb = [history, monitor, webServer, ui](std::vector<NodeInfo> nodes)
     {
         // Record history samples.
         uint32 nowSec = static_cast<uint32>(
@@ -176,25 +194,53 @@ int main(int argc, char** argv)
             }
         }
 
-        ui->UpdateNodes(nodes);
-        ui->SetConnected(monitor->IsConnected());
+        if (ui)
+        {
+            ui->UpdateNodes(nodes);
+            ui->SetConnected(monitor->IsConnected());
+        }
 
         if (webServer)
             webServer->OnNodeUpdate(nodes);
     };
+
+    if (webServer)
+        monitor->SetPlayersCallback([webServer](std::vector<PlayerInfo> players)
+        {
+            webServer->OnPlayersUpdate(players);
+        });
 
     monitor->Start(natsUrl, std::move(statusCb), deadThresh);
 
     if (webServer)
         webServer->Start();
 
-    // ── Run TUI (blocks main thread until user presses F10 / q) ───────────────
-    LOG_INFO("server.clustermgr", "clustermgr: Starting TUI. Press F10 to quit.");
-    LOG_INFO("server.clustermgr", "clustermgr: Web UI at http://{}:{}/", webBind == "0.0.0.0" ? "localhost" : webBind, webPort);
+    if (webEnabled)
+        LOG_INFO("server.clustermgr", "clustermgr: Web UI at http://{}:{}/", webBind == "0.0.0.0" ? "localhost" : webBind, webPort);
 
-    ui->Run();
+    if (ui)
+    {
+        // ── Run TUI (blocks main thread until user presses F10 / q) ───────────
+        LOG_INFO("server.clustermgr", "clustermgr: Starting TUI. Press F10 to quit.");
+        ui->Run();
+    }
+    else
+    {
+        // ── Headless: block until SIGINT/SIGTERM (systemd stop) ───────────────
+        LOG_INFO("server.clustermgr", "clustermgr: Running headless (UI.Enabled=0). SIGTERM to stop.");
+        boost::asio::io_context waitCtx;
+        boost::asio::signal_set signals(waitCtx, SIGINT, SIGTERM);
+        signals.async_wait([](boost::system::error_code const&, int sig)
+        {
+            LOG_INFO("server.clustermgr", "clustermgr: signal {} — shutting down", sig);
+        });
+        waitCtx.run();
+    }
 
     // ── Shutdown ───────────────────────────────────────────────────────────────
+    // Order matters: stop the NATS callbacks first, then the web thread, then
+    // let the objects they referenced go out of scope.
+    monitor->Stop();
     if (webServer)
         webServer->Stop();
 

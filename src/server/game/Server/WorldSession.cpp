@@ -1596,7 +1596,9 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
         WorldPacket data(CMSG_PLAYER_LOGIN, 8);
         data << uint64(_redirectAutoLoginGuid);
         HandlePlayerLoginOpcode(data);
-        _redirectAutoLoginGuid = 0;
+        // Do NOT clear _redirectAutoLoginGuid here: HandlePlayerLoginOpcode only
+        // queues the DB load, and HandlePlayerLoginFromDB (several ticks later)
+        // is what reads the flag. It is cleared at the end of that function.
     }
 }
 

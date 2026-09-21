@@ -45,9 +45,16 @@
  *
  *   tag = HMAC-SHA256(key, ver || srcNode || timestampMs || nonce || msgType || payload)
  *
- * The tag covers srcNode, so a peer cannot forge another node's identity, and it
- * covers msgType, so a frame cannot be re-typed (e.g. a benign chat relay
- * replayed as MSG_RA_COMMAND).
+ * The tag covers msgType, so a frame cannot be re-typed (e.g. a benign chat
+ * relay replayed as MSG_RA_COMMAND). It also covers srcNode, but note what
+ * that does and does not buy: every participant holds the same key, so any
+ * key holder can Seal() a frame claiming any srcNode. The field is protected
+ * against off-bus tampering, not against a peer. Authorisation decisions
+ * (e.g. who may issue supervisor commands) must not rest on srcNode alone.
+ *
+ * The tag does NOT cover the NATS subject. Consumers that share the key but
+ * live in a different msgType number space must not accept frames whose
+ * msgType collides with worldserver message types (see nodemgr).
  *
  * REPLAY PROTECTION
  * -----------------

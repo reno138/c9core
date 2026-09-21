@@ -902,10 +902,17 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             }
 
             // Publish redirect token (no SMSG_SUSPEND_COMMS — it blocks the redirect)
-            thread_local static std::mt19937 rng(std::random_device{}());
-            uint32 token = rng();
+            uint32 const token = ClientRedirect::GenerateToken();
+            if (token == 0)
+            {
+                SetPlayer(nullptr);
+                delete pCurrChar;
+                m_playerLoading = false;
+                KickPlayer("redirect token generation failed");
+                return;
+            }
             sNatsBus.PublishRedirectToken(GetAccountId(), charGuid, token,
-                                              destNode->nodeId, GetAddonsList());
+                                              destNode->nodeId, GetRemoteAddress(), GetAddonsList());
 
             // Redirect client to destination node
             auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
@@ -1472,6 +1479,13 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
         pCurrChar->RemoveAtLoginFlag(AT_LOGIN_FIRST);
         sScriptMgr->OnPlayerFirstLogin(pCurrChar);
     }
+
+    // Cluster: the redirect auto-login GUID has now served both of its readers
+    // (the wrong-node guard above and the LOGINEFFECT skip inside
+    // SendInitialPacketsAfterAddToMap). Clear it here, not in
+    // InitializeSessionCallback — the login is asynchronous, so clearing it
+    // right after firing CMSG_PLAYER_LOGIN meant neither reader ever saw it.
+    SetRedirectAutoLoginGuid(0);
 
     METRIC_EVENT("player_events", "Login", pCurrChar->GetName());
 }

@@ -45,6 +45,8 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <string>
+#include <vector>
 #include <openssl/crypto.h>
 #include <openssl/opensslv.h>
 
@@ -112,8 +114,45 @@ int main(int argc, char** argv)
     std::string ctlNatsUrl = sConfigMgr->GetOption<std::string>("NodeMgr.NatsUrl", "");
     std::string ctlAuthKey = sConfigMgr->GetOption<std::string>("NodeMgr.AuthKey", "");
 
+    // Comma-separated srcNode ids allowed to issue commands. clustermgr seals
+    // its frames as node 0.
+    std::vector<uint8> ctlControllers;
+    {
+        std::string const list = sConfigMgr->GetOption<std::string>("NodeMgr.ControllerNodeIds", "0");
+        std::string cur;
+        auto flush = [&]()
+        {
+            if (cur.empty()) return;
+            try
+            {
+                int v = std::stoi(cur);
+                if (v >= 0 && v <= 255)
+                    ctlControllers.push_back(static_cast<uint8>(v));
+                else
+                    LOG_ERROR("server.nodemgr", "nodemgr: NodeMgr.ControllerNodeIds entry '{}' out of range, ignored", cur);
+            }
+            catch (std::exception const&)
+            {
+                LOG_ERROR("server.nodemgr", "nodemgr: NodeMgr.ControllerNodeIds entry '{}' is not a number, ignored", cur);
+            }
+            cur.clear();
+        };
+        for (char c : list)
+        {
+            if (c == ',' || c == ' ' || c == ';') flush();
+            else cur += c;
+        }
+        flush();
+    }
+
     if (useGdb)
         LOG_INFO("server.nodemgr", "nodemgr: GDB mode ENABLED — crash backtraces will appear in {}", worldserverLog);
+
+    // ── IO context ────────────────────────────────────────────────────────────
+    // Declared before NodeMgr/NodeMgrControl so it outlives them: remote
+    // commands are posted onto it from the NATS thread, and the control
+    // channel is stopped (unsubscribed) before it goes away.
+    boost::asio::io_context ioCtx;
 
     // ── Create NodeMgr (process manager) ──────────────────────────────────────
     NodeMgr nodeMgr;
@@ -134,7 +173,7 @@ int main(int argc, char** argv)
                       "Generate one with: openssl rand -hex 32",
                       ClusterAuth::MIN_KEY_BYTES);
         }
-        else if (nodeCtl.Start(ctlNatsUrl, ctlNodeId, &nodeMgr))
+        else if (nodeCtl.Start(ctlNatsUrl, ctlNodeId, &nodeMgr, ioCtx, ctlControllers))
         {
             LOG_INFO("server.nodemgr", "nodemgr: remote control active on cluster.nodemgr.{}", ctlNodeId);
         }
@@ -147,8 +186,7 @@ int main(int argc, char** argv)
     LOG_INFO("server.nodemgr", "nodemgr: worldserver={} startupDelay={}s maxRestarts={}",
              worldserverBin, startupDelaySecs, maxRestarts);
 
-    // ── IO context and timers ─────────────────────────────────────────────────
-    boost::asio::io_context ioCtx;
+    // ── Timers ────────────────────────────────────────────────────────────────
 
     // Crash-restart state
     int  consecutiveCrashes = 0;
@@ -247,6 +285,9 @@ int main(int argc, char** argv)
 
     LOG_INFO("server.nodemgr", "nodemgr: Running. Ctrl-C to stop.");
     ioCtx.run();
+
+    // No more NATS callbacks may post onto ioCtx once run() has returned.
+    nodeCtl.Stop();
 
     if (giveUp)
         LOG_ERROR("server.nodemgr", "nodemgr: Exited due to too many crashes.");

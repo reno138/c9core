@@ -17,6 +17,7 @@
 
 #include "NatsMonitor.h"
 #include "ClusterAuth.h"
+#include "ClusterMgmtProtocol.h"
 #include "Log.h"
 #include <nats.h>
 #include <cstring>
@@ -26,22 +27,33 @@ NatsMonitor::NatsMonitor() = default;
 
 NatsMonitor::~NatsMonitor()
 {
+    Stop();
+}
+
+void NatsMonitor::Stop()
+{
     _watchdogRunning = false;
     if (_watchdog.joinable())
         _watchdog.join();
 
-    if (_subPlayers)
+    // Unsubscribe (synchronously stops delivery) before destroying, and cover
+    // all three subscriptions — the nodemgr one used to be left armed here and
+    // could write _supervisors while this object was being destroyed.
+    for (natsSubscription** sub : { &_subNodeMgr, &_subPlayers, &_subStatus })
     {
-        natsSubscription_Unsubscribe(_subPlayers);
-        natsSubscription_Destroy(_subPlayers);
-    }
-    if (_subStatus)
-    {
-        natsSubscription_Unsubscribe(_subStatus);
-        natsSubscription_Destroy(_subStatus);
+        if (*sub)
+        {
+            natsSubscription_Unsubscribe(*sub);
+            natsSubscription_Destroy(*sub);
+            *sub = nullptr;
+        }
     }
     if (_nc)
+    {
         natsConnection_Destroy(_nc);
+        _nc = nullptr;
+    }
+    _connected = false;
 }
 
 void NatsMonitor::Start(std::string const& natsUrl, StatusCallback statusCb,
@@ -93,26 +105,57 @@ void NatsMonitor::Start(std::string const& natsUrl, StatusCallback statusCb,
 
 // ── NATS callbacks (run on NATS internal thread) ──────────────────────────────
 
+// The management feeds are sealed by the worldserver (NatsBus::PublishSealed).
+// Before that, anyone on the NATS port could invent nodes, states and players,
+// and the address/name strings landed in the operator's browser. Open() the
+// frame, check the type, and then require the body's nodeId to match the
+// frame's authenticated sender so one node cannot report as another.
+static bool OpenMgmtFrame(natsMsg* msg, uint8 expectedType, char const* what,
+                          uint8& outSrc, std::vector<uint8>& outBody)
+{
+    uint8 const* d = reinterpret_cast<uint8 const*>(natsMsg_GetData(msg));
+    int          n = natsMsg_GetDataLength(msg);
+    uint8 msgType = 0;
+    bool const ok = ClusterAuth::Open(d, static_cast<std::size_t>(n), outSrc, msgType, outBody);
+    natsMsg_Destroy(msg);
+    if (!ok)
+    {
+        LOG_WARN("clustermgr", "NatsMonitor: dropped unauthenticated/replayed {} frame ({} bytes)", what, n);
+        return false;
+    }
+    if (msgType != expectedType)
+    {
+        LOG_WARN("clustermgr", "NatsMonitor: {} frame from node {} has msgType 0x{:02X} — dropped",
+                 what, outSrc, msgType);
+        return false;
+    }
+    return true;
+}
+
 void NatsMonitor::OnStatusMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
                               natsMsg* msg, void* closure)
 {
-    static_cast<NatsMonitor*>(closure)->ParseStatus(msg);
-    natsMsg_Destroy(msg);
+    uint8 src = 0;
+    std::vector<uint8> body;
+    if (OpenMgmtFrame(msg, ClusterMgmt::MSG_MGMT_STATUS, "mgmt.status", src, body))
+        static_cast<NatsMonitor*>(closure)->ParseStatus(src, body);
 }
 
 void NatsMonitor::OnPlayersMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
                                natsMsg* msg, void* closure)
 {
-    static_cast<NatsMonitor*>(closure)->ParsePlayers(msg);
-    natsMsg_Destroy(msg);
+    uint8 src = 0;
+    std::vector<uint8> body;
+    if (OpenMgmtFrame(msg, ClusterMgmt::MSG_MGMT_PLAYERS, "mgmt.players", src, body))
+        static_cast<NatsMonitor*>(closure)->ParsePlayers(src, body);
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
-void NatsMonitor::ParseStatus(natsMsg* msg)
+void NatsMonitor::ParseStatus(uint8 srcNode, std::vector<uint8> const& body)
 {
-    int  dataLen = natsMsg_GetDataLength(msg);
-    auto data    = reinterpret_cast<uint8 const*>(natsMsg_GetData(msg));
+    int  dataLen = static_cast<int>(body.size());
+    auto data    = body.data();
 
     // Minimum fixed part: nodeId(1)+state(1)+players(2)+max(2)+pid(4)+uptime(4)+
     //   mem(4)+cpu(1)+crash(2)+txBps(4)+rxBps(4)+mapCount(1) = 30 bytes
@@ -127,6 +170,12 @@ void NatsMonitor::ParseStatus(natsMsg* msg)
     NodeInfo n;
     n.nodeId = data[off++];
     n.state  = data[off++];
+
+    if (n.nodeId != srcNode)
+    {
+        LOG_WARN("clustermgr", "NatsMonitor: mgmt.status from node {} claims nodeId {} — dropped", srcNode, n.nodeId);
+        return;
+    }
 
     std::memcpy(&n.playerCount, data + off, 2); off += 2;
     std::memcpy(&n.maxPlayers,  data + off, 2); off += 2;
@@ -179,10 +228,10 @@ void NatsMonitor::ParseStatus(natsMsg* msg)
         _statusCb(std::move(snapshot));
 }
 
-void NatsMonitor::ParsePlayers(natsMsg* msg)
+void NatsMonitor::ParsePlayers(uint8 srcNode, std::vector<uint8> const& body)
 {
-    int  dataLen = natsMsg_GetDataLength(msg);
-    auto data    = reinterpret_cast<uint8 const*>(natsMsg_GetData(msg));
+    int  dataLen = static_cast<int>(body.size());
+    auto data    = body.data();
 
     // Header: nodeId(1) + playerCount(2) = 3 bytes minimum
     if (dataLen < 3)
@@ -192,6 +241,12 @@ void NatsMonitor::ParsePlayers(natsMsg* msg)
     uint8  nodeId = data[off++];
     uint16 count  = 0;
     std::memcpy(&count, data + off, 2); off += 2;
+
+    if (nodeId != srcNode)
+    {
+        LOG_WARN("clustermgr", "NatsMonitor: mgmt.players from node {} claims nodeId {} — dropped", srcNode, nodeId);
+        return;
+    }
 
     std::vector<PlayerInfo> newPlayers;
     newPlayers.reserve(count);
@@ -227,6 +282,7 @@ void NatsMonitor::ParsePlayers(natsMsg* msg)
     }
 
     // Replace all players from this node atomically.
+    std::vector<PlayerInfo> snapshot;
     {
         std::lock_guard<std::mutex> lock(_playersMutex);
         // Remove old entries from this node, then append new ones.
@@ -236,7 +292,14 @@ void NatsMonitor::ParsePlayers(natsMsg* msg)
             _players.end());
         for (auto& p : newPlayers)
             _players.push_back(std::move(p));
+        if (_playersCb)
+            snapshot = _players;
     }
+
+    // Push to the web UI. Nothing used to call this, so the live map only ever
+    // showed the players present at page load.
+    if (_playersCb)
+        _playersCb(std::move(snapshot));
 }
 
 // ── Watchdog (dead-node detection) ────────────────────────────────────────────
@@ -336,22 +399,22 @@ void NatsMonitor::SendNodeMgrCommand(uint8 nodeId, uint8 cmd, char const* what)
 
 void NatsMonitor::SendStartNode(uint8 nodeId)
 {
-    SendNodeMgrCommand(nodeId, 0x01 /*CMD_START*/, "START");
+    SendNodeMgrCommand(nodeId, ClusterMgmt::CMD_START, "START");
 }
 
 void NatsMonitor::SendStopNode(uint8 nodeId)
 {
-    SendNodeMgrCommand(nodeId, 0x02 /*CMD_STOP*/, "STOP");
+    SendNodeMgrCommand(nodeId, ClusterMgmt::CMD_STOP, "STOP");
 }
 
 void NatsMonitor::SendKillNode(uint8 nodeId)
 {
-    SendNodeMgrCommand(nodeId, 0x03 /*CMD_KILL*/, "KILL");
+    SendNodeMgrCommand(nodeId, ClusterMgmt::CMD_KILL, "KILL");
 }
 
 void NatsMonitor::SendRestartNode(uint8 nodeId)
 {
-    SendNodeMgrCommand(nodeId, 0x04 /*CMD_RESTART*/, "RESTART");
+    SendNodeMgrCommand(nodeId, ClusterMgmt::CMD_RESTART, "RESTART");
 }
 
 std::vector<NatsMonitor::SupervisorInfo> NatsMonitor::GetSupervisors() const
@@ -403,11 +466,13 @@ void NatsMonitor::OnNodeMgrMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/
     bool const ok = ClusterAuth::Open(d, static_cast<std::size_t>(n), srcNode, msgType, body);
     natsMsg_Destroy(msg);
 
-    if (!ok || msgType != 0x40 /*MSG_NODEMGR_STATUS*/ || body.size() < 11)
+    if (!ok || msgType != ClusterMgmt::MSG_NODEMGR_STATUS || body.size() < 11)
         return;
 
     SupervisorInfo info;
     info.nodeId = body[0];
+    if (info.nodeId != srcNode)
+        return; // a supervisor may only report on itself
     info.state  = body[1];
     info.pid    = uint32(body[2]) | (uint32(body[3]) << 8) | (uint32(body[4]) << 16) | (uint32(body[5]) << 24);
     info.uptimeSecs = uint32(body[6]) | (uint32(body[7]) << 8) | (uint32(body[8]) << 16) | (uint32(body[9]) << 24);

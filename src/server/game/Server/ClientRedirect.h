@@ -17,6 +17,12 @@ class WorldSession;
 
 namespace ClientRedirect
 {
+    /// Generate a redirect token from the CSPRNG. Returns 0 (and logs) if
+    /// RAND_bytes fails; callers must treat 0 as "do not redirect".
+    /// One shared implementation so no call site falls back to a per-thread
+    /// (or worse, shared) std::mt19937.
+    uint32 GenerateToken();
+
     /// Send SMSG_SUSPEND_COMMS (0x50F) to freeze client packet transmission.
     /// Client responds with CMSG_SUSPEND_COMMS_ACK (0x510) and stops sending.
     /// @return the generated suspension token

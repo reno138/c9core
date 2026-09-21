@@ -88,8 +88,14 @@ private:
     std::shared_ptr<WsHub>               _hub;
     beast::flat_buffer                   _readBuf;
 
-    std::mutex              _sendMutex;
+    /// A client that stops reading must not make the hub buffer without bound:
+    /// each status push is the full history (hundreds of KB) every 5 s. Past
+    /// this many queued bytes the session is dropped.
+    static constexpr std::size_t MAX_QUEUED_BYTES = 8 * 1024 * 1024;
+
+    std::mutex               _sendMutex;
     std::vector<std::string> _sendQueue;
+    std::size_t              _queuedBytes{ 0 };
     bool                     _writing{ false };
 };
 

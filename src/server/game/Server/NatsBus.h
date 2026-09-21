@@ -271,9 +271,15 @@ public:
                                         uint8 destNodeId,
                                         WorldLocation const& destLoc);
 
-    /// Publish redirect token to destination node for validation on reconnect.
+    /// Publish redirect token to the destination node ONLY (never broadcast —
+    /// every node holding the token widens the window in which a stray
+    /// reconnect can consume it).
+    /// @param clientIp  remote address of the client being redirected; the
+    ///                  destination refuses to hand the session to a socket
+    ///                  connecting from a different address.
     void PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token,
-                              uint8 destNodeId, std::list<AddonInfo> const& addons = {});
+                              uint8 destNodeId, std::string const& clientIp,
+                              std::list<AddonInfo> const& addons = {});
 
     static constexpr uint8 MSG_REDIRECT_TOKEN         = 0x29;  ///< redirect token for proxy-less transfer
 
@@ -283,11 +289,26 @@ private:
 
     // ── NATS publish helpers ──────────────────────────────────────────────────
 
-    /// Publish [msgType:1][payload] directly to cluster.node.{targetNodeId}.
+    /// Publish a sealed frame (see ClusterAuth.h) directly to cluster.node.{targetNodeId}.
+    /// Safe to call from the NATS dispatch thread as well as the world thread.
     void PublishToNode(uint8 targetNodeId, uint8 msgType, uint8 const* payload, int payloadLen);
 
-    /// Publish [msgType:1][payload] to cluster.broadcast (all nodes).
+    /// Publish a sealed frame to cluster.broadcast (all nodes).
     void PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadLen);
+
+    /// Seal @p payload as @p msgType and publish it to an arbitrary subject.
+    /// Used for the subjects that are not cluster.node.*/cluster.broadcast
+    /// (announce, transport request/reply) so that every subject the
+    /// worldserver listens on is authenticated.
+    void PublishSealed(std::string const& subject, uint8 msgType,
+                       uint8 const* payload, std::size_t payloadLen);
+
+    // ── nats.c connection lifecycle callbacks (NATS internal thread) ─────────
+    // cnats is configured to reconnect forever on its own; these only keep our
+    // view of the connection honest and trigger a re-announce after recovery.
+    static void OnNatsDisconnected(natsConnection* nc, void* closure);
+    static void OnNatsReconnected(natsConnection* nc, void* closure);
+    static void OnNatsClosed(natsConnection* nc, void* closure);
 
     /// Re-announce this node's identity and map set (e.g. after dynamic map change).
 
@@ -416,6 +437,15 @@ private:
     static constexpr uint8 MSG_PLAYER_CLAIM          = 0x27; ///< ownership claim (broadcast)
     static constexpr uint8 MSG_PLAYER_RELEASE        = 0x28; ///< ownership release (broadcast)
     static constexpr uint8 MSG_PLAYER_STATE_SYNC_V2  = 0x2A; ///< full v2 PlayerTransferData sync (broadcast, warm+cold)
+    /// Sealed cluster.announce frame. Payload documented in PublishAnnounce().
+    /// The frame's authenticated srcNode must equal the nodeId inside the payload.
+    static constexpr uint8 MSG_ANNOUNCE              = 0x2B;
+    /// Sealed cluster.transport.query request (empty payload) and its reply
+    /// ([count:2][guid_low:4][path_progress:4]...). Both directions are
+    /// authenticated so a stranger on the bus can neither read live transport
+    /// state nor seed a booting node with garbage.
+    static constexpr uint8 MSG_TRANSPORT_QUERY       = 0x2C;
+    static constexpr uint8 MSG_TRANSPORT_REPLY       = 0x2D;
 
     // ── NATS handles ──────────────────────────────────────────────────────────
     natsConnection*   _nc{nullptr};
@@ -425,15 +455,18 @@ private:
     natsSubscription* _subTransportQuery{nullptr}; ///< cluster.transport.query (req-reply)
 
     // ── Node identity ─────────────────────────────────────────────────────────
-    uint8       _nodeId{ 0 };    ///< Config-derived node ID (ClusterServer.NodeId).
+    uint8       _nodeId{ 0 };    ///< Config-derived node ID (ClusterServer.NodeId). Written once in Initialize().
     uint8       _serverType{ 0 };
-    bool        _worldReady{ false };
     uint16      _gamePort{ 0 };
     std::string _gameAddress;    ///< Own LAN IP (sent in registration so proxy can match it)
     std::string _natsUrl;
 
-    bool _connected{ false };
-    bool _clusterRegistered{ false };  ///< true after at least one peer sends MSG_ANNOUNCE_ACK
+    // These flags are written on the world thread and read on the NATS dispatch
+    // thread (publish helpers, announce ACK) — atomic so the reads are defined.
+    std::atomic<bool> _worldReady{ false };
+    std::atomic<bool> _connected{ false };
+    std::atomic<bool> _clusterRegistered{ false };  ///< true after at least one peer sends MSG_ANNOUNCE_ACK
+    std::atomic<bool> _reannouncePending{ false };  ///< set by OnNatsReconnected, consumed in Update()
 
     // ── Periodic update timers ────────────────────────────────────────────────
     uint32 _lastHeartbeatMs{ 0 };        ///< getMSTime() at last MSG_NODE_STATUS send

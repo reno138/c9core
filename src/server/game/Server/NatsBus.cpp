@@ -128,9 +128,27 @@ bool NatsBus::ConnectNATS()
     if (_subBroadcast) { natsSubscription_Destroy(_subBroadcast); _subBroadcast = nullptr; }
     if (_subNode) { natsSubscription_Destroy(_subNode); _subNode = nullptr; }
     if (_nc) { natsConnection_Destroy(_nc); _nc = nullptr; }
-    natsStatus s = natsConnection_ConnectTo(&_nc, _natsUrl.c_str());
+
+    // Let cnats own reconnection. With MaxReconnect = -1 it retries forever,
+    // buffers publishes while the server is away, and re-establishes every
+    // subscription on its own — so a NATS restart or a network blip never
+    // needs the worldserver to notice. Before this the library gave up after
+    // its default 60 attempts (~2 min), the connection went CLOSED, and
+    // because _connected was never cleared this node stayed "connected" to a
+    // dead handle until a process restart.
+    natsOptions* opts = nullptr;
+    natsStatus s = natsOptions_Create(&opts);
+    if (s == NATS_OK) s = natsOptions_SetURL(opts, _natsUrl.c_str());
+    if (s == NATS_OK) s = natsOptions_SetMaxReconnect(opts, -1);
+    if (s == NATS_OK) s = natsOptions_SetReconnectWait(opts, 2000);
+    if (s == NATS_OK) s = natsOptions_SetDisconnectedCB(opts, OnNatsDisconnected, this);
+    if (s == NATS_OK) s = natsOptions_SetReconnectedCB(opts, OnNatsReconnected, this);
+    if (s == NATS_OK) s = natsOptions_SetClosedCB(opts, OnNatsClosed, this);
+    if (s == NATS_OK) s = natsConnection_Connect(&_nc, opts);
+    natsOptions_Destroy(opts);
     if (s != NATS_OK)
     {
+        _nc = nullptr;
         LOG_ERROR("server.worldserver", "NatsBus: Failed to connect to NATS at {} — {}",
                   _natsUrl, natsStatus_GetText(s));
         return false;
@@ -193,6 +211,43 @@ bool NatsBus::ConnectNATS()
     return true;
 }
 
+// ── nats.c connection lifecycle callbacks ────────────────────────────────────
+// All three run on a cnats-internal thread. They must not touch game state.
+
+void NatsBus::OnNatsDisconnected(natsConnection* nc, void* closure)
+{
+    auto* self = static_cast<NatsBus*>(closure);
+    if (nc != self->_nc)
+        return; // stale handle from a previous ConnectNATS()
+    // Deliberately NOT clearing _connected: cnats is reconnecting on its own and
+    // buffering our publishes. Clearing the flag here would make Update()'s
+    // retry path destroy the very connection that is about to recover.
+    LOG_WARN("server.worldserver", "NatsBus: NATS connection lost — library is reconnecting");
+}
+
+void NatsBus::OnNatsReconnected(natsConnection* nc, void* closure)
+{
+    auto* self = static_cast<NatsBus*>(closure);
+    if (nc != self->_nc)
+        return;
+    // Peers may have declared us dead while we were away; re-announce so they
+    // re-register our maps/zones and un-flag us. Done from Update() (world thread).
+    self->_reannouncePending = true;
+    LOG_INFO("server.worldserver", "NatsBus: NATS connection restored — re-announce queued");
+}
+
+void NatsBus::OnNatsClosed(natsConnection* nc, void* closure)
+{
+    auto* self = static_cast<NatsBus*>(closure);
+    if (nc != self->_nc)
+        return; // our own natsConnection_Destroy in ConnectNATS(); ignore
+    // Only reachable if reconnection is exhausted (it isn't, MaxReconnect=-1)
+    // or the library hit an unrecoverable error. Hand control back to
+    // Update()'s 10-second reconnect loop.
+    self->_connected = false;
+    LOG_ERROR("server.worldserver", "NatsBus: NATS connection CLOSED — Update() will reconnect");
+}
+
 // ── NATS publish helpers ──────────────────────────────────────────────────────
 
 void NatsBus::PublishToNode(uint8 targetNodeId, uint8 msgType,
@@ -244,6 +299,30 @@ void NatsBus::PublishBroadcast(uint8 msgType, uint8 const* payload, int payloadL
     if (s != NATS_OK)
         LOG_WARN("server.worldserver", "NatsBus: Broadcast publish failed — {}",
                  natsStatus_GetText(s));
+    else
+        _natsBytesTx.fetch_add(static_cast<uint32>(buf.size()), std::memory_order_relaxed);
+}
+
+void NatsBus::PublishSealed(std::string const& subject, uint8 msgType,
+                            uint8 const* payload, std::size_t payloadLen)
+{
+    if (!_nc || !_connected)
+        return;
+
+    std::vector<uint8> buf = ClusterAuth::Seal(_nodeId, msgType,
+                                               payloadLen ? payload : nullptr, payloadLen);
+    if (buf.empty())
+    {
+        LOG_ERROR("server.worldserver", "NatsBus: refusing to publish msgType 0x{:02X} to {} — cluster auth not initialised",
+                  msgType, subject);
+        return;
+    }
+
+    natsStatus s = natsConnection_Publish(_nc, subject.c_str(),
+                                          buf.data(), static_cast<int>(buf.size()));
+    if (s != NATS_OK)
+        LOG_WARN("server.worldserver", "NatsBus: Publish to {} failed — {}",
+                 subject, natsStatus_GetText(s));
     else
         _natsBytesTx.fetch_add(static_cast<uint32>(buf.size()), std::memory_order_relaxed);
 }
@@ -307,14 +386,13 @@ void NatsBus::PublishAnnounce()
     buf.push_back(static_cast<uint8>(redirectPort & 0xFF));
     buf.push_back(static_cast<uint8>(redirectPort >> 8));
 
-    natsStatus s = natsConnection_Publish(_nc, "cluster.announce",
-                                          buf.data(), static_cast<int>(buf.size()));
-    if (s != NATS_OK)
-        LOG_WARN("server.worldserver", "NatsBus: cluster.announce publish failed — {}",
-                 natsStatus_GetText(s));
-    else
-        LOG_INFO("server.worldserver",
-                 "NatsBus: Published cluster.announce (nodeId={} maps={} zones={})", _nodeId, mapCount, zoneCount);
+    // Sealed like every other subject: the announce carries the redirect
+    // address that clients are later told to connect to, so an unauthenticated
+    // announce would let anyone on the NATS port steer live players to a host
+    // of their choosing.
+    PublishSealed("cluster.announce", MSG_ANNOUNCE, buf.data(), buf.size());
+    LOG_INFO("server.worldserver",
+             "NatsBus: Published cluster.announce (nodeId={} maps={} zones={})", _nodeId, mapCount, zoneCount);
 }
 
 /// Called on the NATS dispatch thread for cluster.announce messages.
@@ -323,28 +401,50 @@ void NatsBus::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
 {
     auto* self = static_cast<NatsBus*>(closure);
 
-    const uint8* d = reinterpret_cast<const uint8*>(natsMsg_GetData(msg));
-    int n          = natsMsg_GetDataLength(msg);
-    // NOTE: do NOT call natsMsg_Destroy here — d is an interior pointer into msg.
-    // Destroy AFTER all parsing is done.
+    const uint8* raw = reinterpret_cast<const uint8*>(natsMsg_GetData(msg));
+    int rawLen       = natsMsg_GetDataLength(msg);
+    self->_natsBytesRx.fetch_add(static_cast<uint32>(rawLen), std::memory_order_relaxed);
+
+    // Authenticate first; the payload vector is a copy so the message can be
+    // released immediately.
+    uint8 srcNodeId = 0;
+    uint8 msgType   = 0;
+    std::vector<uint8> payload;
+    bool const authentic = ClusterAuth::Open(raw, static_cast<std::size_t>(rawLen),
+                                             srcNodeId, msgType, payload);
+    natsMsg_Destroy(msg);
+
+    if (!authentic || msgType != MSG_ANNOUNCE)
+    {
+        LOG_WARN("server.worldserver", "NatsBus: dropped unauthenticated/replayed cluster.announce ({} bytes)", rawLen);
+        return;
+    }
+
+    // Skip our own announce.
+    if (srcNodeId == self->_nodeId)
+        return;
+
+    const uint8* d = payload.data();
+    int n          = static_cast<int>(payload.size());
 
     // Minimum: nodeId(1)+serverType(1)+gamePort(2)+addrLen(1)+addr(1)+mapCount(2) = 8 bytes
     if (n < 8)
-    {
-        natsMsg_Destroy(msg);
         return;
-    }
 
     uint8  nodeId     = d[0];
     uint8  serverType = d[1];
     uint16 gamePort   = static_cast<uint16>(d[2]) | (static_cast<uint16>(d[3]) << 8);
     uint8  addrLen    = d[4];
 
-    if (n < 5 + addrLen + 2)
+    // The tag binds the frame to srcNode; the payload must not claim otherwise.
+    if (nodeId != srcNodeId)
     {
-        natsMsg_Destroy(msg);
+        LOG_WARN("server.worldserver", "NatsBus: announce from node {} claims nodeId {} — dropped", srcNodeId, nodeId);
         return;
     }
+
+    if (n < 5 + addrLen + 2)
+        return;
 
     std::string address(reinterpret_cast<char const*>(d + 5), addrLen);
     int off = 5 + addrLen;
@@ -352,15 +452,17 @@ void NatsBus::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
     uint16 mapCount = static_cast<uint16>(d[off]) | (static_cast<uint16>(d[off + 1]) << 8);
     off += 2;
 
-    // Cap map count to avoid unbounded allocation.
+    // Reject rather than clamp: clamping used to advance the cursor by the
+    // clamped count, so an announce with >128 maps had its zone list parsed
+    // out of the middle of the map array.
     if (mapCount > 128)
-        mapCount = 128;
-
-    if (n < off + mapCount * 4)
     {
-        natsMsg_Destroy(msg);
+        LOG_WARN("server.worldserver", "NatsBus: announce from node {} lists {} maps (max 128) — dropped", nodeId, mapCount);
         return;
     }
+
+    if (n < off + mapCount * 4)
+        return;
 
     ClusterNodeInfo info;
     info.nodeId  = nodeId;
@@ -380,7 +482,11 @@ void NatsBus::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
     {
         uint16 zoneCount = static_cast<uint16>(d[off]) | (static_cast<uint16>(d[off + 1]) << 8);
         off += 2;
-        if (zoneCount > 128) zoneCount = 128;
+        if (zoneCount > 128)
+        {
+            LOG_WARN("server.worldserver", "NatsBus: announce from node {} lists {} zones (max 128) — dropped", nodeId, zoneCount);
+            return;
+        }
         if (n >= off + zoneCount * 4)
         {
             for (uint16 i = 0; i < zoneCount; ++i)
@@ -389,6 +495,12 @@ void NatsBus::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
                 std::memcpy(&zoneId, d + off + i * 4, 4);
                 info.zones.insert(zoneId);
             }
+            // Advance past the zone ids. This was missing, so for any node
+            // announcing zones the redirect-address section that follows was
+            // parsed from the first zone id's bytes (e.g. zone 4395 = 0x112B
+            // read as redirectAddrLen 43) and the real redirect address was
+            // never seen.
+            off += zoneCount * 4;
         }
     }
 
@@ -412,13 +524,6 @@ void NatsBus::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
         }
     }
 
-    // All data copied — safe to release the NATS message now.
-    natsMsg_Destroy(msg);
-
-    // Skip our own announce.
-    if (nodeId == self->_nodeId)
-        return;
-
     // Register on world thread (ClusterMgr is world-thread-safe via mutex).
     // If the node was previously dead, RegisterRemoteNode returns true and we
     // restore the BG coordinator assignment if it was that node's role.
@@ -430,13 +535,12 @@ void NatsBus::OnAnnounceMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
     });
 
     // Acknowledge receipt so the announcing node stops its 10-second retry loop.
-    // This runs on the NATS dispatch thread — safe to publish directly.
-    if (self->_nc && self->_connected)
-    {
-        std::string ackSubject = "cluster.node." + std::to_string(nodeId);
-        uint8 ackBuf[2] = { NatsBus::MSG_ANNOUNCE_ACK, self->_nodeId };
-        natsConnection_Publish(self->_nc, ackSubject.c_str(), ackBuf, 2);
-    }
+    // Must go through the sealed path: cluster.node.{N} is served by OnNatsMsg,
+    // which rejects anything that is not an authenticated frame. The previous
+    // raw 2-byte publish here was dropped by every peer, so no node ever saw
+    // an ACK and every node re-announced every 10 s for its whole lifetime.
+    uint8 const senderNodeId = self->_nodeId;
+    self->PublishToNode(nodeId, MSG_ANNOUNCE_ACK, &senderNodeId, 1);
 }
 
 // ── Incoming NATS message dispatcher ─────────────────────────────────────────
@@ -533,10 +637,17 @@ void NatsBus::Dispatch(uint8 msgType, std::vector<uint8> payload)
         }
         case MSG_CLUSTER_LFG_RELAY:
         {
-            // sourceNodeId(1) + inner payload
-            if (payload.size() < 1) break;
+            // sourceNodeId(1) + innerLen(2) + innerType(1) + innerPayload
+            // Mirrors the RELAY_RESP case below and the senders
+            // (SendLFGJoinRelay/LeaveRelay/ProposalResultRelay). Before this the
+            // length was not consumed, so HandleLFGRelay read the low byte of
+            // innerLen as the inner type and every relay from a non-master
+            // node fell through to "unknown inner type".
+            if (payload.size() < 4) break;
             uint8 srcNode = payload[0];
-            std::vector<uint8> inner(payload.begin() + 1, payload.end());
+            uint16 pl;      std::memcpy(&pl, payload.data() + 1, 2);
+            if (pl < 1 || payload.size() < static_cast<std::size_t>(3 + pl)) break;
+            std::vector<uint8> inner(payload.begin() + 3, payload.begin() + 3 + pl);
             HandleLFGRelay(srcNode, inner);
             break;
         }
@@ -797,9 +908,9 @@ void NatsBus::Dispatch(uint8 msgType, std::vector<uint8> payload)
                 pr.timestampMs = getMSTime();
 
                 // Deserialize addon list if present
+                size_t off = 17;
                 if (payload.size() >= 19)
                 {
-                    size_t off = 17;
                     uint16 cnt = payload[off] | (uint16(payload[off+1]) << 8);
                     off += 2;
                     for (uint16 i = 0; i < cnt && off < payload.size(); ++i)
@@ -815,6 +926,14 @@ void NatsBus::Dispatch(uint8 msgType, std::vector<uint8> payload)
                         bool usePK = payload[off++] != 0;
                         pr.addons.emplace_back(std::move(name), enabled, crc, state, usePK);
                     }
+                }
+
+                // Trailing client IP binding: [ipLen:1][ip:n]
+                if (off < payload.size())
+                {
+                    uint8 ipLen = payload[off++];
+                    if (off + ipLen <= payload.size())
+                        pr.clientIp.assign(reinterpret_cast<char const*>(payload.data() + off), ipLen);
                 }
 
                 sClusterMgr.StorePendingRedirect(pr.accountId, std::move(pr));
@@ -976,12 +1095,14 @@ void NatsBus::ReleasePlayer(uint64 guid)
 }
 
 void NatsBus::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 token,
-                                        uint8 destNodeId, std::list<AddonInfo> const& addons)
+                                        uint8 destNodeId, std::string const& clientIp,
+                                        std::list<AddonInfo> const& addons)
 {
     if (!_nc || !_connected) return;
 
     // Wire: [accountId:4][token:4][guid:8][sourceNodeId:1] = 17 base
     //   + [addonCount:2] + per-addon: [nameLen:1][name][enabled:1][crc:4][state:1][usePubKey:1]
+    //   + [clientIpLen:1][clientIp:n]   (appended last; absent = no IP binding)
     std::vector<uint8> payload;
     payload.resize(17);
     std::memcpy(payload.data(), &accountId, 4);
@@ -1006,15 +1127,21 @@ void NatsBus::PublishRedirectToken(uint32 accountId, uint64 playerGuid, uint32 t
         payload.push_back(a.UsePublicKeyOrCRC ? 1 : 0);
     }
 
+    uint8 const ipLen = static_cast<uint8>(std::min<size_t>(clientIp.size(), 255));
+    payload.push_back(ipLen);
+    payload.insert(payload.end(), clientIp.begin(), clientIp.begin() + ipLen);
+
+    // Destination only. The 3.3.5a client does not echo the token back in
+    // CMSG_REDIRECTION_AUTH_PROOF, so the pending entry itself is the
+    // credential — every extra node holding it is another place a stray
+    // reconnect could be handed this player's session.
     PublishToNode(destNodeId, MSG_REDIRECT_TOKEN,
                   payload.data(), static_cast<int>(payload.size()));
-    PublishBroadcast(MSG_REDIRECT_TOKEN,
-                     payload.data(), static_cast<int>(payload.size()));
 
     LOG_INFO("server.worldserver",
              "NatsBus: Published redirect token for account {} GUID {:016X} -> node {} "
-             "(token=0x{:08X}, {} addons)",
-             accountId, playerGuid, destNodeId, token, addonCount);
+             "(token=0x{:08X}, {} addons, client {})",
+             accountId, playerGuid, destNodeId, token, addonCount, clientIp);
 }
 
 void NatsBus::RefreshConfigCache()
@@ -1058,6 +1185,15 @@ void NatsBus::Update()
     // Don't announce until world is ready.
     if (!_worldReady)
         return;
+
+    // cnats recovered the connection on its own (OnNatsReconnected). Peers may
+    // have marked us dead in the meantime, so re-announce right away.
+    if (_reannouncePending.exchange(false))
+    {
+        PublishAnnounce();
+        _lastAnnounceRetryMs = now;
+        _lastPeriodicAnnounceMs = now;
+    }
 
     if (!_clusterRegistered && now - _lastAnnounceRetryMs >= ANNOUNCE_RETRY_INTERVAL_MS)
     {
@@ -1125,12 +1261,31 @@ void NatsBus::Update()
 
 // ── Transport sync ────────────────────────────────────────────────────────────
 
-void NatsBus::OnTransportQueryMsg(natsConnection* nc, natsSubscription* /*sub*/,
-                                       natsMsg* msg, void* /*closure*/)
+void NatsBus::OnTransportQueryMsg(natsConnection* /*nc*/, natsSubscription* /*sub*/,
+                                       natsMsg* msg, void* closure)
 {
+    auto* self = static_cast<NatsBus*>(closure);
+
     // Called on NATS dispatch thread: build a reply with current PathProgress for
     // every live MotionTransport.  The caller (QueryTransportSync) is waiting with
     // a 500 ms timeout.
+
+    // Authenticate the request. We also ignore our own request: this node is
+    // subscribed to the query subject too, and answering ourselves with an
+    // empty container would win the request-reply race against a real peer.
+    {
+        const uint8* raw = reinterpret_cast<const uint8*>(natsMsg_GetData(msg));
+        int rawLen       = natsMsg_GetDataLength(msg);
+        uint8 srcNodeId = 0, msgType = 0;
+        std::vector<uint8> unused;
+        bool const ok = ClusterAuth::Open(raw, static_cast<std::size_t>(rawLen), srcNodeId, msgType, unused);
+        if (!ok || msgType != MSG_TRANSPORT_QUERY || srcNodeId == self->_nodeId)
+        {
+            natsMsg_Destroy(msg);
+            return;
+        }
+    }
+
     auto& container = HashMapHolder<MotionTransport>::GetContainer();
     std::shared_lock lock(*HashMapHolder<MotionTransport>::GetLock());
 
@@ -1151,10 +1306,7 @@ void NatsBus::OnTransportQueryMsg(natsConnection* nc, natsSubscription* /*sub*/,
 
     char const* replySubj = natsMsg_GetReply(msg);
     if (replySubj && replySubj[0] != '\0')
-    {
-        natsConnection_Publish(nc, replySubj,
-                               reply.data(), static_cast<int>(reply.size()));
-    }
+        self->PublishSealed(replySubj, MSG_TRANSPORT_REPLY, reply.data(), reply.size());
     natsMsg_Destroy(msg);
 }
 
@@ -1164,10 +1316,14 @@ std::unordered_map<uint32, uint32> NatsBus::QueryTransportSync()
     if (!_nc || !_connected)
         return result;
 
+    // Sealed empty request; 500 ms timeout.
+    std::vector<uint8> req = ClusterAuth::Seal(_nodeId, MSG_TRANSPORT_QUERY, nullptr, 0);
+    if (req.empty())
+        return result;
+
     natsMsg* reply = nullptr;
-    // Empty request payload; 500 ms timeout.
     natsStatus s = natsConnection_Request(&reply, _nc, "cluster.transport.query",
-                                          nullptr, 0, 500);
+                                          req.data(), static_cast<int>(req.size()), 500);
     if (s == NATS_TIMEOUT)
     {
         // No peer responded — this is the first node, or peers aren't up yet.
@@ -1181,13 +1337,23 @@ std::unordered_map<uint32, uint32> NatsBus::QueryTransportSync()
         return result;
     }
 
-    // Parse [count:2][guid_low:4][path_progress:4]...
-    void const* data = natsMsg_GetData(reply);
-    int         len  = natsMsg_GetDataLength(reply);
-    if (data && len >= 2)
+    // Authenticate the reply, then parse [count:2][guid_low:4][path_progress:4]...
+    uint8 srcNodeId = 0, msgType = 0;
+    std::vector<uint8> body;
+    bool const ok = ClusterAuth::Open(reinterpret_cast<uint8 const*>(natsMsg_GetData(reply)),
+                                      static_cast<std::size_t>(natsMsg_GetDataLength(reply)),
+                                      srcNodeId, msgType, body);
+    if (!ok || msgType != MSG_TRANSPORT_REPLY)
     {
-        uint8 const* p   = static_cast<uint8 const*>(data);
-        uint8 const* end = p + len;
+        LOG_WARN("server.worldserver", "NatsBus::QueryTransportSync — dropped unauthenticated reply");
+        natsMsg_Destroy(reply);
+        return result;
+    }
+
+    if (body.size() >= 2)
+    {
+        uint8 const* p   = body.data();
+        uint8 const* end = p + body.size();
         uint16 count;
         std::memcpy(&count, p, 2);
         p += 2;
@@ -1643,7 +1809,10 @@ void NatsBus::SendMgmtStatus()
     if (addrLen > 0)
         std::memcpy(buf.data() + off, _gameAddress.data(), addrLen);
 
-    PublishRaw("cluster.mgmt.status", buf.data(), static_cast<int>(totalLen));
+    // Sealed: clustermgr verifies the tag before trusting node state, and the
+    // address field lands in the operator's browser — an unauthenticated feed
+    // let anyone on the NATS port invent nodes and inject markup.
+    PublishSealed("cluster.mgmt.status", MSG_MGMT_STATUS, buf.data(), totalLen);
 }
 
 void NatsBus::SendMgmtPlayers()
@@ -1708,7 +1877,7 @@ void NatsBus::SendMgmtPlayers()
     // Fill in actual count
     std::memcpy(buf.data() + countOff, &playerCount, 2);
 
-    PublishRaw("cluster.mgmt.players", buf.data(), static_cast<int>(buf.size()));
+    PublishSealed("cluster.mgmt.players", MSG_MGMT_PLAYERS, buf.data(), buf.size());
 }
 
 // ── Outgoing cluster messages ─────────────────────────────────────────────────

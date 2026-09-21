@@ -278,10 +278,19 @@ public:
         uint8  sourceNodeId{ 0 };
         uint32 timestampMs{ 0 };   ///< getMSTime() for expiry (30s)
         std::list<AddonInfo> addons; ///< addon list from source session
+        std::string clientIp;      ///< remote address of the redirected client on the source node (empty = unbound)
     };
 
     void StorePendingRedirect(uint32 accountId, PendingRedirect&& redirect);
-    std::optional<PendingRedirect> TakePendingRedirect(uint32 accountId);
+
+    /// Consume the pending redirect for @p accountId, but only if the socket
+    /// presenting it connects from the same address the source node saw
+    /// (or the entry carries no address). The 3.3.5a client never echoes the
+    /// redirect token back, so the entry's existence is the whole credential;
+    /// binding it to the client's address is what stops a third party who
+    /// knows the account name from consuming an in-flight transfer.
+    /// On an address mismatch the entry is left in place for the real client.
+    std::optional<PendingRedirect> TakePendingRedirect(uint32 accountId, std::string const& clientIp);
 
     /// Erase pending transfers and redirects older than 30 seconds.
     /// Call from the World 5s timer (World::Update) via getMSTime().

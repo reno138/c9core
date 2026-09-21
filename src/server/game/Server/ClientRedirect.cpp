@@ -27,22 +27,30 @@
 namespace ClientRedirect
 {
 
+uint32 GenerateToken()
+{
+    // CSPRNG, and never 0: the token is HMAC'd into SMSG_REDIRECT_CLIENT and
+    // stored with the pending redirect, and 0 is the callers' failure value.
+    uint32 token = 0;
+    for (int attempt = 0; attempt < 4 && token == 0; ++attempt)
+    {
+        if (RAND_bytes(reinterpret_cast<unsigned char*>(&token), sizeof(token)) != 1)
+        {
+            LOG_ERROR("server.worldserver", "ClientRedirect: RAND_bytes failed — refusing to redirect");
+            return 0;
+        }
+    }
+    return token;
+}
+
 uint32 SuspendClient(WorldSession* session)
 {
     if (!session || !session->GetPlayer())
         return 0;
 
-    // Generate random suspension token.
-    // MUST be a CSPRNG: this token is the bearer credential the destination node
-    // uses to bind a reconnecting socket to a pre-authorised session. mt19937 is
-    // fully reconstructible from ~624 observed outputs, which would let an
-    // observer predict a future token and hijack the redirected session.
-    uint32 token = 0;
-    if (RAND_bytes(reinterpret_cast<unsigned char*>(&token), sizeof(token)) != 1)
-    {
-        LOG_ERROR("server.worldserver", "ClientRedirect: RAND_bytes failed — refusing to redirect");
+    uint32 token = GenerateToken();
+    if (token == 0)
         return 0;
-    }
 
     // SMSG_SUSPEND_COMMS (0x50F) — payload: uint32 token
     WorldPacket data(SMSG_SUSPEND_COMMS, 4);

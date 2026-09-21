@@ -142,11 +142,17 @@ NodeMgr.NatsUrl = ""
 #
 #    NodeMgr.AuthKey
 #        Description: Shared secret authenticating supervisor control frames. MUST
-#                     match ClusterServer.AuthKey on the worldservers and clustermgr.
+#                     match ClusterServer.AuthKey on the worldservers and
+#                     ClusterMgr.AuthKey on clustermgr.
 #
 #                     Frames are HMAC-SHA256 authenticated with a timestamp and
 #                     nonce (30-second replay window). Without it, anyone able to
 #                     reach NATS could SIGKILL every worldserver in the cluster.
+#
+#                     What the key does NOT do: it is one secret shared by every
+#                     worldserver, supervisor and clustermgr, so any holder can
+#                     seal a frame claiming any sender id. Treat every node's
+#                     config as holding cluster-wide supervisor authority.
 #
 #                     Must be at least 32 bytes. If unset or too short, remote
 #                     control is disabled and a warning is logged — the supervisor
@@ -158,3 +164,27 @@ NodeMgr.NatsUrl = ""
 #
 
 NodeMgr.AuthKey = ""
+
+#
+#    NodeMgr.ControllerNodeIds
+#        Description: Comma-separated list of sender (srcNode) ids whose sealed
+#                     commands this supervisor will act on. clustermgr seals its
+#                     start/stop/kill/restart frames as node 0.
+#
+#                     Commands from any other id are logged and dropped. Because
+#                     the auth key is shared, this is a guard against wrong-subject
+#                     traffic and mistakes, not against a peer that holds the key
+#                     (see NodeMgr.AuthKey).
+#
+#                     Only frames whose message type is in the supervisor command
+#                     range (0xC1-0xC4) are ever treated as commands; a sealed
+#                     worldserver frame replayed onto this subject is rejected
+#                     before this list is consulted.
+#
+#                     An empty list disables remote control (nothing would be
+#                     accepted) and logs an error at startup.
+#
+#        Default:     "0" - (clustermgr only)
+#
+
+NodeMgr.ControllerNodeIds = "0"

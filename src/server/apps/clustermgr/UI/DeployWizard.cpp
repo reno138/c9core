@@ -18,10 +18,52 @@
 #include "DeployWizard.h"
 #include "Log.h"
 #include "BoostProcess.h"
+#include <memory>
 #include <mutex>
 #include <ncurses.h>
 #include <stdexcept>
 #include <thread>
+
+// ── Shell helpers ─────────────────────────────────────────────────────────────
+
+/// Single-quote @p s for a POSIX shell: every ' becomes '\''.
+static std::string ShellQuote(std::string const& s)
+{
+    std::string out = "'";
+    for (char c : s)
+    {
+        if (c == '\'') out += "'\\''";
+        else           out += c;
+    }
+    out += "'";
+    return out;
+}
+
+/// Escape @p s for use as a literal in a sed BRE pattern (delimiter is '|').
+static std::string SedPatternEscape(std::string const& s)
+{
+    std::string out;
+    for (char c : s)
+    {
+        if (c == '\\' || c == '|' || c == '.' || c == '*' || c == '[' || c == ']' || c == '^' || c == '$')
+            out += '\\';
+        out += c;
+    }
+    return out;
+}
+
+/// Escape @p s for use in a sed replacement (delimiter is '|').
+static std::string SedReplacementEscape(std::string const& s)
+{
+    std::string out;
+    for (char c : s)
+    {
+        if (c == '\\' || c == '|' || c == '&' || c == '\n')
+            out += '\\';
+        out += c;
+    }
+    return out;
+}
 
 
 // ── Constructor ───────────────────────────────────────────────────────────────
@@ -204,13 +246,60 @@ bool DeployWizard::RunForm()
     }
 }
 
-// ── sshpass helper ────────────────────────────────────────────────────────────
+// ── Process helpers ───────────────────────────────────────────────────────────
 
-std::vector<std::string> DeployWizard::SshpassPrefix() const
+bool DeployWizard::RunLogged(std::string const& program, std::vector<std::string> args)
 {
-    if (_cfg.sshPassword.empty())
-        return {};
-    return { "sshpass", "-p", _cfg.sshPassword };
+    try
+    {
+        bp::ipstream out;
+        std::unique_ptr<bp::child> proc;
+        if (!_cfg.sshPassword.empty())
+        {
+            // sshpass -e reads the password from $SSHPASS. `-p` put it on the
+            // command line, visible in /proc/<pid>/cmdline to every local user
+            // for the life of each transfer.
+            bp::environment env = boost::this_process::environment();
+            env["SSHPASS"] = _cfg.sshPassword;
+            std::vector<std::string> full = { "-e", program };
+            full.insert(full.end(), args.begin(), args.end());
+            proc = std::make_unique<bp::child>(bp::search_path("sshpass"), bp::args(full), bp::env = env,
+                                               bp::std_out > out, bp::std_err > out, bp::std_in < bp::null);
+        }
+        else
+        {
+            proc = std::make_unique<bp::child>(bp::search_path(program), bp::args(args),
+                                               bp::std_out > out, bp::std_err > out, bp::std_in < bp::null);
+        }
+
+        std::string line;
+        while (std::getline(out, line))
+            AppendLog("    " + line);
+
+        proc->wait();
+        return proc->exit_code() == 0;
+    }
+    catch (std::exception const& e)
+    {
+        AppendLog(std::string("    ERROR: ") + e.what());
+        return false;
+    }
+}
+
+bool DeployWizard::PatchRemoteConf(std::string const& remoteFile, std::string const& key,
+                                   std::string const& value)
+{
+    // Match an uncommented `Key = anything` line. '|' is the delimiter so a
+    // nats:// URL in the replacement does not terminate the expression.
+    std::string const expr = "s|^\\(" + SedPatternEscape(key) + "\\)[[:space:]]*=.*|\\1 = "
+                             + SedReplacementEscape(value) + "|";
+    // grep first so a missing key is a hard failure rather than a silent no-op.
+    std::string const cmd = "grep -q " + ShellQuote("^" + SedPatternEscape(key) + "[[:space:]]*=") + " "
+                            + ShellQuote(remoteFile) + " && sed -i " + ShellQuote(expr) + " " + ShellQuote(remoteFile);
+    bool ok = SshCommand(cmd);
+    if (!ok)
+        AppendLog("    ERROR: could not patch " + key + " in " + remoteFile);
+    return ok;
 }
 
 // ── Deploy execution ──────────────────────────────────────────────────────────
@@ -234,97 +323,102 @@ bool DeployWizard::RunDeploy()
             _hasNewLines = true;
         };
 
+        auto fail = [&](std::string const& why)
+        {
+            _deployErrMsg = why;
+            log("");
+            log("=== DEPLOYMENT FAILED: " + why + " ===");
+            _deployOk = false; _deployDone = true;
+        };
+
         std::string authMethod = _cfg.sshPassword.empty() ? "key" : "password";
         log("=== C9Core Node Deployment ===");
         log("  Remote:  " + _cfg.sshUser + "@" + _cfg.sshHost +
             ":" + std::to_string(_cfg.sshPort) + "  (auth: " + authMethod + ")");
         log("  RemPath: " + _cfg.remotePath);
         log("  NodeType:" + _cfg.nodeType + "  NodeID:" + std::to_string(_cfg.nodeId));
-        if (!_cfg.proxyAddress.empty())
-            log("  Proxy:   " + _cfg.proxyAddress);
+        if (!_cfg.natsUrl.empty())
+            log("  NATS:    " + _cfg.natsUrl);
+        log("  AuthKey: " + std::string(_cfg.authKey.empty() ? "(not set — remote confs left as shipped)" : "(set)"));
         log("");
+
+        std::string const rp = _cfg.remotePath;
+        std::string const wc = rp + "/worldserver.conf";
+        std::string const nc = rp + "/nodemgr.conf";
+
+        // Step 0: the remote directory must exist; scp does not create it.
+        if (!SshCommand("mkdir -p " + ShellQuote(rp)))
+            return fail("Could not create " + rp + " on remote host");
 
         // Step 1: worldserver binary
         log("[1/6] Copying worldserver binary...");
-        if (!ScpFile(_cfg.worldserverBin, _cfg.remotePath, "worldserver"))
-        {
-            _deployErrMsg = "Failed to copy worldserver binary";
-            _deployOk = false; _deployDone = true; return;
-        }
+        if (!ScpFile(_cfg.worldserverBin, rp, "worldserver"))
+            return fail("Failed to copy worldserver binary");
         log("      OK");
 
         // Step 2: nodemgr binary
         log("[2/6] Copying nodemgr binary...");
-        if (!ScpFile(_cfg.nodemgrBin, _cfg.remotePath, "nodemgr"))
-        {
-            _deployErrMsg = "Failed to copy nodemgr binary";
-            _deployOk = false; _deployDone = true; return;
-        }
+        if (!ScpFile(_cfg.nodemgrBin, rp, "nodemgr"))
+            return fail("Failed to copy nodemgr binary");
         log("      OK");
 
         // Step 3: worldserver config
         log("[3/6] Copying worldserver.conf...");
-        if (!ScpFile(_cfg.worldserverConf, _cfg.remotePath, "worldserver.conf"))
-        {
-            _deployErrMsg = "Failed to copy worldserver.conf";
-            _deployOk = false; _deployDone = true; return;
-        }
+        if (!ScpFile(_cfg.worldserverConf, rp, "worldserver.conf"))
+            return fail("Failed to copy worldserver.conf");
         log("      OK");
 
         // Step 4: nodemgr config
         log("[4/6] Copying nodemgr.conf...");
-        if (!ScpFile(_cfg.nodemgrConf, _cfg.remotePath, "nodemgr.conf"))
-        {
-            _deployErrMsg = "Failed to copy nodemgr.conf";
-            _deployOk = false; _deployDone = true; return;
-        }
+        if (!ScpFile(_cfg.nodemgrConf, rp, "nodemgr.conf"))
+            return fail("Failed to copy nodemgr.conf");
         log("      OK");
 
         // Step 5: Set permissions
         log("[5/6] Setting permissions...");
-        std::string chmodCmd = "chmod +x " + _cfg.remotePath + "/worldserver "
-                               + _cfg.remotePath + "/nodemgr";
-        if (!SshCommand(chmodCmd))
-        {
-            _deployErrMsg = "Failed to chmod binaries";
-            _deployOk = false; _deployDone = true; return;
-        }
+        if (!SshCommand("chmod +x " + ShellQuote(rp + "/worldserver") + " " + ShellQuote(rp + "/nodemgr")))
+            return fail("Failed to chmod binaries");
         log("      OK");
 
-        // Step 6: Patch configuration via sed
+        // Step 6: Patch configuration. These are the keys a node actually
+        // needs in the proxy-less architecture; the old ProxyServer.* /
+        // InstanceServer.Enable patches targeted options that no longer exist,
+        // and the '/' in a nats:// URL broke the sed expression every time —
+        // silently, because failures were logged as warnings and the deploy
+        // still reported SUCCESS.
         log("[6/6] Patching configuration...");
+        std::string const nodeIdStr = std::to_string(_cfg.nodeId);
+        bool const isInstance = (_cfg.nodeType == "instance");
 
-        // Always patch nodemgr.conf: NodeId and ProxyServer.Address
-        std::string rp = _cfg.remotePath;
-        std::string nc = rp + "/nodemgr.conf";
+        if (!PatchRemoteConf(wc, "ClusterServer.NodeId", nodeIdStr))
+            return fail("Could not set ClusterServer.NodeId in worldserver.conf");
+        if (!PatchRemoteConf(nc, "NodeMgr.NodeId", nodeIdStr))
+            return fail("Could not set NodeMgr.NodeId in nodemgr.conf");
 
-        if (!SshCommand("sed -i 's/NodeId = [0-9]*/NodeId = " +
-                        std::to_string(_cfg.nodeId) + "/' " + nc))
-            log("    WARNING: Could not patch NodeId in nodemgr.conf");
-
-        if (!_cfg.proxyAddress.empty())
+        if (!_cfg.natsUrl.empty())
         {
-            // Patch proxy address in nodemgr.conf
-            if (!SshCommand("sed -i 's/ProxyServer\\.Address = \"[^\"]*\"/ProxyServer.Address = \"" +
-                            _cfg.proxyAddress + "\"/' " + nc))
-                log("    WARNING: Could not patch ProxyServer.Address in nodemgr.conf");
-
-            // Patch worldserver.conf
-            std::string wc = rp + "/worldserver.conf";
-            if (!SshCommand("sed -i 's/ProxyServer\\.Enable = 0/ProxyServer.Enable = 1/' " + wc))
-                log("    WARNING: Could not patch ProxyServer.Enable in worldserver.conf");
-
-            if (!SshCommand("sed -i 's/ProxyServer\\.Address = \"[^\"]*\"/ProxyServer.Address = \"" +
-                            _cfg.proxyAddress + "\"/' " + wc))
-                log("    WARNING: Could not patch ProxyServer.Address in worldserver.conf");
-
-            // If instance node, enable InstanceServer
-            if (_cfg.nodeType == "instance")
-            {
-                if (!SshCommand("sed -i 's/InstanceServer\\.Enable = 0/InstanceServer.Enable = 1/' " + wc))
-                    log("    WARNING: Could not patch InstanceServer.Enable in worldserver.conf");
-            }
+            if (!PatchRemoteConf(wc, "ClusterServer.NatsURL", "\"" + _cfg.natsUrl + "\""))
+                return fail("Could not set ClusterServer.NatsURL in worldserver.conf");
+            if (!PatchRemoteConf(nc, "NodeMgr.NatsUrl", "\"" + _cfg.natsUrl + "\""))
+                return fail("Could not set NodeMgr.NatsUrl in nodemgr.conf");
         }
+
+        if (!_cfg.authKey.empty())
+        {
+            if (!PatchRemoteConf(wc, "ClusterServer.AuthKey", "\"" + _cfg.authKey + "\""))
+                return fail("Could not set ClusterServer.AuthKey in worldserver.conf");
+            if (!PatchRemoteConf(nc, "NodeMgr.AuthKey", "\"" + _cfg.authKey + "\""))
+                return fail("Could not set NodeMgr.AuthKey in nodemgr.conf");
+        }
+
+        if (!PatchRemoteConf(wc, "ClusterServer.InstanceServer", isInstance ? "1" : "0"))
+            return fail("Could not set ClusterServer.InstanceServer in worldserver.conf");
+
+        // nodemgr must be able to find what it launches.
+        if (!PatchRemoteConf(nc, "WorldserverBin",    "\"" + rp + "/worldserver\"") ||
+            !PatchRemoteConf(nc, "WorldserverConfig", "\"" + rp + "/worldserver.conf\"") ||
+            !PatchRemoteConf(nc, "WorldserverLog",    "\"" + rp + "/worldserver-node" + nodeIdStr + ".log\""))
+            return fail("Could not set worldserver paths in nodemgr.conf");
         log("      OK");
 
         // Optional: Start nodemgr after deploy
@@ -332,13 +426,11 @@ bool DeployWizard::RunDeploy()
         {
             log("");
             log("[+] Starting nodemgr on remote host...");
-            std::string startCmd = "nohup " + rp + "/nodemgr"
-                                   + " -c " + rp + "/nodemgr.conf"
-                                   + " </dev/null >/dev/null 2>&1 &";
+            std::string startCmd = "cd " + ShellQuote(rp) + " && nohup ./nodemgr -c ./nodemgr.conf"
+                                   " </dev/null >/dev/null 2>&1 &";
             if (!SshCommand(startCmd))
-                log("    WARNING: Failed to start nodemgr (may already be running)");
-            else
-                log("    nodemgr started.");
+                return fail("Failed to start nodemgr");
+            log("    nodemgr started.");
         }
 
         log("");
@@ -347,23 +439,25 @@ bool DeployWizard::RunDeploy()
     });
 
     // ── UI loop while deploying ───────────────────────────────────────────────
+    // getch() must not block here or the log never streams and completion is
+    // only noticed on a keypress. OpenDeployWizard() switched to plain cbreak
+    // (blocking), so set an explicit read timeout for the duration.
+    timeout(500);
     while (!_deployDone)
     {
         if (_hasNewLines.exchange(false))
             DrawDeployLog();
-        getch();  // will return ERR (halfdelay) or a key press
+        getch();  // ERR after 500 ms, or a key press
     }
+    timeout(-1);
     worker.join();
 
     DrawDeployLog();
 
     // Wait for keypress to dismiss
-    nocbreak();
-    cbreak();
     mvprintw(_winY + _winH - 2, _winX + 2, "Press any key to return...");
     refresh();
     getch();
-    halfdelay(5);
 
     // Restore main screen
     touchwin(stdscr);
@@ -421,96 +515,36 @@ void DeployWizard::DrawDeployLog()
 bool DeployWizard::ScpFile(std::string const& localPath, std::string const& remoteDir,
                            std::string const& remoteName)
 {
-    std::string target = _cfg.sshUser + "@" + _cfg.sshHost + ":" + remoteDir + "/" + remoteName;
+    // The remote path is interpreted by the remote shell (scp semantics), so
+    // it is shell-quoted; the local path is passed as one argv entry.
+    std::string target = _cfg.sshUser + "@" + _cfg.sshHost + ":" + ShellQuote(remoteDir + "/" + remoteName);
 
-    // Base scp arguments
-    std::vector<std::string> scpArgs = {
+    // accept-new: pin the host key on first contact and refuse a changed one
+    // afterwards. `=no` accepted any key presented, on the connection that
+    // carries the binaries, the confs and the cluster auth key.
+    std::vector<std::string> args = {
         "-P", std::to_string(_cfg.sshPort),
-        "-o", "StrictHostKeyChecking=no",
+        "-o", "StrictHostKeyChecking=accept-new",
     };
-
-    std::string program;
-    std::vector<std::string> args;
-
-    if (!_cfg.sshPassword.empty())
-    {
-        // sshpass -p <password> scp [opts] src dst
-        program = "sshpass";
-        args = { "-p", _cfg.sshPassword, "scp" };
-        args.insert(args.end(), scpArgs.begin(), scpArgs.end());
-        // BatchMode conflicts with sshpass; don't add it
-    }
-    else
-    {
-        // scp -i key -o BatchMode=yes [opts] src dst
-        program = "scp";
-        args = scpArgs;
+    if (_cfg.sshPassword.empty())
         args.insert(args.end(), { "-i", _cfg.sshKey, "-o", "BatchMode=yes" });
-    }
+    // (BatchMode conflicts with sshpass; not added for password auth)
     args.push_back(localPath);
     args.push_back(target);
-
-    try
-    {
-        bp::ipstream out;
-        bp::child proc(program, bp::args(args), bp::std_out > out, bp::std_err > out);
-
-        std::string line;
-        while (std::getline(out, line))
-            AppendLog("    " + line);
-
-        proc.wait();
-        return proc.exit_code() == 0;
-    }
-    catch (std::exception const& e)
-    {
-        AppendLog(std::string("    ERROR: ") + e.what());
-        return false;
-    }
+    return RunLogged("scp", std::move(args));
 }
 
 bool DeployWizard::SshCommand(std::string const& cmd)
 {
-    std::vector<std::string> sshArgs = {
+    std::vector<std::string> args = {
         "-p", std::to_string(_cfg.sshPort),
-        "-o", "StrictHostKeyChecking=no",
+        "-o", "StrictHostKeyChecking=accept-new",
     };
-
-    std::string program;
-    std::vector<std::string> args;
-
-    if (!_cfg.sshPassword.empty())
-    {
-        program = "sshpass";
-        args = { "-p", _cfg.sshPassword, "ssh" };
-        args.insert(args.end(), sshArgs.begin(), sshArgs.end());
-    }
-    else
-    {
-        program = "ssh";
-        args = sshArgs;
+    if (_cfg.sshPassword.empty())
         args.insert(args.end(), { "-i", _cfg.sshKey, "-o", "BatchMode=yes" });
-    }
     args.push_back(_cfg.sshUser + "@" + _cfg.sshHost);
     args.push_back(cmd);
-
-    try
-    {
-        bp::ipstream out;
-        bp::child proc(program, bp::args(args), bp::std_out > out, bp::std_err > out);
-
-        std::string line;
-        while (std::getline(out, line))
-            AppendLog("    " + line);
-
-        proc.wait();
-        return proc.exit_code() == 0;
-    }
-    catch (std::exception const& e)
-    {
-        AppendLog(std::string("    ERROR: ") + e.what());
-        return false;
-    }
+    return RunLogged("ssh", std::move(args));
 }
 
 void DeployWizard::AppendLog(std::string const& line)

@@ -46,11 +46,15 @@
 class WebServer
 {
 public:
+    /// @param authToken  Bearer token required on every mutating route
+    ///                   (POST /api/nodes/{id}/{action}). Empty = those routes
+    ///                   answer 403 and nothing can be controlled over HTTP.
     WebServer(std::shared_ptr<NatsMonitor> monitor,
               std::shared_ptr<HistoryStore> history,
               std::string tilesPath,
               uint16 port,
-              std::string bindAddr = "0.0.0.0");
+              std::string bindAddr = "127.0.0.1",
+              std::string authToken = "");
     ~WebServer();
 
     /// Start listening.  Returns immediately; the server runs on its own io_context thread.
@@ -79,6 +83,7 @@ private:
     std::string                   _tilesPath;
     uint16                        _port;
     std::string                   _bindAddr;
+    std::string                   _authToken;
 
     net::io_context               _ioc;
     net::ip::tcp::acceptor        _acceptor;

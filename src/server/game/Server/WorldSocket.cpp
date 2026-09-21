@@ -651,9 +651,11 @@ void WorldSocket::TryCompleteRedirectAuth()
 
     AccountInfo const& account = *_redirectAccount;
 
-    // Verify there's a pending redirect token for this account
+    // Consume the pending redirect for this account. The entry is bound to the
+    // client address the source node saw; a socket from anywhere else is
+    // refused and the entry is left for the real client.
     uint64 redirectPlayerGuid = 0;
-    auto redirect = sClusterMgr.TakePendingRedirect(account.Id);
+    auto redirect = sClusterMgr.TakePendingRedirect(account.Id, GetRemoteIpAddress().to_string());
     if (!redirect)
     {
         // The client's TCP reconnect can outrun the token's NATS delivery. Do NOT

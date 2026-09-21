@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -73,10 +74,23 @@ private:
 
     void StartSelected();
     void StopSelected();
-    void KillSelected();      ///< immediate SIGKILL via the supervisor
+    void KillSelected();      ///< immediate SIGKILL via the supervisor (asks first)
     void RestartSelected();
     void OpenDeployWizard();
     void Refresh();
+
+    /// Sorted snapshot of the node table as drawn.
+    std::vector<NodeInfo> SortedNodes();
+
+    /// nodeId of the highlighted row, or nullopt if the table is empty.
+    /// Selection is tracked by nodeId, not row index: the NATS thread can
+    /// replace _nodes between the last Draw() and a keypress, and a node
+    /// appearing or disappearing in that gap would otherwise send F6 KILL to
+    /// whichever node slid into the highlighted row.
+    std::optional<uint8> SelectedNodeId();
+
+    /// Modal yes/no prompt on the status line. Blocks for the answer.
+    bool Confirm(std::string const& question);
 
     /// Scatter-plot of live player positions for the selected node's maps.
     /// Worldserver coordinates are roughly +/-17066 on both axes; positions are
@@ -107,7 +121,7 @@ private:
     std::atomic<bool>     _connected{ false };
 
     // ── Selection state ────────────────────────────────────────────────────────
-    int  _selectedRow { 0 };
+    std::optional<uint8> _selectedNodeId;   ///< keyed by nodeId, see SelectedNodeId()
     bool _showMap     { true };   ///< F8 toggles the map/player panel
 
     // ── Connection info ────────────────────────────────────────────────────────
@@ -115,7 +129,9 @@ private:
     std::shared_ptr<NatsMonitor> _monitor;
 
     // ── Timing ────────────────────────────────────────────────────────────────
-    std::chrono::steady_clock::time_point _lastUpdate;
+    /// steady_clock ns of the last UpdateNodes(); written on the NATS thread,
+    /// read by DrawStatusBar() on the main thread.
+    std::atomic<int64> _lastUpdateNs{ 0 };
 
     // ── Color pair IDs ────────────────────────────────────────────────────────
     static constexpr int COLOR_TITLE        = 1;

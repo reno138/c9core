@@ -1646,25 +1646,30 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
 
                 auto destNode = sClusterMgr.GetNodeForMap(mapid);
-                if (destNode)
+                uint32 const token = destNode ? ClientRedirect::GenerateToken() : 0;
+                if (destNode && token != 0)
                 {
-                    thread_local static std::mt19937 rng(std::random_device{}());
-                    uint32 token = rng();
+                    // Ship full player state to the destination via NATS.
+                    // The position fields are overridden with the teleport
+                    // destination so the dest node spawns at the target, not
+                    // the stale source coordinates.  Must be published BEFORE
+                    // the redirect token: both go to the same node subject, so
+                    // NATS delivers them in order, and the destination's
+                    // WorldSocket admits the session as soon as the token is
+                    // present. Token-first let the login run before the
+                    // transfer landed and fall back to the stale cached
+                    // position (the zone and cold-login paths already did
+                    // transfer-then-token).
+                    sNatsBus.SendPlayerTransferForRedirect(
+                        this, destNode->nodeId, teleportStore_dest);
+
                     sNatsBus.PublishRedirectToken(
                         GetSession()->GetAccountId(),
                         GetGUID().GetRawValue(),
                         token,
                         destNode->nodeId,
+                        GetSession()->GetRemoteAddress(),
                         GetSession()->GetAddonsList());
-
-                    // Ship full player state to the destination via NATS.
-                    // The position fields are overridden with the teleport
-                    // destination so the dest node spawns at the target, not
-                    // the stale source coordinates.  Must be published BEFORE
-                    // SMSG_REDIRECT_CLIENT so the NATS message is in flight
-                    // (or already received) by the time the client reconnects.
-                    sNatsBus.SendPlayerTransferForRedirect(
-                        this, destNode->nodeId, teleportStore_dest);
 
                     auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
                         destNode->nodeId, GetSession()->GetRemoteAddress());
@@ -1714,7 +1719,8 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 else
                 {
                     LOG_WARN("server.worldserver",
-                             "Player::TeleportTo: no node info for map {} -- cannot reroute player {}",
+                             "Player::TeleportTo: {} for map {} -- cannot reroute player {}",
+                             destNode ? "redirect token generation failed" : "no node info",
                              mapid, GetGUID().ToString());
                 }
 
@@ -11789,8 +11795,9 @@ void Player::SendInitialPacketsAfterAddToMap()
     // Cluster: a redirect arrival is a migration, not a real login. The client is
     // already in-world visually, so the LOGINEFFECT sparkle fires on every zone/map
     // handoff and breaks the illusion of a seamless transfer. _redirectAutoLoginGuid
-    // is set in WorldSocket during the redirect handshake and is never cleared, so it
-    // reliably identifies a redirected session here.
+    // is set in WorldSocket during the redirect handshake and stays set until the
+    // end of HandlePlayerLoginFromDB (which calls this), so it identifies a
+    // redirected session here.
     if (!GetSession() || GetSession()->GetRedirectAutoLoginGuid() == 0)
         CastSpell(this, 836, true);                         // LOGINEFFECT
 

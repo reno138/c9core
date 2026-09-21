@@ -17,6 +17,7 @@
 
 #include "WsHub.h"
 #include "Log.h"
+#include <algorithm>
 #include <boost/asio/post.hpp>
 #include <boost/beast/http.hpp>
 
@@ -117,13 +118,37 @@ void WsSession::OnRead(beast::error_code ec, std::size_t /*bytes*/)
 
 void WsSession::Send(std::string message)
 {
+    bool overflow = false;
     {
         std::lock_guard<std::mutex> lock(_sendMutex);
-        _sendQueue.push_back(std::move(message));
-        if (_writing)
-            return;
-        _writing = true;
+        if (_queuedBytes + message.size() > MAX_QUEUED_BYTES)
+        {
+            LOG_WARN("clustermgr.web", "WsSession: client not draining ({} bytes queued) — dropping connection",
+                     _queuedBytes);
+            _sendQueue.clear();
+            _queuedBytes = 0;
+            overflow = true;
+        }
+        else
+        {
+            _queuedBytes += message.size();
+            _sendQueue.push_back(std::move(message));
+            if (_writing)
+                return;
+            _writing = true;
+        }
     }
+
+    if (overflow)
+    {
+        // Slow client: leave the hub and close. The outstanding async_write
+        // (if any) completes with an error and drops the last reference.
+        _hub->Leave(shared_from_this());
+        beast::error_code ec;
+        beast::get_lowest_layer(_ws).socket().close(ec);
+        return;
+    }
+
     DoWrite();
 }
 
@@ -139,6 +164,7 @@ void WsSession::DoWrite()
         }
         msg = std::move(_sendQueue.front());
         _sendQueue.erase(_sendQueue.begin());
+        _queuedBytes -= std::min(_queuedBytes, msg.size());
     }
 
     _ws.text(true);

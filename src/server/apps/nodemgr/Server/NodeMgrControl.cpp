@@ -20,7 +20,10 @@
 #include "ClusterAuth.h"
 #include "Log.h"
 
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/post.hpp>
 #include <nats.h>
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -29,14 +32,24 @@ NodeMgrControl::~NodeMgrControl()
     Stop();
 }
 
-bool NodeMgrControl::Start(std::string const& natsUrl, uint8 nodeId, NodeMgr* mgr)
+bool NodeMgrControl::Start(std::string const& natsUrl, uint8 nodeId, NodeMgr* mgr,
+                           boost::asio::io_context& ioc, std::vector<uint8> controllers)
 {
-    _nodeId = nodeId;
-    _mgr    = mgr;
+    _nodeId      = nodeId;
+    _mgr         = mgr;
+    _ioc         = &ioc;
+    _controllers = std::move(controllers);
 
     if (!ClusterAuth::IsInitialised())
     {
         LOG_ERROR("nodemgr", "NodeMgrControl: cluster auth not initialised — remote control disabled");
+        return false;
+    }
+
+    if (_controllers.empty())
+    {
+        LOG_ERROR("nodemgr", "NodeMgrControl: NodeMgr.ControllerNodeIds is empty — no sender would be "
+                             "accepted, remote control disabled");
         return false;
     }
 
@@ -60,15 +73,23 @@ bool NodeMgrControl::Start(std::string const& natsUrl, uint8 nodeId, NodeMgr* mg
     }
 
     _connected.store(true, std::memory_order_relaxed);
-    LOG_INFO("nodemgr", "NodeMgrControl: listening on {}", subject);
+    LOG_INFO("nodemgr", "NodeMgrControl: listening on {} ({} controller id(s) allowed)",
+             subject, _controllers.size());
     return true;
 }
 
 void NodeMgrControl::Stop()
 {
     _connected.store(false, std::memory_order_relaxed);
-    if (_sub) { natsSubscription_Destroy(_sub); _sub = nullptr; }
-    if (_nc)  { natsConnection_Destroy(_nc);    _nc  = nullptr; }
+    if (_sub)
+    {
+        // Unsubscribe first so no callback can start after this returns; the
+        // callback posts onto _ioc, which the caller is about to tear down.
+        natsSubscription_Unsubscribe(_sub);
+        natsSubscription_Destroy(_sub);
+        _sub = nullptr;
+    }
+    if (_nc)  { natsConnection_Destroy(_nc); _nc = nullptr; }
 }
 
 /*static*/
@@ -92,33 +113,51 @@ void NodeMgrControl::OnCommandMsg(natsConnection* /*nc*/, natsSubscription* /*su
         return;
     }
 
-    if (!self->_mgr)
+    // The tag does not cover the subject: a sealed worldserver frame verifies
+    // here just as well. Only the dedicated command range is a command.
+    if (!ClusterMgmt::IsSupervisorCommand(msgType))
+    {
+        LOG_WARN("nodemgr", "NodeMgrControl: msgType 0x{:02X} from node {} is not a supervisor command — dropped",
+                 msgType, srcNode);
+        return;
+    }
+
+    if (std::find(self->_controllers.begin(), self->_controllers.end(), srcNode) == self->_controllers.end())
+    {
+        LOG_WARN("nodemgr", "NodeMgrControl: command 0x{:02X} from node {} refused — not in NodeMgr.ControllerNodeIds",
+                 msgType, srcNode);
+        return;
+    }
+
+    if (!self->_mgr || !self->_ioc)
         return;
 
-    // msgType carries the command; payload is unused today but kept for
-    // forward-compatibility (e.g. a reason string for audit logging).
-    switch (msgType)
+    // Hand the command to the thread that owns NodeMgr.
+    NodeMgr* mgr = self->_mgr;
+    boost::asio::post(*self->_ioc, [mgr, msgType, srcNode]()
     {
-        case CMD_START:
-            LOG_INFO("nodemgr", "NodeMgrControl: START from node {}", srcNode);
-            self->_mgr->Start();
-            break;
-        case CMD_STOP:
-            LOG_INFO("nodemgr", "NodeMgrControl: STOP from node {}", srcNode);
-            self->_mgr->Stop();
-            break;
-        case CMD_KILL:
-            LOG_WARN("nodemgr", "NodeMgrControl: KILL from node {}", srcNode);
-            self->_mgr->Kill();
-            break;
-        case CMD_RESTART:
-            LOG_INFO("nodemgr", "NodeMgrControl: RESTART from node {}", srcNode);
-            self->_mgr->Restart();
-            break;
-        default:
-            LOG_WARN("nodemgr", "NodeMgrControl: unknown command 0x{:02X} from node {}", msgType, srcNode);
-            break;
-    }
+        switch (msgType)
+        {
+            case ClusterMgmt::CMD_START:
+                LOG_INFO("nodemgr", "NodeMgrControl: START from node {}", srcNode);
+                mgr->Start();
+                break;
+            case ClusterMgmt::CMD_STOP:
+                LOG_INFO("nodemgr", "NodeMgrControl: STOP from node {}", srcNode);
+                mgr->Stop();
+                break;
+            case ClusterMgmt::CMD_KILL:
+                LOG_WARN("nodemgr", "NodeMgrControl: KILL from node {}", srcNode);
+                mgr->Kill();
+                break;
+            case ClusterMgmt::CMD_RESTART:
+                LOG_INFO("nodemgr", "NodeMgrControl: RESTART from node {}", srcNode);
+                mgr->Restart();
+                break;
+            default:
+                break;
+        }
+    });
 }
 
 void NodeMgrControl::PublishStatus()
@@ -137,7 +176,7 @@ void NodeMgrControl::PublishStatus()
     for (int i = 0; i < 4; ++i) body[6 + i] = static_cast<uint8>((uptime >> (i * 8)) & 0xFF);
     body[10] = _mgr->IsRestartPending() ? 1 : 0;
 
-    std::vector<uint8> frame = ClusterAuth::Seal(_nodeId, MSG_NODEMGR_STATUS, body, sizeof(body));
+    std::vector<uint8> frame = ClusterAuth::Seal(_nodeId, ClusterMgmt::MSG_NODEMGR_STATUS, body, sizeof(body));
     if (frame.empty())
         return;
 

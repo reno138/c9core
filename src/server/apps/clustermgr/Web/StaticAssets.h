@@ -97,6 +97,7 @@ header h1{font-size:16px;font-weight:600;color:#e6edf3;letter-spacing:.4px}
 .map-tabs{display:flex;gap:8px;margin-bottom:8px}
 .map-tab{padding:4px 12px;background:#21262d;border:1px solid #30363d;border-radius:6px;cursor:pointer;font-size:13px}
 .map-tab.active{background:#1f2937;border-color:#58a6ff;color:#58a6ff}
+.map-tab.no-tiles{color:#8b949e;border-style:dashed}
 
 /* Deploy modal */
 .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;align-items:center;justify-content:center}
@@ -155,13 +156,57 @@ const state = { nodes: {}, players: [], ws: null, view: 'dashboard', selectedNod
 const sparkCharts = {};
 const detailCharts = {};
 
-// ── WoW continent CRS ────────────────────────────────────────────────────────
-const CONTINENTS = {
-  0:   { name:'Eastern Kingdoms', minX:-11900, maxX:500,   minY:-27200, maxY:-1300 },
-  1:   { name:'Kalimdor',         minX:-13866, maxX:4600,  minY:-22000, maxY:2200  },
-  530: { name:'Outland',          minX:-7900,  maxX:3600,  minY:-11900, maxY:3600  },
-  571: { name:'Northrend',        minX:-12800, maxX:3400,  minY:-15900, maxY:-1400 },
-};
+// ── HTML escaping ────────────────────────────────────────────────────────────
+// Every server-supplied string (node address, player name, map name from the
+// tile index) goes through this before it is interpolated into innerHTML.
+// The status/player feeds are authenticated on the bus, but the browser must
+// not be the last line of defence against markup in a character name.
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ── Tile index ───────────────────────────────────────────────────────────────
+// Written by tools/minimap-tiles/minimap_tiles.py as {TilesPath}/maps.json and
+// served through the same /tiles/ handler as the PNGs. Describes which maps
+// have tiles and the pyramid geometry, so nothing about the map set or the
+// projection is hand-typed here.
+//
+//   TILES.native_zoom  zoom at which one 256-px tile == one ADT cell (6)
+//   TILES.grid         ADT cells per map edge (64)
+//   TILES.adt_yards    yards per ADT cell (533.33333)
+//   TILES.maps[]       {id, name, tiles, cols:[min,max], rows:[min,max]}
+//
+// Geometry: at zoom 0 the whole 64×64 grid is one 256-px tile, so in Leaflet's
+// CRS.Simple one ADT is (256/64) = 4 units. Tile (x,y) at zoom 6 is ADT column
+// x (west→east) and row y (north→south). WoW +X points north and +Y points
+// west, so:
+//   lng = (32 - worldY / 533.333) * 4
+//   lat = -(32 - worldX / 533.333) * 4
+const TILES = { native_zoom: 6, tile_size: 256, grid: 64, adt_yards: 533.33333, maps: [], byId: {} };
+
+function loadTileIndex() {
+  return fetch('/tiles/maps.json').then(r => r.json()).then(idx => {
+    if (!idx || !Array.isArray(idx.maps)) return;
+    Object.assign(TILES, idx);
+    TILES.byId = {};
+    for (const m of TILES.maps) TILES.byId[m.id] = m;
+    if (state.view === 'map' && state.selectedNode !== null) showMap(state.selectedNode, state.selectedMap);
+    else renderSidebar();
+  }).catch(() => {}); // no tiles configured — map view degrades to a player list
+}
+
+function mapName(m) {
+  const t = TILES.byId[m];
+  return (t && t.name) || MAP_NAMES[m] || `Map ${m}`;
+}
+
+// Maps worth listing for a node: what it announced (continent/zone nodes) plus
+// wherever its players actually are (the instance node announces no maps).
+function mapsForNode(n) {
+  const ids = new Set(n.mapIds || []);
+  for (const p of state.players) if (p.nodeId == n.nodeId) ids.add(p.mapId);
+  return [...ids].sort((a, b) => a - b);
+}
 
 const MAP_NAMES = {
   0:"Eastern Kingdoms",1:"Kalimdor",530:"Outland",571:"Northrend",
@@ -227,6 +272,7 @@ function handleMsg(msg) {
     else if (state.view === 'node' && state.selectedNode) renderNodeDetail(state.selectedNode);
   } else if (msg.type === 'players') {
     state.players = msg.players;
+    renderSidebar();                       // per-map player counts + instance-node map list
     if (state.view === 'map') updateMapMarkers();
   } else if (msg.type === 'crash') {
     if (state.view === 'node' && state.selectedNode == msg.nodeId) renderNodeDetail(msg.nodeId);
@@ -242,10 +288,9 @@ function renderSidebar() {
   const nodes = Object.values(state.nodes).sort((a,b)=>a.nodeId-b.nodeId);
   sb.innerHTML = nodes.map(n => {
     const dot = stateDot(n.state);
-    const mapsHtml = (n.mapIds||[]).map(m => {
-      const cname = MAP_NAMES[m] || `Map ${m}`;
-      const pc = state.players.filter(p=>p.mapId==m).length;
-      return `<div class="map-item" onclick="event.stopPropagation();showMap(${n.nodeId},${m})">${cname} (${pc})</div>`;
+    const mapsHtml = mapsForNode(n).map(m => {
+      const pc = state.players.filter(p=>p.mapId==m && p.nodeId==n.nodeId).length;
+      return `<div class="map-item" onclick="event.stopPropagation();showMap(${n.nodeId},${m})">${esc(mapName(m))} (${pc})</div>`;
     }).join('');
     const active = (state.view==='node' && state.selectedNode==n.nodeId) ||
                    (state.view==='map'  && state.selectedNode==n.nodeId) ? ' active' : '';
@@ -348,7 +393,7 @@ function renderNodeDetail(nodeId) {
       <div class="detail-stat"><div class="detail-stat-val">${n.cpuPercent||0}%</div><div class="detail-stat-lbl">CPU</div></div>
       <div class="detail-stat"><div class="detail-stat-val">${fmtUptime(n.uptimeSecs||0)}</div><div class="detail-stat-lbl">Uptime</div></div>
       <div class="detail-stat"><div class="detail-stat-val">${n.pid||'-'}</div><div class="detail-stat-lbl">PID</div></div>
-      <div class="detail-stat"><div class="detail-stat-val">${n.address||'?'}:${n.port||8086}</div><div class="detail-stat-lbl">Address</div></div>
+      <div class="detail-stat"><div class="detail-stat-val">${esc(n.address||'?')}:${parseInt(n.port)||8086}</div><div class="detail-stat-lbl">Address</div></div>
     </div>
     <div class="section-title">1-Hour History</div>
     <div class="chart-wrap"><canvas id="ch-players-${nodeId}"></canvas></div>
@@ -384,17 +429,17 @@ function makeDetailChart(id, label, labels, data, color, charts) {
 let _leafletMarkers = {};
 
 function showMap(nodeId, mapId) {
+  mapId = parseInt(mapId); nodeId = parseInt(nodeId);
   state.view='map'; state.selectedNode=nodeId; state.selectedMap=mapId;
   renderSidebar();
 
-  const cont = CONTINENTS[mapId];
+  const tileInfo = TILES.byId[mapId];
   const main = document.getElementById('main-content');
+  const n = state.nodes[nodeId];
 
-  const tabs = Object.keys(CONTINENTS).map(m => {
-    const n = state.nodes[nodeId];
-    if (!n || !n.mapIds || !n.mapIds.includes(parseInt(m))) return '';
-    return `<div class="map-tab${parseInt(m)==mapId?' active':''}" onclick="showMap(${nodeId},${m})">${CONTINENTS[m].name}</div>`;
-  }).join('');
+  const tabs = (n ? mapsForNode(n) : [mapId]).map(m =>
+    `<div class="map-tab${m==mapId?' active':''}${TILES.byId[m]?'':' no-tiles'}" onclick="showMap(${nodeId},${m})">${esc(mapName(m))}</div>`
+  ).join('');
 
   main.innerHTML = `
     <div class="back-btn" onclick="showNode(${nodeId})">&#8592; Node ${nodeId}</div>
@@ -403,25 +448,36 @@ function showMap(nodeId, mapId) {
 
   if (state._leafletMap) { state._leafletMap.remove(); state._leafletMap=null; _leafletMarkers={}; }
 
-  if (!cont) {
-    document.getElementById('leaflet-map').innerHTML = '<p style="padding:32px;color:#8b949e">No tile data for this map.</p>';
+  if (!tileInfo) {
+    // No tiles for this map (WMO-only interior, or generator not run): still
+    // show who is here so the view is useful.
+    const here = state.players.filter(p => p.mapId == mapId);
+    document.getElementById('leaflet-map').innerHTML =
+      `<p style="padding:32px 32px 8px;color:#8b949e">No tile data for ${esc(mapName(mapId))} (map ${mapId}).</p>` +
+      `<ul style="padding:0 32px 32px 48px;color:#c9d1d9">` +
+      here.map(p => `<li>${esc(p.name)} — L${parseInt(p.level)} ${esc(CLASS_NAMES[p.classId]||'?')} (node ${parseInt(p.nodeId)}) @ ${Number(p.x).toFixed(0)}, ${Number(p.y).toFixed(0)}</li>`).join('') +
+      `</ul>`;
     return;
   }
 
-  // Create Leaflet map with WoW-coordinate CRS
-  const crs = L.CRS.Simple;
+  // Leaflet CRS.Simple over the tile pyramid: zoom 0 = whole grid in one tile.
+  const U = TILES.tile_size / TILES.grid;             // CRS units per ADT (4)
+  const bounds = L.latLngBounds(
+    [-(tileInfo.rows[1] + 1) * U, tileInfo.cols[0] * U],    // south-west
+    [-tileInfo.rows[0] * U,       (tileInfo.cols[1] + 1) * U]); // north-east
   const map = L.map('leaflet-map', {
-    crs, minZoom:-4, maxZoom:2, center:[0,0], zoom:-2,
-    attributionControl:false
+    crs: L.CRS.Simple, minZoom: 0, maxZoom: TILES.native_zoom + 1,
+    maxBounds: bounds.pad(0.25), attributionControl: false
   });
   state._leafletMap = map;
 
-  const tileUrl = `/tiles/${mapId}/{z}/{x}/{y}.png`;
-  L.tileLayer(tileUrl, {
-    noWrap:true, tileSize:256,
-    errorTileUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+  L.tileLayer(`/tiles/${mapId}/{z}/{x}/{y}.png`, {
+    noWrap: true, tileSize: TILES.tile_size,
+    minNativeZoom: 0, maxNativeZoom: TILES.native_zoom,
+    bounds: L.latLngBounds([-TILES.grid * U, 0], [0, TILES.grid * U])
   }).addTo(map);
 
+  map.fitBounds(bounds);
   updateMapMarkers();
 }
 
@@ -440,9 +496,9 @@ function updateMapMarkers() {
 
   // Add/update markers
   for (const p of playersOnMap) {
-    const latlng = wowToLatLng(p.x, p.y, mapId);
+    const latlng = wowToLatLng(p.x, p.y);
     const color = p.teamId==0 ? '#4488ff' : '#ff4444';
-    const tooltipHtml = `<b>${p.name}</b><br>Level ${p.level} ${CLASS_NAMES[p.classId]||'?'} ${RACE_NAMES[p.raceId]||'?'}<br>${p.teamId==0?'Alliance':'Horde'}`;
+    const tooltipHtml = `<b>${esc(p.name)}</b><br>Level ${parseInt(p.level)} ${esc(CLASS_NAMES[p.classId]||'?')} ${esc(RACE_NAMES[p.raceId]||'?')}<br>${p.teamId==0?'Alliance':'Horde'} · node ${parseInt(p.nodeId)}<br><span style="color:#8b949e">${Number(p.x).toFixed(0)}, ${Number(p.y).toFixed(0)}, ${Number(p.z).toFixed(0)}</span>`;
 
     if (_leafletMarkers[p.guid]) {
       _leafletMarkers[p.guid].setLatLng(latlng);
@@ -455,12 +511,15 @@ function updateMapMarkers() {
   }
 }
 
-function wowToLatLng(x, y, mapId) {
-  const cont = CONTINENTS[mapId];
-  if (!cont) return [0, 0];
-  // WoW coordinates: X = east-west, Y = north-south (negative = north in most continents)
-  // Leaflet CRS.Simple: lat = Y axis (screen Y flipped), lng = X axis
-  return [y, x];
+function wowToLatLng(x, y) {
+  // WoW world space: +X is north, +Y is west. The tile grid's origin is the
+  // north-west corner (ADT column 0 / row 0 == world Y = X = +32 cells), one
+  // ADT is U CRS units. CRS.Simple maps lat to screen-up, so north is -row.
+  const U = TILES.tile_size / TILES.grid;
+  const half = TILES.grid / 2;
+  const col = half - y / TILES.adt_yards;   // west → east
+  const row = half - x / TILES.adt_yards;   // north → south
+  return [-row * U, col * U];
 }
 
 // ── Deploy Wizard ────────────────────────────────────────────────────────────
@@ -519,6 +578,7 @@ function fetchStatus() {
 
 connect();
 fetchStatus();
+loadTileIndex();
 showDashboard();
 </script>
 </body>

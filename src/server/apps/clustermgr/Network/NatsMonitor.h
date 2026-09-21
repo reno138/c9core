@@ -76,14 +76,16 @@ struct PlayerInfo
 };
 
 /**
- * @brief NATS subscriber that replaces ManagementClient for the proxy-less architecture.
+ * @brief NATS subscriber for the proxy-less architecture.
  *
- * Subscribes to:
+ * Subscribes to (all ClusterAuth-sealed; unauthenticated frames are dropped):
  *   cluster.mgmt.status  — node health snapshots (every 5 s)
  *   cluster.mgmt.players — player positions (every 3 s)
+ *   cluster.mgmt.nodemgr — supervisor heartbeats
  *
- * Calls StatusCallback whenever status data changes.
- * Player data is available via GetPlayers().
+ * Calls StatusCallback whenever status data changes and PlayersCallback
+ * whenever a node publishes its player list. Player data is also available
+ * via GetPlayers().
  *
  * Dead-node detection: a watchdog thread marks nodes CRASHED (state=5)
  * when no cluster.mgmt.status has arrived for > DeadThresholdSecs (default 30 s).
@@ -93,6 +95,8 @@ class NatsMonitor
 public:
     /// Invoked from the NATS callback thread; receives a snapshot of all known nodes.
     using StatusCallback = std::function<void(std::vector<NodeInfo>)>;
+    /// Invoked from the NATS callback thread; receives a snapshot of all known players.
+    using PlayersCallback = std::function<void(std::vector<PlayerInfo>)>;
 
     NatsMonitor();
     ~NatsMonitor();
@@ -100,6 +104,14 @@ public:
     /// Connect to NATS and begin subscribing.  Call once before the UI loop starts.
     void Start(std::string const& natsUrl, StatusCallback statusCb,
                uint32 deadThresholdSecs = 30);
+
+    /// Optional; set before Start(). Fires after every cluster.mgmt.players frame.
+    void SetPlayersCallback(PlayersCallback cb) { _playersCb = std::move(cb); }
+
+    /// Stop the watchdog, unsubscribe everything and disconnect. After this
+    /// returns no callback will fire. Call it before anything the callbacks
+    /// reference goes out of scope; the destructor calls it too.
+    void Stop();
 
     bool IsConnected() const { return _connected.load(); }
 
@@ -145,8 +157,8 @@ private:
     static void OnPlayersMsg(natsConnection* nc, natsSubscription* sub,
                              natsMsg* msg, void* closure);
 
-    void ParseStatus(natsMsg* msg);
-    void ParsePlayers(natsMsg* msg);
+    void ParseStatus(uint8 srcNode, std::vector<uint8> const& body);
+    void ParsePlayers(uint8 srcNode, std::vector<uint8> const& body);
 
     /// Background thread that marks nodes CRASHED after silence > _deadThresholdSecs.
     void WatchdogLoop();
@@ -165,8 +177,9 @@ private:
     mutable std::mutex _supMutex;
     std::map<uint8, SupervisorInfo> _supervisors;
 
-    StatusCallback _statusCb;
-    uint32         _deadThresholdSecs{ 30 };
+    StatusCallback  _statusCb;
+    PlayersCallback _playersCb;
+    uint32          _deadThresholdSecs{ 30 };
 
     mutable std::mutex    _nodesMutex;
     std::map<uint8, NodeInfo> _nodes;   ///< keyed by nodeId

@@ -32,10 +32,12 @@
  *   3. scp worldserver.conf   → remote host
  *   4. scp nodemgr.conf       → remote host
  *   5. ssh chmod +x worldserver nodemgr
- *   6. ssh sed to patch configs (ProxyServer.Enable, NodeId, etc.)
+ *   6. ssh sed to patch configs (ClusterServer.NodeId/NatsURL/AuthKey,
+ *      NodeMgr.NodeId/NatsUrl/AuthKey, InstanceServer for instance nodes)
  *   7. (optional) ssh nohup ./nodemgr ... &
  *
- * Supports SSH key auth or password auth via sshpass.
+ * Any failed step fails the deployment. Supports SSH key auth or password
+ * auth via sshpass (password passed in the environment, never on argv).
  *
  * The wizard blocks the calling thread while the ncurses modal is visible.
  * Deployment steps run in a background thread; output is streamed to a
@@ -58,7 +60,8 @@ public:
         std::string remotePath      { "/opt/c9core" };
         std::string nodeType        { "worldserver" };  ///< "worldserver" or "instance"
         int         nodeId          { 1 };
-        std::string proxyAddress;           ///< proxy IP for sed patching
+        std::string natsUrl;                ///< written to ClusterServer.NatsURL / NodeMgr.NatsUrl
+        std::string authKey;                ///< written to ClusterServer.AuthKey / NodeMgr.AuthKey (empty = leave)
         bool        startAfterDeploy{ true };
     };
 
@@ -80,8 +83,16 @@ private:
                  std::string const& remoteName);
     bool SshCommand(std::string const& cmd);
 
-    /// Build argv prefix for sshpass if password is set (otherwise empty).
-    std::vector<std::string> SshpassPrefix() const;
+    /// Run @p program with @p args, streaming output to the log. Password
+    /// auth goes through SSHPASS in the child's environment (`sshpass -e`),
+    /// never on the command line where any local user could read it.
+    bool RunLogged(std::string const& program, std::vector<std::string> args);
+
+    /// Replace `Key = ...` in a remote conf with `Key = <value>` (value is
+    /// emitted verbatim, so pass quotes for string options). Returns false if
+    /// the key was not found or sed failed.
+    bool PatchRemoteConf(std::string const& remoteFile, std::string const& key,
+                         std::string const& value);
 
     void AppendLog(std::string const& line);
 

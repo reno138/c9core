@@ -34,11 +34,60 @@ static constexpr int W_PID     = 7;
 static constexpr int W_UPTIME  = 7;
 // W_HOST: remaining
 
+static int64 NowNs()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 ClusterUI::ClusterUI(std::string natsUrl, std::shared_ptr<NatsMonitor> monitor)
     : _natsUrl(std::move(natsUrl))
     , _monitor(std::move(monitor))
-    , _lastUpdate(std::chrono::steady_clock::now())
 {
+    _lastUpdateNs = NowNs();
+}
+
+std::vector<NodeInfo> ClusterUI::SortedNodes()
+{
+    std::vector<NodeInfo> nodes;
+    {
+        std::lock_guard<std::mutex> lock(_nodesMutex);
+        nodes = _nodes;
+    }
+    std::sort(nodes.begin(), nodes.end(),
+              [](NodeInfo const& a, NodeInfo const& b) { return a.nodeId < b.nodeId; });
+    return nodes;
+}
+
+std::optional<uint8> ClusterUI::SelectedNodeId()
+{
+    auto nodes = SortedNodes();
+    if (nodes.empty())
+        return std::nullopt;
+    if (_selectedNodeId)
+        for (auto const& n : nodes)
+            if (n.nodeId == *_selectedNodeId)
+                return _selectedNodeId;
+    // Selected node vanished (or nothing selected yet): fall back to the first row.
+    _selectedNodeId = nodes.front().nodeId;
+    return _selectedNodeId;
+}
+
+bool ClusterUI::Confirm(std::string const& question)
+{
+    std::string prompt = " " + question + " [y/N] ";
+    attron(COLOR_PAIR(COLOR_STATUS) | A_BOLD);
+    mvhline(LINES - 2, 0, ' ', COLS);
+    mvprintw(LINES - 2, 1, "%s", prompt.c_str());
+    attroff(COLOR_PAIR(COLOR_STATUS) | A_BOLD);
+    refresh();
+
+    nocbreak();
+    cbreak();          // blocking getch for the answer
+    int ch = getch();
+    halfdelay(5);
+    _dirty = true;
+    return ch == 'y' || ch == 'Y';
 }
 
 ClusterUI::~ClusterUI()
@@ -127,7 +176,7 @@ void ClusterUI::UpdateNodes(std::vector<NodeInfo> nodes)
         std::lock_guard<std::mutex> lock(_nodesMutex);
         _nodes = std::move(nodes);
     }
-    _lastUpdate = std::chrono::steady_clock::now();
+    _lastUpdateNs = NowNs();
     _dirty = true;
 }
 
@@ -198,31 +247,17 @@ void ClusterUI::DrawNodeTable()
 
     mvhline(2, 0, ACS_HLINE, COLS);
 
-    // Node rows
-    std::vector<NodeInfo> nodes;
-    {
-        std::lock_guard<std::mutex> lock(_nodesMutex);
-        nodes = _nodes;
-    }
-    // Sort by nodeId
-    std::sort(nodes.begin(), nodes.end(),
-              [](NodeInfo const& a, NodeInfo const& b) { return a.nodeId < b.nodeId; });
+    // Node rows (sorted by nodeId)
+    std::vector<NodeInfo> nodes = SortedNodes();
+    std::optional<uint8> selectedId = SelectedNodeId();
 
-    if (!nodes.empty())
-    {
-        if (_selectedRow >= static_cast<int>(nodes.size()))
-            _selectedRow = static_cast<int>(nodes.size()) - 1;
-        if (_selectedRow < 0) _selectedRow = 0;
-    }
-
-    int maxDataRows = LINES - 6;
     int screenRow   = 3;
     int nodeIdx     = 0;
 
     for (; nodeIdx < static_cast<int>(nodes.size()) && screenRow < LINES - 3; ++nodeIdx)
     {
         NodeInfo const& n  = nodes[nodeIdx];
-        bool selected      = (nodeIdx == _selectedRow);
+        bool selected      = selectedId && n.nodeId == *selectedId;
         bool isCrashed     = (n.state == 5);
 
         std::string stateStr = FormatState(n.state);
@@ -304,9 +339,8 @@ void ClusterUI::DrawNodeTable()
 
 void ClusterUI::DrawStatusBar()
 {
-    auto now = std::chrono::steady_clock::now();
-    auto ageSecs = static_cast<uint32>(
-        std::chrono::duration_cast<std::chrono::seconds>(now - _lastUpdate).count());
+    int64 const ageNs = NowNs() - _lastUpdateNs.load();
+    auto ageSecs = static_cast<uint32>(ageNs > 0 ? ageNs / 1000000000LL : 0);
     std::string ageStr = (ageSecs == 0) ? "just now" : (std::to_string(ageSecs) + "s ago");
 
     std::size_t nodeCount;
@@ -334,15 +368,14 @@ void ClusterUI::DrawMapPanel()
         return;                            // not enough room to be useful
 
     // Which node is selected, and which maps does it serve?
-    uint8 nodeId = 0;
+    std::optional<uint8> selectedId = SelectedNodeId();
+    if (!selectedId)
+        return;
+    uint8 nodeId = *selectedId;
     std::vector<uint32> mapIds;
-    {
-        std::lock_guard<std::mutex> lock(_nodesMutex);
-        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
-            return;
-        nodeId = _nodes[_selectedRow].nodeId;
-        mapIds = _nodes[_selectedRow].mapIds;
-    }
+    for (auto const& n : SortedNodes())
+        if (n.nodeId == nodeId)
+            mapIds = n.mapIds;
 
     // Only players on the selected node — the panel answers "who is on THIS
     // node and where", which is the question an operator asks before draining it.
@@ -449,13 +482,20 @@ void ClusterUI::HandleInput(int key)
     switch (key)
     {
         case KEY_UP:
-            if (_selectedRow > 0) --_selectedRow;
-            break;
         case KEY_DOWN:
         {
-            std::lock_guard<std::mutex> lock(_nodesMutex);
-            if (_selectedRow < static_cast<int>(_nodes.size()) - 1)
-                ++_selectedRow;
+            auto nodes = SortedNodes();
+            auto cur   = SelectedNodeId();
+            if (!cur) break;
+            for (std::size_t i = 0; i < nodes.size(); ++i)
+            {
+                if (nodes[i].nodeId != *cur) continue;
+                if (key == KEY_UP && i > 0)
+                    _selectedNodeId = nodes[i - 1].nodeId;
+                else if (key == KEY_DOWN && i + 1 < nodes.size())
+                    _selectedNodeId = nodes[i + 1].nodeId;
+                break;
+            }
             break;
         }
         case KEY_F(2):
@@ -487,50 +527,40 @@ void ClusterUI::HandleInput(int key)
 
 void ClusterUI::KillSelected()
 {
-    uint8 nodeId;
-    {
-        std::lock_guard<std::mutex> lock(_nodesMutex);
-        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
-            return;
-        nodeId = _nodes[_selectedRow].nodeId;
-    }
-    _monitor->SendKillNode(nodeId);
+    auto nodeId = SelectedNodeId();
+    if (!nodeId)
+        return;
+    if (!Confirm("SIGKILL worldserver on node " + std::to_string(*nodeId) + " (no save)?"))
+        return;
+    _monitor->SendKillNode(*nodeId);
 }
 
 void ClusterUI::RestartSelected()
 {
-    uint8 nodeId;
-    {
-        std::lock_guard<std::mutex> lock(_nodesMutex);
-        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
-            return;
-        nodeId = _nodes[_selectedRow].nodeId;
-    }
-    _monitor->SendRestartNode(nodeId);
+    auto nodeId = SelectedNodeId();
+    if (!nodeId)
+        return;
+    if (!Confirm("Restart worldserver on node " + std::to_string(*nodeId) + "?"))
+        return;
+    _monitor->SendRestartNode(*nodeId);
 }
 
 void ClusterUI::StartSelected()
 {
-    uint8 nodeId;
-    {
-        std::lock_guard<std::mutex> lock(_nodesMutex);
-        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
-            return;
-        nodeId = _nodes[_selectedRow].nodeId;
-    }
-    _monitor->SendStartNode(nodeId);
+    auto nodeId = SelectedNodeId();
+    if (!nodeId)
+        return;
+    _monitor->SendStartNode(*nodeId);
 }
 
 void ClusterUI::StopSelected()
 {
-    uint8 nodeId;
-    {
-        std::lock_guard<std::mutex> lock(_nodesMutex);
-        if (_nodes.empty() || _selectedRow >= static_cast<int>(_nodes.size()))
-            return;
-        nodeId = _nodes[_selectedRow].nodeId;
-    }
-    _monitor->SendStopNode(nodeId);
+    auto nodeId = SelectedNodeId();
+    if (!nodeId)
+        return;
+    if (!Confirm("Stop worldserver on node " + std::to_string(*nodeId) + " (SIGTERM, players saved)?"))
+        return;
+    _monitor->SendStopNode(*nodeId);
 }
 
 void ClusterUI::OpenDeployWizard()
@@ -550,7 +580,8 @@ void ClusterUI::OpenDeployWizard()
     cfg.sshPort         = sConfigMgr->GetOption<int32>      ("Deploy.DefaultSSHPort",  22);
     cfg.sshKey          = sConfigMgr->GetOption<std::string>("Deploy.DefaultSSHKey",   "~/.ssh/id_rsa");
     cfg.remotePath      = sConfigMgr->GetOption<std::string>("Deploy.DefaultRemotePath","/opt/c9core");
-    cfg.proxyAddress    = _natsUrl;  // pass NATS url for reference
+    cfg.natsUrl         = _natsUrl;
+    cfg.authKey         = sConfigMgr->GetOption<std::string>("ClusterMgr.AuthKey", "");
 
     DeployWizard wizard(std::move(cfg));
     std::string errMsg;
