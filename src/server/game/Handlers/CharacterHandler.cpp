@@ -1153,11 +1153,10 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
     data << uint8(0);                                       // enable(1)/disable(0) voice chat interface in client
     SendPacket(&data);
 
-    // Send MOTD
-    {
+    // Send MOTD, but not on a handoff arrival: the client has been in the
+    // world the whole time and already saw it on its real login.
+    if (GetRedirectAutoLoginGuid() == 0)
         SendPacket(sMotdMgr->GetMotdPacket(pCurrChar->GetSession()->GetSessionDbLocaleIndex()));
-
-    }
 
     if (uint32 guildId = sCharacterCache->GetCharacterGuildIdByGuid(pCurrChar->GetGUID()))
     {
