@@ -1667,11 +1667,15 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                 //
                 // The destination position is the LAST statement in the transaction
                 // so it overwrites the source position that _SaveCharacter wrote.
-                // CommitTransaction is async (avoids blocking the map thread and
-                // avoids the sync-connection prepared-statement gap that caused
-                // DirectCommitTransaction to fail). In practice the async queue
-                // drains in < 20ms — well before the dest node's LoadFromDB fires
-                // after the loading screen round-trip (~100ms+).
+                // The commit is async. The destination loads the character from
+                // this save, so the transfer snapshot and the redirect token are
+                // published from the commit callback: the destination admits the
+                // reconnecting client only when the token arrives (it waits up to
+                // REDIRECT_TOKEN_WAIT_MS), so its LoadFromDB cannot read the row
+                // from before this save. "Usually drains in 20ms" was not a
+                // guarantee, and a fast reconnect loaded stale level/buffs/items.
+                auto destNode = sClusterMgr.GetNodeForMap(mapid);
+                uint32 const token = destNode ? ClientRedirect::GenerateToken() : 0;
                 {
                     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
                     SaveToDB(trans, false, false);
@@ -1686,39 +1690,50 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     stmt->SetData(6, GetGUID().GetCounter());
                     trans->Append(stmt);
 
-                    CharacterDatabase.CommitTransaction(trans);
+                    if (destNode && token != 0)
+                    {
+                        ObjectGuid const guid = GetGUID();
+                        ClusterNodeInfo const dest = *destNode;
+                        WorldLocation const destLoc = teleportStore_dest;
+                        uint32 const accountId = GetSession()->GetAccountId();
+                        std::string const remoteAddress = GetSession()->GetRemoteAddress();
+                        auto const addons = GetSession()->GetAddonsList();
+                        GetSession()->AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(trans))
+                            .AfterComplete([guid, dest, destLoc, token, accountId, remoteAddress, addons](bool success)
+                        {
+                            Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+                            if (!success || !player)
+                            {
+                                LOG_ERROR("server.worldserver",
+                                          "Cross-node teleport of {} to node {} not published: {}",
+                                          guid.ToString(), dest.nodeId,
+                                          success ? "player gone" : "pre-teleport save failed");
+                                return;
+                            }
+
+                            // Ship full player state to the destination via NATS.
+                            // The position fields are overridden with the teleport
+                            // destination so the dest node spawns at the target, not
+                            // the stale source coordinates.  Must be published BEFORE
+                            // the redirect token: both go to the same node subject, so
+                            // NATS delivers them in order, and the destination's
+                            // WorldSocket admits the session as soon as the token is
+                            // present.
+                            sNatsBus.SendPlayerTransferForRedirect(player, dest.nodeId, destLoc);
+                            sNatsBus.PublishRedirectToken(accountId, guid.GetRawValue(), token,
+                                                          dest.nodeId, remoteAddress, addons);
+                        });
+                    }
+                    else
+                        CharacterDatabase.CommitTransaction(trans);
                 }
 
                 // Semaphore up immediately after queuing the commit — blocks any
                 // periodic SaveToDB from racing the async transaction.
                 SetSemaphoreTeleportFar(GameTime::GetGameTime().count());
 
-                auto destNode = sClusterMgr.GetNodeForMap(mapid);
-                uint32 const token = destNode ? ClientRedirect::GenerateToken() : 0;
                 if (destNode && token != 0)
                 {
-                    // Ship full player state to the destination via NATS.
-                    // The position fields are overridden with the teleport
-                    // destination so the dest node spawns at the target, not
-                    // the stale source coordinates.  Must be published BEFORE
-                    // the redirect token: both go to the same node subject, so
-                    // NATS delivers them in order, and the destination's
-                    // WorldSocket admits the session as soon as the token is
-                    // present. Token-first let the login run before the
-                    // transfer landed and fall back to the stale cached
-                    // position (the zone and cold-login paths already did
-                    // transfer-then-token).
-                    sNatsBus.SendPlayerTransferForRedirect(
-                        this, destNode->nodeId, teleportStore_dest);
-
-                    sNatsBus.PublishRedirectToken(
-                        GetSession()->GetAccountId(),
-                        GetGUID().GetRawValue(),
-                        token,
-                        destNode->nodeId,
-                        GetSession()->GetRemoteAddress(),
-                        GetSession()->GetAddonsList());
-
                     auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
                         destNode->nodeId, GetSession()->GetRemoteAddress());
 

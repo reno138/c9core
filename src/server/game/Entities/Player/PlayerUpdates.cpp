@@ -623,16 +623,48 @@ void Player::Update(uint32 p_time)
                 //    glyphs/actions. Without this, anything changed since the last
                 //    periodic save is silently discarded on every zone handoff, which
                 //    is why dismissed tutorials kept reappearing after a transfer.
-                //    Commit is async (drains in ~20ms) so the map thread is not blocked.
+                //
+                //    The destination loads the character from this save, so the
+                //    transfer snapshot and the redirect token are published only
+                //    once the commit has completed: the destination admits the
+                //    reconnecting client when the token arrives (it waits up to
+                //    REDIRECT_TOKEN_WAIT_MS), so its LoadFromDB can no longer read
+                //    the row from before this save. The client-facing packets go
+                //    out immediately; the ~20ms commit is hidden by the reconnect.
+                uint32 const token = ClientRedirect::GenerateToken();
+                if (token == 0)
+                    return; // CSPRNG failure — abort this handoff, retry next zone tick
                 {
                     CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
                     SaveToDB(trans, false, false);
-                    CharacterDatabase.CommitTransaction(trans);
-                }
 
-                // 1. Send actual transfer data to SPECIFIC dest node (not broadcast)
-                sNatsBus.SendPlayerTransferSeamless(this, destNode->nodeId,
-                    destNode->address, destNode->port);
+                    ObjectGuid const guid = GetGUID();
+                    ClusterNodeInfo const dest = *destNode;
+                    uint32 const accountId = GetSession()->GetAccountId();
+                    std::string const remoteAddress = GetSession()->GetRemoteAddress();
+                    auto const addons = GetSession()->GetAddonsList();
+                    GetSession()->AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(trans))
+                        .AfterComplete([guid, dest, token, accountId, remoteAddress, addons](bool success)
+                    {
+                        Player* player = ObjectAccessor::FindConnectedPlayer(guid);
+                        if (!success || !player)
+                        {
+                            LOG_ERROR("server.worldserver",
+                                      "Zone handoff of {} to node {} not published: {}",
+                                      guid.ToString(), dest.nodeId,
+                                      success ? "player gone" : "pre-handoff save failed");
+                            return;
+                        }
+
+                        // 1. Send actual transfer data to SPECIFIC dest node (not broadcast)
+                        sNatsBus.SendPlayerTransferSeamless(player, dest.nodeId, dest.address, dest.port);
+
+                        // 2. Redirect token to the dest node (after the transfer: same
+                        //    subject, NATS keeps the order, the dest admits on the token)
+                        sNatsBus.PublishRedirectToken(accountId, guid.GetRawValue(), token,
+                                                      dest.nodeId, remoteAddress, addons);
+                    });
+                }
 
                 // 2. Broadcast state sync so all OTHER nodes update their cache
                 sNatsBus.BroadcastPlayerStateFull(GetGUID().GetRawValue());
@@ -640,19 +672,10 @@ void Player::Update(uint32 p_time)
                 // 3. Claim ownership on destination
                 sNatsBus.ClaimPlayer(GetGUID().GetRawValue());
 
-                // 3. Generate redirect token and publish to dest node
+                // 4. Redirect client to destination node (client disconnects + reconnects)
                 // NOTE: Do NOT send SMSG_SUSPEND_COMMS before SMSG_REDIRECT_CLIENT!
                 // Binary analysis shows the client checks the suspended flag (0x538) and
                 // skips the redirect entirely if it's set. Just send the redirect directly.
-                uint32 const token = ClientRedirect::GenerateToken();
-                if (token == 0)
-                    return; // CSPRNG failure — abort this handoff, retry next zone tick
-                sNatsBus.PublishRedirectToken(GetSession()->GetAccountId(),
-                                                  GetGUID().GetRawValue(), token, destNode->nodeId,
-                                                  GetSession()->GetRemoteAddress(),
-                                                  GetSession()->GetAddonsList());
-
-                // 4. Redirect client to destination node (client disconnects + reconnects)
                 auto [redirectIp, redirectPort] = sClusterMgr.GetRedirectAddressForNode(
                     destNode->nodeId, GetSession()->GetRemoteAddress());
                 ClientRedirect::RedirectClient(GetSession(), redirectIp, redirectPort, token);

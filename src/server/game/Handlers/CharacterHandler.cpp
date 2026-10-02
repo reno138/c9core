@@ -1036,19 +1036,12 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
             // Store pet transfer for deferred application (after pet spawns)
             _pendingPetTransfer = transfer->pet;
 
-            // Auras - remove DB-loaded auras and reapply from transfer snapshot
-            pCurrChar->RemoveAllAuras();
-            for (auto const& ta : transfer->auras)
-            {
-                pCurrChar->AddAura(ta.spellId, pCurrChar);
-                if (Aura* aura = pCurrChar->GetAura(ta.spellId))
-                {
-                    if (ta.stackAmount > 1)
-                        aura->SetStackAmount(ta.stackAmount);
-                    if (ta.duration >= 0)
-                        aura->SetDuration(ta.duration);
-                }
-            }
+            // Auras come from the save the source committed before publishing
+            // this transfer (exact amounts, charges, remaining time, original
+            // caster), loaded by LoadFromDB above. They used to be stripped here
+            // and re-created from the snapshot with the player as caster, which
+            // lost all of that and also removed the passive auras from talents
+            // and equipment that nothing re-applied until the next relog.
         }
     }
 
