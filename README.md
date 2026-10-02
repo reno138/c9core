@@ -14,6 +14,12 @@ unmodified. All processes share one set of databases, so characters, mail,
 auctions and guilds are consistent everywhere. The processes coordinate over a
 [NATS](https://nats.io/) message bus.
 
+> **Not related to ToCloud9.** c9core is an independent project and has
+> nothing to do with [ToCloud9](https://github.com/walkline/ToCloud9).
+> Upstream AzerothCore merged ToCloud9's clustering hooks in 2026; c9core
+> removes them when merging from upstream, so none of ToCloud9's code or
+> `Cluster.*` settings are present here.
+
 > **Status: experimental.** Map-based and zone-based handoffs, cross-node
 > chat, groups, LFG and battleground queues all run on a four-node lab
 > deployment. This has not run a public realm. See [Known
@@ -256,12 +262,6 @@ the realm address in `acore_auth.realmlist` at node 1.
   default `nats://127.0.0.1:4222`.
 - **Edit keys where they are.** Don't append a second copy at the end of
   the file, then make sure exactly one active copy exists.
-- **Leave `Cluster.Enabled = 0`.** Upstream AzerothCore has its own,
-  unrelated clustering hooks for [ToCloud9](https://github.com/walkline/ToCloud9),
-  configured under `Cluster.*`, not to be confused with c9core's
-  `ClusterServer.*`. Turning it on makes the worldserver trust an external
-  gateway and skip session-key checks, encryption and ban enforcement. c9core
-  doesn't use it, so never enable both.
 - **`ClusterServer.RedirectDebug = 1` writes session keys to the log.** It
   is for debugging the handshake on a test realm only.
 - **`ClusterServer.AllowRemoteConsole = 1` lets the bus run console
