@@ -1,30 +1,41 @@
-## CONTRIBUTING
+# Contributing to c9core
 
-AzerothCore can also serve as a learning resource for aspiring developers who want to understand how WoW servers work, how MMORPGs are structured, how game server emulators are created, or to improve their C++ and SQL knowledge.
+Thanks for looking. c9core is AzerothCore plus a distributed-server layer, so
+it helps to know which half your change belongs to.
 
-If you want to contribute to the project, you will find a lot of resources that will guide you in our [wiki](https://www.azerothcore.org/wiki/contribute).
+## Where a change belongs
 
-We also recommend you read our [Contributor Covenant Code of Conduct](https://github.com/azerothcore/azerothcore-wotlk/blob/master/.github/CODE_OF_CONDUCT.md).
+- **The distributed-server layer** (NATS bus, cross-node handoffs and redirects,
+  routing by map and zone, `nodemgr`, `clustermgr`) lives here. Open an issue
+  or pull request in this repository.
+- **Game logic, scripts, spells, quests and database content** that are wrong
+  in stock AzerothCore too belong
+  [upstream](https://github.com/azerothcore/azerothcore-wotlk). Fixing them there
+  helps everyone, and c9core picks them up in its next merge.
 
-Feel free to join our [Discord server](https://discord.gg/gkt4y2x).
+If you're not sure, open an issue here and ask.
 
-## AUTHORS & CONTRIBUTORS
+## Pull requests
 
-This project exists thanks to the [authors](https://github.com/azerothcore/azerothcore-wotlk/blob/master/AUTHORS).
+- Base your branch on `main` and keep each pull request to one change.
+- Follow AzerothCore's
+  [C++](https://www.azerothcore.org/wiki/cpp-code-standards) and
+  [SQL](https://www.azerothcore.org/wiki/sql-standards) code standards.
+- Write the commit message as `type(Scope): summary`, for example
+  `fix(Core/Cluster): ...`, and use the body to explain *why*.
+- Say how you tested it. Changes to handoffs or the bus should be tried on at
+  least two nodes, and the pull request should say which handoff paths you
+  exercised: login, teleport, portal, zone crossing.
+- New config settings go in the matching `.conf.dist`, with a description of
+  what the code actually does with them. Remember that config keys are
+  case-sensitive and silently ignored when misspelled.
+- New files written for c9core use the c9core file header. Files that came
+  from AzerothCore keep AzerothCore's header and copyright notice.
 
-## IMPORTANT LINKS
+## Licence
 
-- [Doxygen documentation](https://www.azerothcore.org/pages/doxygen/index.html)
-- [Website](http://www.azerothcore.org/)
-- [AzerothCore catalogue](http://www.azerothcore.org/catalogue.html  "Modules, tools, and other stuff for AzerothCore") (modules, tools, etc...)
-- [Our Discord server](https://discord.gg/gkt4y2x)
-- [Our wiki](http://www.azerothcore.org/wiki "Easy to use and developed by AzerothCore founder")
-- [Our forum](https://github.com/azerothcore/azerothcore-wotlk/discussions/)
-- [Our Facebook page](https://www.facebook.com/AzerothCore/)
-- [Our LinkedIn page](https://www.linkedin.com/company/azerothcore/)
+By contributing you agree that your work is licensed under the GNU GPL v2,
+the same as the rest of the project.
 
-All contributions, big or small, are appreciated <3
-
-The AzerothCore Staff appreciate all the help and contribution that *you* put your time into.
-
-Thank you!
+Security problems: see [SECURITY.md](SECURITY.md) and please don't post them
+publicly.

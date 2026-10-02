@@ -1,97 +1,45 @@
-# Security Policy
+# Security policy
 
-## Supported Versions
+## Reporting a vulnerability
 
-We support the following versions of dependencies.
+**Please don't open a public issue for a security problem.**
 
-| Icon                 |      Meaning      |
-| :------------------- | :---------------: |
-| :white_check_mark:   |   **Supported**   |
-| :red_circle:         | **NOT** Supported |
-| :large_blue_diamond: |  **Recommended**  |
+Report it privately through GitHub instead: open the repository's
+**Security** tab and choose **Report a vulnerability**, or go to
+<https://github.com/reno138/c9core/security/advisories/new>. Only the
+maintainer can see the report.
 
-### Versions of AzerothCore:
+Please include:
 
-| AzerothCore Branch           |       Status       |     Recommended      |
-| ---------------------------- | :----------------: | :------------------: |
-| **master**                   | :white_check_mark: | :large_blue_diamond: |
-| Any non-official fork        |    :red_circle:    |                      |
-| Any Playerbots fork          |    :red_circle:    |                      |
-| Any NPCBots fork             |    :red_circle:    |                      |
-| Any AC (non-official) repack |    :red_circle:    |                      |
+- what is affected (a file, function or config setting) and the commit you
+  tested
+- how to reproduce it, and what an attacker gains
+- whether it needs access to the NATS bus, a game account, or nothing at all
 
-### Supported Operating Systems
+This is a one-person project, so a fix may take a while. You'll get a reply
+before anything is disclosed.
 
-| Linux (Ubuntu) |       Status       |     Recommended      |
-| :------------- | :----------------: | :------------------: |
-| 24.04          | :white_check_mark: | :large_blue_diamond: |
-| 22.04          | :white_check_mark: |                      |
-| 20.04 ≤        |    :red_circle:    |                      |
+## Scope
 
-| macOS |       Status       |     Recommended      |
-| :---- | :----------------: | :------------------: |
-| 14    | :white_check_mark: | :large_blue_diamond: |
-| 12 ≤  |    :red_circle:    |                      |
+**In scope:** code this repository adds to AzerothCore, which means the
+distributed-server layer. That includes the NATS bus and its authentication
+(`ClusterAuth`, `NatsBus`), cross-node client redirects (`ClientRedirect`,
+`WorldSocket` redirect handling), `nodemgr` and `clustermgr`, including the
+clustermgr web UI.
 
-| Windows       |       Status       |     Recommended      |
-| :------------ | :----------------: | :------------------: |
-| Windows 11    | :white_check_mark: | :large_blue_diamond: |
-| Windows 10    | :white_check_mark: |
-| Windows 8.1 ≤ |    :red_circle:    |
+**Report upstream instead:** problems that also exist in
+[AzerothCore](https://github.com/azerothcore/azerothcore-wotlk) itself should
+go to AzerothCore under its own security policy. Feel free to tell us too.
 
-<br>
+## What the bus does and doesn't protect
 
-### Supported Boost Versions:
+Every message on the NATS bus is authenticated with HMAC-SHA256 using the
+shared `ClusterServer.AuthKey`, and carries a 30-second replay window. It is
+**not encrypted**. Keep port 4222 on a private network, or turn on TLS in NATS
+if it has to cross one you don't trust. Anyone who holds the AuthKey controls
+the whole realm, including remote console commands on any node that sets
+`ClusterServer.AllowRemoteConsole = 1`.
 
-| Boost  |       Status       |     Recommended      |
-| :----- | :----------------: | :------------------: |
-| 1.70 ≥ | :white_check_mark: | :large_blue_diamond: |
+## Supported versions
 
-### Supported OpenSSL Versions:
-
-| OpenSSL |       Status       |     Recommended      |
-| :------ | :----------------: | :------------------: |
-| 3.X.X ≥ | :white_check_mark: | :large_blue_diamond: |
-
-### Supported CMake Versions:
-
-| CMake  |       Status       |     Recommended      |
-| :----- | :----------------: | :------------------: |
-| 3.16 ≥ | :white_check_mark: | :large_blue_diamond: |
-
-### Supported MySQL Versions:
-
-| MySQL |       Status       |     Recommended      |
-| :---- | :----------------: | :------------------: |
-| 8.4 ≥ | :white_check_mark: | :large_blue_diamond: |
-| 8.0   | :white_check_mark: |                      |
-| 8.1   |    :red_circle:    |                      |
-| 8.0 < |    :red_circle:    |                      |
-
-### Supported CLang Versions:
-
-| CLang |       Status       |     Recommended      |
-| :---- | :----------------: | :------------------: |
-| 18    | :white_check_mark: | :large_blue_diamond: |
-| 15    | :white_check_mark: |                      |
-| 14 ≤  |    :red_circle:    |                      |
-
-### Supported GCC Versions:
-
-| GCC  |       Status       |     Recommended      |
-| :--- | :----------------: | :------------------: |
-| 14   | :white_check_mark: | :large_blue_diamond: |
-| 12   | :white_check_mark: |                      |
-| 11 ≤ |    :red_circle:    |                      |
-
-> [!NOTE]
-> We do **NOT** support any repacks that may or may not have been made based on AzerothCore. This is because they are usually based on older versions and there is no way to know what is in the precompiled binaries. Instead, you should compile your binaries from the AzerothCore source. To get started, read the [Installation Guide](https://www.azerothcore.org/wiki/installation).
-
-> [!CAUTION] 
-> [Why you should not use repacks to run your WoW server](https://www.mangosrumors.org/why-you-should-not-use-repacks-to-run-your-wow-server/)
-
-## Reporting a Vulnerability
-
-We class a vulnerability to be any hack or exploit that has an impact on the server performance or that gives unfair advantages in the game (e.g. fly hacking or injection tools).
-
-If a new vulnerability is found you should always create a new [bug report](https://github.com/azerothcore/azerothcore-wotlk/issues/new?assignees=&labels=&projects=&template=bug_report.yml).
+Only the latest commit on `main` gets fixes. There are no releases yet.
