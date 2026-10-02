@@ -300,7 +300,7 @@ void GameEventMgr::LoadEventVendors()
         // Get creature entry
         newEntry.Entry = 0;
         if (CreatureData const* data = sObjectMgr->GetCreatureData(guid))
-            newEntry.Entry = data->id1;
+            newEntry.Entry = data->id;
 
         // Validate vendor item
         if (!sObjectMgr->IsVendorItemValid(newEntry.Entry, newEntry.Item, newEntry.MaxCount, newEntry.Incrtime, newEntry.ExtendedCost, nullptr, nullptr, event_npc_flag))
@@ -328,6 +328,7 @@ void GameEventMgr::LoadEvents()
 {
     LOG_INFO("server.loading", "Loading Game Events...");
     uint32 oldMSTime = getMSTime();
+    _holidayMainStages.clear();
     WorldDatabasePreparedStatement* stmt = WorldDatabase.GetPreparedStatement(WORLD_SEL_GAME_EVENTS);
     PreparedQueryResult result = WorldDatabase.Query(stmt);
 
@@ -378,11 +379,25 @@ void GameEventMgr::LoadEvents()
 
         if (pGameEvent.HolidayId != HOLIDAY_NONE)
         {
-            if (!sHolidaysStore.LookupEntry(pGameEvent.HolidayId))
+            HolidaysEntry const* holiday = sHolidaysStore.LookupEntry(pGameEvent.HolidayId);
+            if (!holiday)
             {
                 LOG_ERROR("sql.sql", "`game_event` game event id ({}) have not existed holiday id {}.", eventId, pGameEvent.HolidayId);
                 pGameEvent.HolidayId = HOLIDAY_NONE;
+                continue;
             }
+
+            // a stage the holiday does not define leaves the event with length 0, which keeps it from ever starting
+            if (pGameEvent.HolidayStage > MAX_HOLIDAY_DURATIONS
+                || (pGameEvent.HolidayStage && !holiday->Duration[pGameEvent.HolidayStage - 1]))
+            {
+                LOG_ERROR("sql.sql", "`game_event` game event id ({}) has out of range holidayStage {}.", eventId, pGameEvent.HolidayStage);
+                pGameEvent.HolidayStage = 0;
+            }
+
+            uint8& mainStage = _holidayMainStages[pGameEvent.HolidayId];
+            if (pGameEvent.HolidayStage > mainStage)
+                mainStage = pGameEvent.HolidayStage;
 
             SetHolidayEventTime(pGameEvent);
         }
@@ -614,9 +629,7 @@ void GameEventMgr::LoadEventModelEquipmentChangeData()
 
             ObjectGuid::LowType guid = fields[0].Get<uint32>();
             uint32 entry = fields[1].Get<uint32>();
-            uint32 entry2 = fields[2].Get<uint32>();
-            uint32 entry3 = fields[3].Get<uint32>();
-            uint16 eventId = fields[4].Get<uint8>();
+            uint16 eventId = fields[2].Get<uint8>();
 
             if (eventId >= _gameEventModelEquip.size())
             {
@@ -626,15 +639,15 @@ void GameEventMgr::LoadEventModelEquipmentChangeData()
 
             ModelEquipList& equiplist = _gameEventModelEquip[eventId];
             ModelEquip newModelEquipSet;
-            newModelEquipSet.ModelId = fields[5].Get<uint32>();
-            newModelEquipSet.EquipmentId = fields[6].Get<uint8>();
+            newModelEquipSet.ModelId = fields[3].Get<uint32>();
+            newModelEquipSet.EquipmentId = fields[4].Get<uint8>();
             newModelEquipSet.EquipementIdPrev = 0;
             newModelEquipSet.ModelIdPrev = 0;
 
             if (newModelEquipSet.EquipmentId > 0)
             {
                 int8 equipId = static_cast<int8>(newModelEquipSet.EquipmentId);
-                if ((!sObjectMgr->GetEquipmentInfo(entry, equipId)) || (entry2 && !sObjectMgr->GetEquipmentInfo(entry2, equipId)) || (entry3 && !sObjectMgr->GetEquipmentInfo(entry3, equipId)))
+                if (!sObjectMgr->GetEquipmentInfo(entry, equipId))
                 {
                     LOG_ERROR("sql.sql", "Table `game_event_model_equip` have creature (Guid: {}) with equipment_id {} not found in table `creature_equip_template`, set to no equipment.",
                         guid, newModelEquipSet.EquipmentId);
@@ -1507,7 +1520,7 @@ void GameEventMgr::GameEventSpawn(int16 eventId)
     }
 
     for (IdList::iterator itr = _gameEventPoolIds[internal_event_id].begin(); itr != _gameEventPoolIds[internal_event_id].end(); ++itr)
-        sPoolMgr->SpawnPool(*itr);
+        sPoolMgr->SpawnEventPool(*itr);
 }
 
 void GameEventMgr::GameEventUnspawn(int16 eventId)
@@ -1582,7 +1595,7 @@ void GameEventMgr::GameEventUnspawn(int16 eventId)
 
     for (IdList::iterator itr = _gameEventPoolIds[internal_event_id].begin(); itr != _gameEventPoolIds[internal_event_id].end(); ++itr)
     {
-        sPoolMgr->DespawnPool(*itr);
+        sPoolMgr->DespawnEventPool(*itr);
     }
 }
 
@@ -1966,6 +1979,17 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
 
     time_t curTime = GameTime::GetGameTime().count();
 
+    if (holiday->Looping)
+    {
+        // Looping events (Battleground Call to Arms) carry a single past anchor in the DBC and
+        // recur via event.Occurence. Anchor to that DBC date so the window keeps the correct phase
+        // instead of inheriting the wrong time of day from a stale game_event.start_time.
+        if (time_t start = HolidayDateCalculator::FindLoopingStartTime(holiday->Date[0], stageOffset, event.Occurence, curTime))
+            event.Start = start;
+
+        return;
+    }
+
     if (!singleDate)
     {
         time_t start = HolidayDateCalculator::FindStartTimeForStage(
@@ -2012,16 +2036,23 @@ void GameEventMgr::SetHolidayEventTime(GameEventData& event)
 uint32 GameEventMgr::GetHolidayEventId(uint32 holidayId) const
 {
     auto const& events = GetEventMap();
+    uint8 mainStage = GetHolidayMainStage(holidayId);
 
     for (auto const& eventEntry : events)
     {
-        if (eventEntry.HolidayId == holidayId)
+        if (eventEntry.HolidayId == holidayId && eventEntry.HolidayStage == mainStage)
         {
             return eventEntry.EventId;
         }
     }
 
     return 0;
+}
+
+uint8 GameEventMgr::GetHolidayMainStage(uint32 holidayId) const
+{
+    auto itr = _holidayMainStages.find(holidayId);
+    return itr != _holidayMainStages.end() ? itr->second : 0;
 }
 
 bool IsHolidayActive(HolidayIds id)
@@ -2032,9 +2063,16 @@ bool IsHolidayActive(HolidayIds id)
     GameEventMgr::GameEventDataMap const& events = sGameEventMgr->GetEventMap();
     GameEventMgr::ActiveEvents const& ae = sGameEventMgr->GetActiveEventList();
 
-    for (GameEventMgr::ActiveEvents::const_iterator itr = ae.begin(); itr != ae.end(); ++itr)
-        if (events[*itr].HolidayId == id)
+    // Brewfest and the Darkmoon Faire have a building stage running days ahead of the event itself,
+    // only their last stage means the holiday is on
+    uint8 mainStage = sGameEventMgr->GetHolidayMainStage(id);
+
+    for (uint16 eventId : ae)
+    {
+        GameEventData const& event = events[eventId];
+        if (event.HolidayId == id && event.HolidayStage == mainStage)
             return true;
+    }
 
     return false;
 }

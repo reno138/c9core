@@ -256,6 +256,12 @@ the realm address in `acore_auth.realmlist` at node 1.
   default `nats://127.0.0.1:4222`.
 - **Edit keys where they are.** Don't append a second copy at the end of
   the file, then make sure exactly one active copy exists.
+- **Leave `Cluster.Enabled = 0`.** Upstream AzerothCore has its own,
+  unrelated clustering hooks for [ToCloud9](https://github.com/walkline/ToCloud9),
+  configured under `Cluster.*`, not to be confused with c9core's
+  `ClusterServer.*`. Turning it on makes the worldserver trust an external
+  gateway and skip session-key checks, encryption and ban enforcement. c9core
+  doesn't use it, so never enable both.
 - **`ClusterServer.RedirectDebug = 1` writes session keys to the log.** It
   is for debugging the handshake on a test realm only.
 - **`ClusterServer.AllowRemoteConsole = 1` lets the bus run console
@@ -273,7 +279,7 @@ the realm address in `acore_auth.realmlist` at node 1.
 - **Intermittent worldserver crashes** have been seen on some nodes and
   haven't been tracked down yet. `nodemgr` restarts the process.
   `NodeMgr.UseGdb = 1` captures backtraces.
-- **Upstream lag.** The fork point is AzerothCore as of 2026-05-17.
+- **Upstream lag.** Last merged with AzerothCore as of 2026-10-02.
 
 ## Licence and credits
 

@@ -28,7 +28,7 @@
 @ACORE_SCRIPTS_FORWARD_DECL@
 #ifdef ACORE_IS_DYNAMIC_SCRIPTLOADER
 #  include "revision.h"
-#  define C9_SCRIPT_API AC_API_EXPORT
+#  define C9_SCRIPT_API C9_API_EXPORT
 extern "C" {
 
 /// Exposed in script modules to return the script module revision hash.

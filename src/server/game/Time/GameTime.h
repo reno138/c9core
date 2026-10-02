@@ -38,7 +38,7 @@ namespace GameTime
     /// Current chrono steady_clock time point
     C9_GAME_API TimePoint Now();
 
-    /// Uptime
+    /// Time since server start, unaffected by wall clock changes
     C9_GAME_API Seconds GetUptime();
 
     /// Uptime since a given time point

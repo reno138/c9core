@@ -75,20 +75,6 @@ public:
     }
 };
 
-class go_arena_ready_marker : public GameObjectScript
-{
-public:
-    go_arena_ready_marker() : GameObjectScript("go_arena_ready_marker") { }
-
-    bool OnGossipHello(Player* player, GameObject* /*go*/) override
-    {
-        if (Battleground* bg = player->GetBattleground())
-            bg->ReadyMarkerClicked(player);
-
-        return false;
-    }
-};
-
 /*######
 ## go_ethereum_prison
 ######*/
@@ -738,7 +724,7 @@ public:
                 switch (eventId)
                 {
                     case EVENT_DFM_START_MUSIC:
-                        if (!IsHolidayActive(HOLIDAY_DARKMOON_FAIRE_ELWYNN) || !IsHolidayActive(HOLIDAY_DARKMOON_FAIRE_THUNDER) || !IsHolidayActive(HOLIDAY_DARKMOON_FAIRE_SHATTRATH))
+                        if (!IsHolidayActive(HOLIDAY_DARKMOON_FAIRE_ELWYNN) && !IsHolidayActive(HOLIDAY_DARKMOON_FAIRE_THUNDER) && !IsHolidayActive(HOLIDAY_DARKMOON_FAIRE_SHATTRATH))
                             break;
                         me->PlayDirectMusic(MUSIC_DARKMOON_FAIRE_MUSIC);
                         _events.ScheduleEvent(EVENT_DFM_START_MUSIC, 5s);  // Every 5 second's SMSG_PLAY_MUSIC packet (PlayDirectMusic) is pushed to the client (sniffed value)
@@ -1481,7 +1467,8 @@ public:
                 return true;
             }
 
-            player->CastSpell(player, stoneSpell, false);
+            // Cast as the warlock owner so the clicker's trinkets can't proc.
+            owner->CastSpell(player, stoneSpell, true);
 
             // Item has to actually be created to remove a charge on the well.
             if (player->HasItemCount(stoneId))
@@ -1656,42 +1643,6 @@ public:
     {
         go->SetLootState(GO_JUST_DEACTIVATED);
         return true;
-    }
-};
-
-/*########
-#### go_veil_skith_cage
-#####*/
-
-enum MissingFriends
-{
-    QUEST_MISSING_FRIENDS    = 10852,
-    NPC_CAPTIVE_CHILD        = 22314,
-    SAY_FREE_0               = 0,
-};
-
-class go_veil_skith_cage : public GameObjectScript
-{
-public:
-    go_veil_skith_cage() : GameObjectScript("go_veil_skith_cage") { }
-
-    bool OnGossipHello(Player* player, GameObject* go) override
-    {
-        go->UseDoorOrButton();
-        if (player->GetQuestStatus(QUEST_MISSING_FRIENDS) == QUEST_STATUS_INCOMPLETE)
-        {
-            std::list<Creature*> childrenList;
-            GetCreatureListWithEntryInGrid(childrenList, go, NPC_CAPTIVE_CHILD, INTERACTION_DISTANCE);
-            for (std::list<Creature*>::const_iterator itr = childrenList.begin(); itr != childrenList.end(); ++itr)
-            {
-                player->KilledMonsterCredit(NPC_CAPTIVE_CHILD, (*itr)->GetGUID());
-                (*itr)->DespawnOrUnsummon(5s);
-                (*itr)->GetMotionMaster()->MovePoint(1, go->GetPositionX() + 5, go->GetPositionY(), go->GetPositionZ());
-                (*itr)->AI()->Talk(SAY_FREE_0);
-                (*itr)->GetMotionMaster()->Clear();
-            }
-        }
-        return false;
     }
 };
 
@@ -1888,7 +1839,6 @@ void AddSC_go_scripts()
 {
     new go_seer_of_zebhalak();
     new go_witherbark_totem_bundle();
-    new go_arena_ready_marker();
     new go_ethereum_prison();
     new go_ethereum_stasis();
     new go_resonite_cask();
@@ -1921,6 +1871,5 @@ void AddSC_go_scripts()
     new go_amberpine_outhouse();
     new go_hive_pod();
     new go_massive_seaforium_charge();
-    new go_veil_skith_cage();
     new go_bells();
 }

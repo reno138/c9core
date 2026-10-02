@@ -38,6 +38,7 @@
 #include "Pet.h"
 #include "PoolMgr.h"
 #include "ScriptMgr.h"
+#include "TC9Sidecar.h"
 #include "Transport.h"
 #include "VMapFactory.h"
 #include "Vehicle.h"
@@ -82,6 +83,8 @@ Map::Map(uint32 id, uint32 InstanceId, uint8 SpawnMode, Map* _parent) :
 
     _weatherUpdateTimer.SetInterval(1 * IN_MILLISECONDS);
     _corpseUpdateTimer.SetInterval(20 * MINUTE * IN_MILLISECONDS);
+
+    _poolData = sPoolMgr->InitPoolsForMap(this);
 }
 
 // Hook called after map is created AND after added to map list
@@ -313,7 +316,7 @@ bool Map::AddToMap(T* obj, bool checkTransport)
     if (obj->IsInWorld())
     {
         ASSERT(obj->IsInGrid());
-        obj->UpdateObjectVisibilityOnCreate();
+        obj->UpdateObjectVisibility(true);
         return true;
     }
 
@@ -350,7 +353,7 @@ bool Map::AddToMap(T* obj, bool checkTransport)
 
     //something, such as vehicle, needs to be update immediately
     //also, trigger needs to cast spell, if not update, cannot see visual
-    obj->UpdateObjectVisibility(true);
+    obj->UpdateObjectVisibilityOnCreate();
 
     // Post-visibility so accessories seat after the vehicle's create packet reaches clients.
     if (obj->IsCreature())
@@ -382,9 +385,12 @@ bool Map::AddToMap(Transport* obj, bool /*checkTransport*/)
     _transports.insert(obj);
 
     // Broadcast creation to players
+    // Skip players that are not in world. Sending the create to their loading client
+    // could materialize a lingering transport on whatever map they are teleporting to.
+    // They get the correct transport list from SendInitTransports when added to their new map
     for (Map::PlayerList::const_iterator itr = GetPlayers().begin(); itr != GetPlayers().end(); ++itr)
     {
-        if (itr->GetSource()->GetTransport() != obj)
+        if (itr->GetSource()->IsInWorld() && itr->GetSource()->GetTransport() != obj)
         {
             UpdateData data;
             obj->BuildCreateUpdateBlockForPlayer(&data, itr->GetSource());
@@ -520,6 +526,8 @@ void Map::Update(const uint32 t_diff, const uint32 s_diff, bool  /*thread*/)
     MoveAllDynamicObjectsInMoveList();
 
     HandleDelayedVisibility();
+
+    UpdatePlayersRedirectKickEvent(t_diff);
 
     UpdateWeather(t_diff);
     UpdateExpiredCorpses(t_diff);
@@ -767,8 +775,10 @@ void Map::RemoveFromMap(Transport* obj, bool remove)
         obj->BuildOutOfRangeUpdateBlock(&data);
         WorldPacket packet;
         data.BuildPacket(packet);
+        // Skip players that are not in world
+        // Their client already received the destroy from SendRemoveTransports when leaving this map
         for (Map::PlayerList::const_iterator itr = players.begin(); itr != players.end(); ++itr)
-            if (itr->GetSource()->GetTransport() != obj && !itr->GetSource()->IsBeingTeleportedFar())
+            if (itr->GetSource()->IsInWorld() && itr->GetSource()->GetTransport() != obj && !itr->GetSource()->IsBeingTeleportedFar())
                 itr->GetSource()->SendDirectMessage(&packet);
     }
 
@@ -824,7 +834,9 @@ void Map::CreatureRelocation(Creature* creature, float x, float y, float z, floa
     Cell old_cell = creature->GetCurrentCell();
     Cell new_cell(x, y);
 
-    if (old_cell.DiffGrid(new_cell) || old_cell.DiffCell(new_cell))
+    bool const cellChanged = old_cell.DiffGrid(new_cell) || old_cell.DiffCell(new_cell);
+
+    if (cellChanged)
     {
         if (old_cell.DiffGrid(new_cell))
             EnsureGridLoaded(new_cell);
@@ -837,7 +849,27 @@ void Map::CreatureRelocation(Creature* creature, float x, float y, float z, floa
     creature->Relocate(x, y, z, o);
     if (creature->IsVehicle())
         creature->GetVehicleKit()->RelocatePassengers();
-    creature->UpdatePositionData();
+
+    // Terrain status (zone / area / floor / liquid) is derived lazily: the getters recompute it on
+    // demand, the same as for GameObjects. GetFullTerrainStatusForPosition() is VMAP-heavy and used to
+    // run on every spline sub-step, so a wandering creature that nothing is querying now costs no
+    // raycast. Re-derive eagerly here only when the result must be exact immediately and nothing is
+    // guaranteed to read it:
+    //  - the creature changed grid cell;
+    //  - it is in combat or evading home (a mob chasing / returning through water must have the
+    //    correct swim state at once);
+    //  - it is zone-wide visible (world boss / event NPC) - ProcessPositionDataChanged() moves it
+    //    between zone visibility maps only on a real derive, so throttling could hide it from players
+    //    after it crosses a zone border.
+    // For a plain wandering creature, Creature::Update() keeps the swim / fly / hover flags in step
+    // with the terrain it moves over.
+    if (cellChanged || creature->IsInCombat() || creature->IsInEvadeMode() || creature->IsZoneWideVisible())
+    {
+        creature->UpdatePositionData();
+    }
+    else
+        creature->SetPositionDataUpdate();
+
     creature->UpdateObjectVisibility(false);
 }
 
@@ -1390,15 +1422,15 @@ LiquidData const Map::GetLiquidData(uint32 phaseMask, float x, float y, float z,
    return liquidData;
 }
 
-void Map::GetFullTerrainStatusForPosition(uint32 /*phaseMask*/, float x, float y, float z, float collisionHeight, PositionFullTerrainStatus& data, Optional<uint8> reqLiquidType)
+void Map::GetFullTerrainStatusForPosition(uint32 phaseMask, float x, float y, float z, float collisionHeight, PositionFullTerrainStatus& data, Optional<uint8> reqLiquidType)
 {
     GridTerrainData* gmap = GetGridTerrainData(x, y);
 
     VMAP::AreaAndLiquidData vmapData;
-    // VMAP::AreaAndLiquidData dynData;
+    VMAP::AreaAndLiquidData dynData;
     VMAP::AreaAndLiquidData* wmoData = nullptr;
     _mapCollisionData.GetStaticTree().GetAreaAndLiquidData(x, y, z, reqLiquidType, vmapData);
-    // _dynamicTree.GetAreaAndLiquidData(x, y, z, phaseMask, reqLiquidType, dynData);
+    _mapCollisionData.GetDynamicTree().GetAreaAndLiquidData(x, y, z, phaseMask, reqLiquidType, dynData);
 
     uint32 gridAreaId = 0;
     float gridMapHeight = INVALID_HEIGHT;
@@ -1425,7 +1457,6 @@ void Map::GetFullTerrainStatusForPosition(uint32 /*phaseMask*/, float x, float y
     // NOTE: Objects will not detect a case when a wmo providing area/liquid despawns from under them
     // but this is fine as these kind of objects are not meant to be spawned and despawned a lot
     // example: Lich King platform
-    /*
     if (dynData.floorZ > VMAP_INVALID_HEIGHT && G3D::fuzzyGe(z, dynData.floorZ - GROUND_HEIGHT_TOLERANCE) &&
         (G3D::fuzzyLt(z, gridMapHeight - GROUND_HEIGHT_TOLERANCE) || dynData.floorZ > gridMapHeight) &&
         (G3D::fuzzyLt(z, vmapData.floorZ - GROUND_HEIGHT_TOLERANCE) || dynData.floorZ > vmapData.floorZ))
@@ -1433,7 +1464,6 @@ void Map::GetFullTerrainStatusForPosition(uint32 /*phaseMask*/, float x, float y
         data.floorZ = dynData.floorZ;
         wmoData = &dynData;
     }
-    */
 
     if (wmoData)
     {
@@ -1673,7 +1703,7 @@ void Map::SendInitTransports(Player* player)
     // Hack to send out transports
     UpdateData transData;
     for (TransportsContainer::const_iterator itr = _transports.begin(); itr != _transports.end(); ++itr)
-        if (*itr != player->GetTransport())
+        if (*itr != player->GetTransport() && (!sToCloud9Sidecar->ClusterModeEnabled() || player->InSamePhase(*itr)))
             (*itr)->BuildCreateUpdateBlockForPlayer(&transData, player);
 
     if (!transData.HasData())
@@ -1717,6 +1747,12 @@ void Map::SendObjectUpdates()
     WorldPacket packet;                                     // here we allocate a std::vector with a size of 0x10000
     for (UpdateDataMapType::iterator iter = update_players.begin(); iter != update_players.end(); ++iter)
     {
+        if (!sScriptMgr->CanSendObjectUpdatesToPlayer(this, iter->first))
+        {
+            iter->second.Clear();
+            continue;
+        }
+
         iter->second.BuildPacket(packet);
         iter->first->SendDirectMessage(&packet);
         packet.clear();                                     // clean the string
@@ -1736,12 +1772,25 @@ uint32 Map::ApplyDynamicModeRespawnScaling(WorldObject const* obj, uint32 respaw
     if (obj->GetMap()->Instanceable())
         return respawnDelay;
 
-    // No quest givers or world bosses
     if (Creature const* creature = obj->ToCreature())
+    {
+        // Temporary spawns (no DB spawn id, e.g. summons / battlefield-spawned
+        // creatures such as Wintergrasp turrets) are not part of the respawn system.
+        if (!creature->GetSpawnId())
+            return respawnDelay;
+
+        // No quest givers or world bosses
         if (creature->IsQuestGiver() || creature->isWorldBoss()
             || (creature->GetCreatureTemplate()->rank == CREATURE_ELITE_RARE)
             || (creature->GetCreatureTemplate()->rank == CREATURE_ELITE_RAREELITE))
             return respawnDelay;
+    }
+    // Temporary gameobjects (no DB spawn id) are likewise excluded.
+    else if (GameObject const* go = obj->ToGameObject())
+    {
+        if (!go->GetSpawnId())
+            return respawnDelay;
+    }
 
     auto it = _zonePlayerCountMap.find(obj->GetZoneId());
     if (it == _zonePlayerCountMap.end())
@@ -1834,6 +1883,50 @@ uint32 Map::GetPlayersCountExceptGMs(bool aliveOnly /*= false*/) const
             if (!player->IsGameMaster() && (!aliveOnly || (player->IsAlive() && !player->HasSpiritOfRedemptionAura())))
                 ++count;
     return count;
+}
+
+void Map::StartPlayersRedirectKickTimer()
+{
+    for (MapRefMgr::iterator itr = m_mapRefMgr.begin(); itr != m_mapRefMgr.end(); ++itr)
+        itr->GetSource()->SendSystemMessage("Preparing to enter parallel dimension... One minute!\nAccelerate transfer: Teleport or type \"/ready\" in chat.");
+
+    _redirectKickTimer.Reset(60 * SECOND * IN_MILLISECONDS);
+    _lastAnnounceRedirectKickTimer.Reset(55 * SECOND * IN_MILLISECONDS);
+
+    _lastAnnounceRedirectKickTimer.Update(1);
+
+}
+
+void Map::StopPlayersRedirectKickTimer()
+{
+    _redirectKickTimer.Reset(0);
+    _lastAnnounceRedirectKickTimer.Reset(0);
+}
+
+void Map::UpdatePlayersRedirectKickEvent(uint32 diff)
+{
+    if (_redirectKickTimer.Passed())
+        return;
+
+    _redirectKickTimer.Update(diff);
+
+    if (_redirectKickTimer.Passed())
+    {
+        auto emptyPacket = WorldPacket();
+        for (MapRefMgr::iterator itr = m_mapRefMgr.begin(); itr != m_mapRefMgr.end(); ++itr)
+            itr->GetSource()->GetSession()->HandleTC9PrepareForRedirect(emptyPacket);
+
+        return;
+    }
+
+    if (_lastAnnounceRedirectKickTimer.Passed())
+        return;
+
+    _lastAnnounceRedirectKickTimer.Update(diff);
+
+    if (_lastAnnounceRedirectKickTimer.Passed())
+        for (MapRefMgr::iterator itr = m_mapRefMgr.begin(); itr != m_mapRefMgr.end(); ++itr)
+            itr->GetSource()->SendSystemMessage("Dimensional shift incoming! Prepare to transition in 5 seconds...");
 }
 
 void Map::SendToPlayers(WorldPacket const* data) const
@@ -2430,6 +2523,13 @@ void Map::RemoveCreatureRespawnTime(ObjectGuid::LowType spawnId)
     CharacterDatabase.Execute(stmt);
 }
 
+void Map::ForceCreatureRespawn(ObjectGuid::LowType spawnId)
+{
+    time_t now = GameTime::GetGameTime().count();
+    SaveCreatureRespawnTime(spawnId, now);
+    _forcedCreatureRespawns.insert(spawnId);
+}
+
 void Map::SaveGORespawnTime(ObjectGuid::LowType spawnId, time_t& respawnTime)
 {
     if (!respawnTime)
@@ -2721,18 +2821,15 @@ void Map::ProcessRespawns()
 
 void Map::ProcessCreatureRespawn(ObjectGuid::LowType spawnId)
 {
-    // Pool members in non-instanced maps are handled entirely by PoolMgr.
-    // In instanced maps the pool system operates globally and Spawn1Object is
-    // a no-op for instanceable maps, so fall through to the normal per-instance
-    // respawn logic instead.
-    if (!Instanceable())
+    // Consumed by every attempt, or a mark set on a continent would never go away
+    bool const forced = _forcedCreatureRespawns.erase(spawnId) != 0;
+
+    // Pool members are handled entirely by the pool system on this map's pool data
+    if (uint32 poolId = sPoolMgr->IsPartOfAPool<Creature>(spawnId))
     {
-        if (uint32 poolId = sPoolMgr->IsPartOfAPool<Creature>(spawnId))
-        {
-            sPoolMgr->UpdatePool<Creature>(poolId, spawnId);
-            RemoveCreatureRespawnTime(spawnId);
-            return;
-        }
+        sPoolMgr->UpdatePool<Creature>(GetPoolData(), poolId, spawnId);
+        RemoveCreatureRespawnTime(spawnId);
+        return;
     }
 
     CreatureData const* data = sObjectMgr->GetCreatureData(spawnId);
@@ -2777,6 +2874,36 @@ void Map::ProcessCreatureRespawn(ObjectGuid::LowType spawnId)
         }
     }
 
+    // A spawn whose BossAI bound it to a DONE encounter stays down, as BossAI::CanRespawn keeps
+    // compat-mode spawns down. The expired row is kept so a reload still loads the boss dead, and
+    // the check repeats like an inactive group's. A forced Respawn() passes, as force does in compat mode.
+    if (InstanceMap* instanceMap = ToInstanceMap())
+        if (InstanceScript* script = instanceMap->GetInstanceScript())
+            if (!forced && script->IsBossSpawnDone(spawnId))
+            {
+                _respawnQueue.insert({GameTime::GetGameTime().count() + 5, SPAWN_TYPE_CREATURE, spawnId});
+                return;
+            }
+
+    // Check linked_respawn: don't spawn if the master creature is still dead.
+    // This mirrors the check in Creature::Respawn() for compat-mode creatures:
+    // hard-reset creatures and forced respawns bypass it (the former despawn on
+    // evade and must always come back), and a creature linked to itself never auto-respawns.
+    ObjectGuid dbtableHighGuid = ObjectGuid::Create<HighGuid::Unit>(data->id, spawnId);
+    time_t linkedRespawntime = GetLinkedRespawnTime(dbtableHighGuid);
+    CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(data->id);
+    if (linkedRespawntime && !forced && !(cInfo && cInfo->HasFlagsExtra(CREATURE_FLAG_EXTRA_HARD_RESET)))
+    {
+        time_t now = GameTime::GetGameTime().count();
+        time_t newRespawnTime;
+        if (sObjectMgr->GetLinkedRespawnGuid(dbtableHighGuid) == dbtableHighGuid)
+            newRespawnTime = now + DAY; // if linking self, never respawn (check delayed to next day)
+        else
+            newRespawnTime = (now > linkedRespawntime ? now : linkedRespawntime) + urand(5, MINUTE); // master is still dead; re-queue at the master's respawn time + a small offset
+        SaveCreatureRespawnTime(spawnId, newRespawnTime);
+        return;
+    }
+
     // Remove respawn time BEFORE LoadFromDB, otherwise the creature
     // reads it back and loads as DEAD instead of ALIVE
     RemoveCreatureRespawnTime(spawnId);
@@ -2788,16 +2915,12 @@ void Map::ProcessCreatureRespawn(ObjectGuid::LowType spawnId)
 
 void Map::ProcessGameObjectRespawn(ObjectGuid::LowType spawnId)
 {
-    // Same rationale as ProcessCreatureRespawn: pool management via PoolMgr is
-    // only meaningful for non-instanced maps where Spawn1Object actually spawns.
-    if (!Instanceable())
+    // Pool members are handled entirely by the pool system on this map's pool data
+    if (uint32 poolId = sPoolMgr->IsPartOfAPool<GameObject>(spawnId))
     {
-        if (uint32 poolId = sPoolMgr->IsPartOfAPool<GameObject>(spawnId))
-        {
-            sPoolMgr->UpdatePool<GameObject>(poolId, spawnId);
-            RemoveGORespawnTime(spawnId);
-            return;
-        }
+        sPoolMgr->UpdatePool<GameObject>(GetPoolData(), poolId, spawnId);
+        RemoveGORespawnTime(spawnId);
+        return;
     }
 
     GameObjectData const* data = sObjectMgr->GetGameObjectData(spawnId);
@@ -2924,7 +3047,7 @@ void Map::LogEncounterFinished(EncounterCreditType type, uint32 creditEntry)
         if (Player* p = itr->GetSource())
         {
             std::string auraStr;
-            const Unit::AuraApplicationMap& a = p->GetAppliedAuras();
+            Unit::AuraApplicationMap const& a = p->GetAppliedAuras();
             for (auto iterator = a.begin(); iterator != a.end(); ++iterator)
             {
                 snprintf(buffer2, 255, "%u(%u) ", iterator->first, iterator->second->GetEffectMask());

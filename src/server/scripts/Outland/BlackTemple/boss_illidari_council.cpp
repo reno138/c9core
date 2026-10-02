@@ -30,7 +30,7 @@ enum Says
     SAY_COUNCIL_ENRAGE                  = 1,
     SAY_COUNCIL_SPECIAL                 = 2,
     SAY_COUNCIL_SLAY                    = 3,
-    SAY_COUNCIL_DEATH                   = 4
+    SAY_COUNCIL_DEATH                   = 5
 };
 
 enum Spells
@@ -98,7 +98,6 @@ enum Misc
     EVENT_SPELL_VANISH_OUT              = 31,
     EVENT_SPELL_ENRAGE                  = 32,
 
-    EVENT_KILL_TALK                     = 100
 };
 
 class VerasEnvenom : public BasicEvent
@@ -144,6 +143,12 @@ struct boss_illidari_council : public BossAI
     {
         if (param == ACTION_START_ENCOUNTER)
         {
+            if (instance->GetBossState(DATA_ILLIDARI_COUNCIL) != NOT_STARTED)
+                return;
+
+            // Set before pulling the members in, their aggro calls back into here
+            instance->SetBossState(DATA_ILLIDARI_COUNCIL, IN_PROGRESS);
+
             if (!me->isActiveObject())
                 me->setActive(true);
 
@@ -160,7 +165,7 @@ struct boss_illidari_council : public BossAI
             {
                 if (Creature* member = instance->GetCreature(i))
                 {
-                    if (!spoken && (roll_chance_i(33) || i == 3))
+                    if (!spoken && (roll_chance_i(33) || i == DATA_VERAS_DARKSHADOW))
                     {
                         spoken = true;
                         member->AI()->Talk(SAY_COUNCIL_AGGRO);
@@ -262,11 +267,7 @@ struct boss_illidari_council_memberAI : public ScriptedAI
 
     void KilledUnit(Unit*) override
     {
-        if (!events.HasTimeUntilEvent(EVENT_KILL_TALK))
-        {
-            Talk(SAY_COUNCIL_SLAY);
-            events.ScheduleEvent(EVENT_KILL_TALK, 6s);
-        }
+        Talk(SAY_COUNCIL_SLAY);
     }
 
     void JustDied(Unit*) override

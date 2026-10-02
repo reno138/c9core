@@ -15,6 +15,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "CreatureAI.h"
 #include "InstanceMapScript.h"
 #include "InstanceScript.h"
 #include "magtheridons_lair.h"
@@ -30,12 +31,6 @@ DoorData const doorData[] =
     { 0,                        0,                          DOOR_TYPE_ROOM } // END
 };
 
-MinionData const minionData[] =
-{
-    { NPC_HELLFIRE_CHANNELER,   DATA_MAGTHERIDON },
-    { 0, 0 } // END
-};
-
 class instance_magtheridons_lair : public InstanceMapScript
 {
 public:
@@ -48,15 +43,26 @@ public:
             SetHeaders(DataHeader);
             SetBossNumber(MAX_ENCOUNTER);
             LoadDoorData(doorData);
-            LoadMinionData(minionData);
             LoadBossBoundaries(boundaries);
         }
 
         void Initialize() override
         {
+            _channelersSet.clear();
             _wardersSet.clear();
+            _burningAbyssalsSet.clear();
             _cubesSet.clear();
             _columnSet.clear();
+        }
+
+        bool IsAnyChannelerAlive()
+        {
+            return std::ranges::any_of(_channelersSet, [&](ObjectGuid const& guid)
+            {
+                if (Creature* channeler = instance->GetCreature(guid))
+                    return channeler->IsAlive();
+                return false;
+            });
         }
 
         void OnCreatureCreate(Creature* creature) override
@@ -67,22 +73,50 @@ public:
                     _magtheridonGUID = creature->GetGUID();
                     break;
                 case NPC_HELLFIRE_CHANNELER:
-                    AddMinion(creature);
+                    _channelersSet.insert(creature->GetGUID());
                     break;
                 case NPC_HELLFIRE_WARDER:
                     _wardersSet.insert(creature->GetGUID());
+                    break;
+                case NPC_BURNING_ABYSSAL:
+                    _burningAbyssalsSet.insert(creature->GetGUID());
                     break;
             }
         }
 
         void OnCreatureRemove(Creature* creature) override
         {
-            switch (creature->GetEntry())
-            {
-                case NPC_HELLFIRE_CHANNELER:
-                    RemoveMinion(creature);
-                    break;
-            }
+            if (creature->GetEntry() == NPC_BURNING_ABYSSAL)
+                _burningAbyssalsSet.erase(creature->GetGUID());
+        }
+
+        void OnUnitDeath(Unit* unit) override
+        {
+            Creature* creature = unit ? unit->ToCreature() : nullptr;
+            if (!creature || creature->GetEntry() != NPC_HELLFIRE_CHANNELER)
+                return;
+
+            // IN_PROGRESS guard: stays inert during the hard-reset Respawn(true) cycle.
+            if (GetBossState(DATA_MAGTHERIDON) != IN_PROGRESS || IsAnyChannelerAlive())
+                return;
+
+            if (Creature* magtheridon = instance->GetCreature(_magtheridonGUID))
+                magtheridon->AI()->DoAction(ACTION_RELEASE_MAGTHERIDON);
+        }
+
+        void OnCreatureEvade(Creature* creature) override
+        {
+            if (creature->GetEntry() != NPC_HELLFIRE_CHANNELER || GetBossState(DATA_MAGTHERIDON) != IN_PROGRESS)
+                return;
+
+            // Only a Channeler-phase wipe resets the encounter. Past the 2 minute auto-release he is
+            // loose with Channelers still up, and a reset there would disable the Manticron Cubes and
+            // open the door mid-fight.
+            if (Creature* magtheridon = instance->GetCreature(_magtheridonGUID))
+                if (magtheridon->AI()->GetData(DATA_MAGTHERIDON_RELEASED))
+                    return;
+
+            SetBossState(DATA_MAGTHERIDON, NOT_STARTED);
         }
 
         void OnGameObjectCreate(GameObject* go) override
@@ -154,6 +188,22 @@ public:
 
                     if (state == NOT_STARTED)
                         SetData(DATA_COLLAPSE, GO_READY);
+
+                    // Hard reset: vanish Channelers and their lingering Burning Abyssal summons.
+                    if (state == NOT_STARTED || state == FAIL)
+                    {
+                        for (ObjectGuid const& guid : _channelersSet)
+                            if (Creature* channeler = instance->GetCreature(guid))
+                                channeler->Respawn(true);
+
+                        for (ObjectGuid const& guid : _burningAbyssalsSet)
+                            if (Creature* abyssal = instance->GetCreature(guid))
+                                abyssal->DespawnOrUnsummon();
+
+                        // Reset a still-caged Magtheridon: he is engaged from the Channeler pull on.
+                        if (Creature* magtheridon = instance->GetCreature(_magtheridonGUID))
+                            magtheridon->AI()->DoAction(ACTION_RESET_ENCOUNTER);
+                    }
                 }
             }
             return true;
@@ -164,9 +214,15 @@ public:
             switch (type)
             {
                 case DATA_CHANNELER_COMBAT:
+                    // Start the encounter on the Channeler pull. The combat references this creates
+                    // engage Magtheridon (boss_magtheridon::JustEnteredCombat), which anchors his
+                    // release countdown here and not to when players can first hit him.
                     if (GetBossState(DATA_MAGTHERIDON) != IN_PROGRESS)
+                    {
+                        SetBossState(DATA_MAGTHERIDON, IN_PROGRESS);
                         if (Creature* magtheridon = instance->GetCreature(_magtheridonGUID))
                             magtheridon->SetInCombatWithZone();
+                    }
                     break;
                 case DATA_ACTIVATE_CUBES:
                     for (ObjectGuid const& guid : _cubesSet)
@@ -178,12 +234,16 @@ public:
                         if (GameObject* column = instance->GetGameObject(guid))
                             column->SetGoState(GOState(data));
                     break;
+                default:
+                    break;
             }
         }
 
     private:
         ObjectGuid _magtheridonGUID;
+        GuidSet _channelersSet;
         GuidSet _wardersSet;
+        GuidSet _burningAbyssalsSet;
         GuidSet _cubesSet;
         GuidSet _columnSet;
     };

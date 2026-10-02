@@ -2,6 +2,7 @@
 # AzerothCore
 #
 
+.cache
 /conf/*
 !/conf/dist
 /modules/*
@@ -18,6 +19,7 @@
 !/env/dist/.gitkeep
 /env/user/*
 /.env*
+/e2e/.env
 /apps/joiner
 /deps/deno
 /data/sql/custom/*
@@ -55,11 +57,18 @@ CMakeLists.txt.user
 *.LOCAL.*
 
 #
+# Agents
+#
+.agents/plans/**
+
+#
 # Claude
 #
 .claude/worktrees
 .claude/settings.local.json
 .claude/plans/**
+.claude/.cc-writes/
+CLAUDE.local.md
 
 #
 # IDE & other software
@@ -102,6 +111,10 @@ local.properties
 /vcpkg/
 /vcpkg-ports/
 
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
 
 # ==================
 #
@@ -118,3 +131,9 @@ local.properties
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Live-stack e2e private / local tooling (scratch tests stay uncommitted)
+e2e/local/**
+!e2e/local/README.md
+e2e/go.work
+e2e/go.work.sum

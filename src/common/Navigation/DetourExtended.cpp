@@ -7,10 +7,10 @@
 
 #include <cmath>
 
-float dtQueryFilterExt::getCost(const float* pa, const float* pb,
-                const dtPolyRef /*prevRef*/, const dtMeshTile* /*prevTile*/, const dtPoly* /*prevPoly*/,
-                const dtPolyRef /*curRef*/, const dtMeshTile* /*curTile*/, const dtPoly* curPoly,
-                const dtPolyRef /*nextRef*/, const dtMeshTile* /*nextTile*/, const dtPoly* /*nextPoly*/) const
+float dtQueryFilterExt::getCost(float const* pa, float const* pb,
+                const dtPolyRef /*prevRef*/, dtMeshTile const* /*prevTile*/, dtPoly const* /*prevPoly*/,
+                const dtPolyRef /*curRef*/, dtMeshTile const* /*curTile*/, dtPoly const* curPoly,
+                const dtPolyRef /*nextRef*/, dtMeshTile const* /*nextTile*/, dtPoly const* /*nextPoly*/) const
 {
     float dist = dtVdist(pa, pb);
     // Trig-free slope cost: replaces atan+degrees with direct height ratio.

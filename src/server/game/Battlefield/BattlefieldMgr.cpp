@@ -121,6 +121,13 @@ Battlefield* BattlefieldMgr::GetBattlefieldByBattleId(uint32 battleId)
     return nullptr;
 }
 
+bool BattlefieldMgr::IsWintergraspAttackerVictory()
+{
+    if (Battlefield* bf = GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG))
+        return static_cast<BattlefieldWG*>(bf)->IsLastBattleAttackerVictory();
+    return false;
+}
+
 void BattlefieldMgr::Update(uint32 diff)
 {
     _updateTimer += diff;

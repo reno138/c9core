@@ -52,7 +52,7 @@ class Aura;
     -FIX sending PartyMemberStats
 */
 
-void WorldSession::SendPartyResult(PartyOperation operation, const std::string& member, PartyResult res, uint32 val /* = 0 */)
+void WorldSession::SendPartyResult(PartyOperation operation, std::string const& member, PartyResult res, uint32 val /* = 0 */)
 {
     WorldPacket data(SMSG_PARTY_COMMAND_RESULT, 4 + member.size() + 1 + 4 + 4);
     data << uint32(operation);
@@ -122,6 +122,12 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     if (!sScriptMgr->OnPlayerCanGroupInvite(invitingPlayer, membername))
         return;
 
+    if (sWorld->getBoolConfig(CONFIG_TRIAL_RESTRICTION_PARTY) && IsTrialAccount())
+    {
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
+        return;
+    }
+
     if (invitingPlayer->IsSpectator() || invitedPlayer->IsSpectator())
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_INVITE_RESTRICTED);
@@ -130,6 +136,13 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
 
     // restrict invite to GMs
     if (!sWorld->getBoolConfig(CONFIG_ALLOW_GM_GROUP) && !invitingPlayer->IsGameMaster() && invitedPlayer->IsGameMaster())
+    {
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_BAD_PLAYER_NAME_S);
+        return;
+    }
+
+    // target has opted out of receiving group invites
+    if (!invitedPlayer->IsAcceptGroupInvites())
     {
         SendPartyResult(PARTY_OP_INVITE, membername, ERR_BAD_PLAYER_NAME_S);
         return;
@@ -156,6 +169,16 @@ void WorldSession::HandleGroupInviteOpcode(WorldPacket& recvData)
     if (!invitedPlayer->GetSocial()->HasFriend(invitingPlayer->GetGUID()) && invitingPlayer->GetLevel() < sWorld->getIntConfig(CONFIG_PARTY_LEVEL_REQ))
     {
         SendPartyResult(PARTY_OP_INVITE, invitedPlayer->GetName(), ERR_INVITE_RESTRICTED);
+        return;
+    }
+
+    // Battlefield raids (e.g. Wintergrasp) have their composition managed by the BF
+    // system based on queue and team balance. Letting raid members recruit outsiders
+    // bypasses Battlefield::AddOrSetPlayerToCorrectBfGroup, which on WG entry then
+    // refuses to add the invitee because they are already in a BF group.
+    if (Group* invitingGroup = invitingPlayer->GetGroup(); invitingGroup && invitingGroup->isBFGroup())
+    {
+        SendPartyResult(PARTY_OP_INVITE, membername, ERR_NOT_LEADER);
         return;
     }
 
@@ -286,6 +309,40 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
     if (!sScriptMgr->OnPlayerCanGroupAccept(GetPlayer(), group))
         return;
 
+    Player* leader = ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID());
+
+    // Trial accounts cannot join a group whose existing members are above the trial level cap.
+    if (sWorld->getBoolConfig(CONFIG_TRIAL_RESTRICTION_PARTY) && IsTrialAccount())
+    {
+        if (uint32 trialLevelCap = sWorld->getIntConfig(CONFIG_TRIAL_LEVEL_CAP))
+        {
+            uint8 leaderLevel = leader ? leader->GetLevel() : sCharacterCache->GetCharacterLevelByGuid(group->GetLeaderGUID());
+            if (leaderLevel > trialLevelCap)
+            {
+                SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
+                return;
+            }
+
+            for (auto const& slot : group->GetMemberSlots())
+            {
+                if (slot.guid == GetPlayer()->GetGUID())
+                    continue;
+
+                uint8 memberLevel = 0;
+                if (Player* member = ObjectAccessor::FindConnectedPlayer(slot.guid))
+                    memberLevel = member->GetLevel();
+                else
+                    memberLevel = sCharacterCache->GetCharacterLevelByGuid(slot.guid);
+
+                if (memberLevel > trialLevelCap)
+                {
+                    SendPartyResult(PARTY_OP_INVITE, "", ERR_INVITE_RESTRICTED);
+                    return;
+                }
+            }
+        }
+    }
+
     if (group->GetLeaderGUID() == GetPlayer()->GetGUID())
     {
         LOG_ERROR("network.opcode", "HandleGroupAcceptOpcode: player {} ({}) tried to accept an invite to his own group",
@@ -299,8 +356,6 @@ void WorldSession::HandleGroupAcceptOpcode(WorldPacket& recvData)
         SendPartyResult(PARTY_OP_INVITE, "", ERR_GROUP_FULL);
         return;
     }
-
-    Player* leader = ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID());
 
     // Forming a new group, create it
     if (!group->IsCreated())
@@ -581,6 +636,12 @@ void WorldSession::HandleLootRoll(WorldPacket& recvData)
     Group* group = GetPlayer()->GetGroup();
     if (!group)
         return;
+
+    if (GetPlayer()->HasPlayerFlag(PLAYER_FLAGS_NO_PLAY_TIME))
+    {
+        SendPlayTimeWarning(PTF_UNHEALTHY_TIME, 0);
+        rollType = ROLL_PASS;
+    }
 
     group->CountRollVote(GetPlayer()->GetGUID(), guid, rollType);
 

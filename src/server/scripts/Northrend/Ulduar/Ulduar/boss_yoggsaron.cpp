@@ -22,7 +22,7 @@
 #include "PassiveAI.h"
 #include "Player.h"
 #include "ScriptedCreature.h"
-#include "ScriptedEscortAI.h"
+#include "Spell.h"
 #include "SpellAuras.h"
 #include "SpellMgr.h"
 #include "SpellScript.h"
@@ -49,6 +49,8 @@ enum YoggSpells
     SPELL_TITANIC_STORM_PASSIVE         = 64171,
     SPELL_WEAKENED                      = 64162,
 
+    SPELL_TELEPORT_PORTAL_VISUAL        = 64416,
+
     // GLOBAL
     SPELL_SANITY_BASE                   = 63786,
     SPELL_SANITY                        = 63050,
@@ -70,9 +72,11 @@ enum YoggSpells
 
     // GUARDIANS OF YOGG-SARON
     SPELL_SHADOW_NOVA                   = 62714,
+    SPELL_SHADOW_NOVA_SARA              = 65719,
     SPELL_DARK_VOLLEY                   = 63038,
 
     // SARA P2
+    SPELL_RIDE_YOGG_SARON_VEHICLE       = 61791,
     SPELL_SARA_PSYCHOSIS_10             = 63795,
     SPELL_SARA_PSYCHOSIS_25             = 65301,
     SPELL_MALADY_OF_THE_MIND            = 63830,
@@ -81,11 +85,16 @@ enum YoggSpells
     SPELL_BRAIN_LINK_DAMAGE             = 63803,
     SPELL_BRAIN_LINK_OK                 = 63804,
 
+    SPELL_DEATH_RAY                     = 63891,
     SPELL_DEATH_RAY_DAMAGE_VISUAL       = 63886,
     SPELL_DEATH_RAY_ORIGIN_VISUAL       = 63893,
     SPELL_DEATH_RAY_WARNING             = 63882,
     SPELL_DEATH_RAY_DAMAGE              = 63883,
     SPELL_DEATH_RAY_DAMAGE_REAL         = 63884,
+    SPELL_DEATH_RAY_SUMMON_1            = 63887, // serverside, one per ray
+    SPELL_DEATH_RAY_SUMMON_2            = 63888,
+    SPELL_DEATH_RAY_SUMMON_3            = 63889,
+    SPELL_DEATH_RAY_SUMMON_4            = 63890,
 
     // YOGG-SARON P2
     SPELL_SHADOW_BARRIER                = 63894,
@@ -99,9 +108,12 @@ enum YoggSpells
     // CRUSHER TENTACLE
     SPELL_CRUSH                         = 64146,
     SPELL_DIMINISH_POWER                = 64145,
+    SPELL_DIMINISH_POWER_PROC           = 64148,
     SPELL_FOCUSED_ANGER                 = 57688,
 
     // CONSTRICTOR TENTACLE
+    SPELL_CONSTRICTOR_TENTACLE          = 64132,
+    SPELL_CONSTRICTOR_TENTACLE_SUMMON   = 64133,
     SPELL_LUNGE                         = 64123,
     SPELL_SQUEEZE                       = 64125,
 
@@ -137,6 +149,7 @@ enum YoggSpells
     SPELL_LUNATIC_GAZE_YS               = 64163,
     SPELL_DEAFENING_ROAR                = 64189,
     SPELL_SHADOW_BEACON                 = 64465,
+    SPELL_DEATH_ANIMATION               = 64165,
 
     // IMMORTAL GUARDIAN
     SPELL_SIMPLE_TELEPORT               = 64195,
@@ -169,6 +182,17 @@ enum YoggEvents
     EVENT_YS_DEAFENING_ROAR             = 31,
     EVENT_YS_SUMMON_GUARDIAN            = 32,
     EVENT_YS_SHADOW_BEACON              = 33,
+
+    EVENT_DEATH_RAY_WARNING             = 35,
+    EVENT_DEATH_RAY_ACTIVE              = 36,
+    EVENT_DEATH_RAY_MOVE                = 37,
+
+    EVENT_SARA_WIPE_OPEN_DOOR           = 40,
+    EVENT_SARA_WIPE_RESPAWN             = 41,
+
+    EVENT_GUARDIAN_SPAWN_VISUAL         = 45,
+    EVENT_GUARDIAN_SPAWN_RELEASE        = 46,
+    EVENT_GUARDIAN_DRAIN_LIFE           = 47,
 };
 
 enum NPCsGOs
@@ -178,7 +202,6 @@ enum NPCsGOs
     NPC_GUARDIAN_OF_YS                  = 33136,
     NPC_SANITY_WELL                     = 33991,
     NPC_YOGG_SARON                      = 33288,
-    NPC_VOICE_OF_YOGG_SARON             = 33280,
     NPC_YOGG_SARON_VISION               = 33552,
 
     NPC_CRUSHER_TENTACLE                = 33966, // 50 secs ?
@@ -186,6 +209,7 @@ enum NPCsGOs
     NPC_CORRUPTOR_TENTACLE              = 33985, // 30-40 secs ?
 
     NPC_INFLUENCE_TENTACLE              = 33943,
+    NPC_DEATH_RAY                       = 33881,
     NPC_DEATH_ORB                       = 33882,
     NPC_DESCEND_INTO_MADNESS            = 34072,
     NPC_LAUGHING_SKULL                  = 33990,
@@ -225,6 +249,9 @@ enum NPCsGOs
 
 enum Misc
 {
+    ACTION_ACTIVATE_KEEPER              = -19,
+    ACTION_VOICE_STOP                   = -18,
+    ACTION_VOICE_START                  = -17,
     ACTION_UNSUMMON_CLOUDS              = -16,
     ACTION_DESPAWN_ADDS                 = -15,
     ACTION_START_SUMMONING              = -14,
@@ -245,11 +272,19 @@ enum Misc
     ACTION_ILLUSION_ICECROWN            = 2,
     ACTION_ILLUSION_STORMWIND           = 3,
 
+    // creature_summon_groups for the brain (33890)
+    SUMMON_GROUP_CHAMBER_TENTACLES      = 1,
+    SUMMON_GROUP_ICECROWN_TENTACLES     = 2,
+    SUMMON_GROUP_STORMWIND_TENTACLES    = 3,
+
+    SUMMON_GROUP_CLOUDS                 = 0,
+
     // ACTION_SARA_UPDATE_SUMMON_KEEPERS = 4, // defined in ulduar.h
 
     EVENT_PHASE_ONE                     = 1,
     EVENT_PHASE_TWO                     = 2,
     EVENT_PHASE_THREE                   = 3,
+    EVENT_PHASE_WIPE_RECOVERY           = 4,
 
     CRITERIA_NOT_GETTING_OLDER          = 21001,
 
@@ -260,19 +295,12 @@ enum Misc
     DATA_GET_CURRENT_ILLUSION           = 2,
     DATA_GET_SARA_PHASE                 = 3,
     DATA_GET_DRIVE_ME_CRAZY             = 4,
+    DATA_YOGG_SARON_HEALTH              = 5,
 };
 
 struct LocationsXY
 {
     float x, y, z;
-};
-
-Position const GossipKeepersPos[4] =
-{
-    {1945.6823f, 33.342014f, 411.44083f, 5.270895f}, // Freya
-    {1945.7609f, -81.52171f,  411.4407f, 1.029744f}, // Hodir
-    {2028.7656f,  17.42014f, 411.44458f, 3.857178f}, // Mimiron
-    {2028.8219f, -65.73573f, 411.44257f, 2.460914f}  // Thorim
 };
 
 const Position KeepersPos[4] =
@@ -284,20 +312,19 @@ const Position KeepersPos[4] =
 };
 
 const uint32 TABLE_KEEPER_ENTRY[4] = {NPC_FREYA_KEEPER, NPC_HODIR_KEEPER, NPC_MIMIRON_KEEPER, NPC_THORIM_KEEPER};
-const uint32 TABLE_GOSSIP_ENTRY[4] = {NPC_FREYA_GOSSIP, NPC_HODIR_GOSSIP, NPC_MIMIRON_GOSSIP, NPC_THORIM_GOSSIP};
 
 static LocationsXY yoggPortalLoc[] =
 {
-    {1970.48f, -9.75f, 325.5f},
-    {1992.76f, -10.21f, 325.5f},
-    {1995.53f, -39.78f, 325.5f},
-    {1969.25f, -42.00f, 325.5f},
-    {1960.62f, -32.00f, 325.5f},
-    {1981.98f, -5.69f, 325.5f},
-    {1982.78f, -45.73f, 325.5f},
-    {2000.66f, -29.68f, 325.5f},
-    {1999.88f, -19.61f, 325.5f},
-    {1961.37f, -19.54f, 325.5f}
+    {1964.60f, -42.71f, 325.08f},
+    {1986.94f, -46.21f, 324.98f},
+    {1989.50f,  -6.70f, 325.08f},
+    {1965.52f,  -8.09f, 324.95f},
+    {2000.84f, -25.40f, 325.19f},
+    {1960.22f, -26.14f, 325.01f},
+    {1976.30f, -47.83f, 325.11f},
+    {1997.69f, -37.46f, 325.04f},
+    {1998.07f, -13.36f, 325.17f},
+    {1976.99f,  -3.96f, 325.17f}
 };
 
 enum Texts
@@ -377,10 +404,12 @@ struct boss_yoggsaron_sara : public ScriptedAI
     uint32 _initFight;
     uint8 _summonedGuardiansCount;
     uint32 _p2TalkTimer;
-    bool _secondPhase;
+    bool _secondPhase = false;
     float _summonSpeed;
     uint8 _currentIllusion;
     bool _isIllusionReversed;
+    bool _isWipeRecovering = false;
+    bool _deathRayAnnounce = true;
 
     void AttackStart(Unit*) override { }
     void MoveInLineOfSight(Unit*) override { }
@@ -388,18 +417,19 @@ struct boss_yoggsaron_sara : public ScriptedAI
     void JustSummoned(Creature* summon) override
     {
         summons.Summon(summon);
+
+        // Sniffed: the yell accompanies every other Death Ray cast, starting with the first
+        if (summon->GetEntry() == NPC_DEATH_ORB)
+        {
+            if (_deathRayAnnounce)
+                Talk(SAY_SARA_DEATH_RAY);
+            _deathRayAnnounce = !_deathRayAnnounce;
+        }
     }
 
     void SpawnClouds()
     {
-        for (uint8 i = 0; i < 6; ++i)
-        {
-            float Zplus = i > 2 ? (i - 2) * 1.6f : 0;
-            if (i % 2)
-                me->SummonCreature(NPC_OMINOUS_CLOUD, me->GetPositionX() + 8 + i * 7, me->GetPositionY() + 8 + i * 7, 326 + Zplus, 0);
-            else
-                me->SummonCreature(NPC_OMINOUS_CLOUD, me->GetPositionX() - 8 - i * 7, me->GetPositionY() - 8 - i * 7, 326 + Zplus, 0);
-        }
+        me->SummonCreatureGroup(SUMMON_GROUP_CLOUDS);
     }
 
     void EnterEvadeMode(EvadeReason why) override
@@ -407,11 +437,12 @@ struct boss_yoggsaron_sara : public ScriptedAI
         if (!_EnterEvadeMode(why))
             return;
 
-        Position pos;
-        pos = me->GetHomePosition();
+        // NearTeleportTo does not dismount creatures from vehicles
+        me->ExitVehicle();
+        Position pos = me->GetHomePosition();
         me->NearTeleportTo(pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), pos.GetOrientation());
-        Reset();
-        me->setActive(false);
+
+        HandleWipeRecovery();
     }
 
     void EnableSara(bool apply)
@@ -430,35 +461,55 @@ struct boss_yoggsaron_sara : public ScriptedAI
         }
     }
 
+    void HandleWipeRecovery()
+    {
+        _isWipeRecovering = true;
+        Reset();
+        me->SetVisible(false);
+
+        events.SetPhase(EVENT_PHASE_WIPE_RECOVERY);
+        events.ScheduleEvent(EVENT_SARA_WIPE_OPEN_DOOR, 20s, 0, EVENT_PHASE_WIPE_RECOVERY);
+        events.ScheduleEvent(EVENT_SARA_WIPE_RESPAWN, 30s, 0, EVENT_PHASE_WIPE_RECOVERY);
+        me->setActive(true);
+    }
+
     void Reset() override
     {
-        if (!_secondPhase) // Phase 1 wipe
+        // Whisper only on a real phase 1 wipe, not on the initial reset
+        if (!_secondPhase && _instance && _instance->GetBossState(BOSS_YOGGSARON) == IN_PROGRESS)
         {
-            me->GetMap()->DoForAllPlayers([&](Player* player)
+            if (Creature* voice = _instance->GetCreature(DATA_VOICE_OF_YOGG_SARON))
             {
-                if (Creature* voice = me->FindNearestCreature(NPC_VOICE_OF_YOGG_SARON, 10.0f))
+                me->GetMap()->DoForAllPlayers([&](Player* player)
                 {
                     voice->AI()->Talk(WHISPER_VOICE_PHASE_1_WIPE, player);
-                }
-            });
+                });
+            }
         }
 
         summons.DoAction(ACTION_DESPAWN_ADDS);
         events.Reset();
         summons.DespawnAll();
 
-        me->SetVisible(true);
+        if (!_isWipeRecovering)
+        {
+            me->SetVisible(true);
+            SpawnClouds();
+            UpdateKeeperSpawns();
+        }
+
         me->SetDisplayId(me->GetNativeDisplayId());
         me->SetDisableGravity(true);
+        me->SetFaction(FACTION_FRIENDLY);
+        me->SetFullHealth();
+        me->ClearUnitState(UNIT_STATE_EVADE);
         EnableSara(false);
-        SpawnClouds();
 
         _initFight = 1;
-
-        UpdateKeeperSpawns();
         _summonedGuardiansCount = 0;
         _p2TalkTimer = 0;
         _secondPhase = false;
+        _deathRayAnnounce = true;
         _summonSpeed = 1.0f;
         _currentIllusion = urand(1, 3);
         _isIllusionReversed = urand(0, 1);
@@ -467,9 +518,14 @@ struct boss_yoggsaron_sara : public ScriptedAI
         {
             _instance->DoStopTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, CRITERIA_NOT_GETTING_OLDER);
             _instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_SANITY);
-            _instance->SetData(BOSS_YOGGSARON, NOT_STARTED);
-            if (GameObject* go = _instance->GetGameObject(DATA_YOGG_SARON_DOORS))
-                go->SetGoState(GO_STATE_ACTIVE);
+            if (Creature* voice = _instance->GetCreature(DATA_VOICE_OF_YOGG_SARON))
+                voice->AI()->DoAction(ACTION_VOICE_STOP);
+            if (!_isWipeRecovering)
+            {
+                _instance->SetBossState(BOSS_YOGGSARON, NOT_STARTED);
+                if (GameObject* go = _instance->GetGameObject(DATA_YOGG_SARON_DOORS))
+                    go->SetGoState(GO_STATE_ACTIVE);
+            }
         }
     }
 
@@ -478,20 +534,19 @@ struct boss_yoggsaron_sara : public ScriptedAI
         if (!_instance)
             return;
 
-        // some simple hack checks
-        if (_instance->GetBossState(BOSS_VEZAX) != DONE || _instance->GetBossState(BOSS_XT002) != DONE)
-            return;
-
         _instance->DoStartTimedAchievement(ACHIEVEMENT_TIMED_TYPE_EVENT, CRITERIA_NOT_GETTING_OLDER);
-        _instance->SetData(BOSS_YOGGSARON, IN_PROGRESS);
+        _instance->SetBossState(BOSS_YOGGSARON, IN_PROGRESS);
         me->SetInCombatWithZone();
         AttackStart(target);
 
         DespawnGossipKeepers();
-        // Engage Keepers
         summons.DoZoneInCombat();
 
-        me->CastSpell(me, SPELL_SANITY_BASE, true);
+        if (Creature* voice = _instance->GetCreature(DATA_VOICE_OF_YOGG_SARON))
+            voice->AI()->DoAction(ACTION_VOICE_START);
+
+        // Keepers are friendly to players and never enter combat, activate them directly
+        ActivateKeepers();
 
         events.ScheduleEvent(EVENT_SARA_P1_DOORS_CLOSE, 15s, 0, EVENT_PHASE_ONE);
         events.ScheduleEvent(EVENT_SARA_P1_BERSERK, 15min, 0, 0);
@@ -510,11 +565,8 @@ struct boss_yoggsaron_sara : public ScriptedAI
             DATA_MIMIRON_GOSSIP, DATA_THORIM_GOSSIP
         };
         for (uint8 i = KEEPER_FREYA; i <= KEEPER_THORIM; i++)
-        {
-            summons.DespawnEntry(TABLE_GOSSIP_ENTRY[i]);
             if (Creature* keeper = _instance->GetCreature(gossipData[i]))
                 keeper->DespawnOrUnsummon();
-        }
     }
 
     void UpdateKeeperSpawns()
@@ -528,6 +580,20 @@ struct boss_yoggsaron_sara : public ScriptedAI
                 if (!summons.HasEntry(TABLE_KEEPER_ENTRY[i]))
                     me->SummonCreature(TABLE_KEEPER_ENTRY[i], KeepersPos[i]);
             }
+        }
+    }
+
+    void ActivateKeepers()
+    {
+        for (SummonList::const_iterator itr = summons.begin(); itr != summons.end(); ++itr)
+        {
+            Creature* summon = ObjectAccessor::GetCreature(*me, *itr);
+            if (!summon)
+                continue;
+
+            for (uint8 i = KEEPER_FREYA; i <= KEEPER_THORIM; i++)
+                if (summon->GetEntry() == TABLE_KEEPER_ENTRY[i])
+                    summon->AI()->DoAction(ACTION_ACTIVATE_KEEPER);
         }
     }
 
@@ -564,29 +630,18 @@ struct boss_yoggsaron_sara : public ScriptedAI
         }
     }
 
-    void SummonDeathOrbs()
-    {
-        for (uint8 i = 0; i < 4; ++i)
-        {
-            uint32 dist = urand(38, 48);
-            float o = rand_norm() * M_PI * 2;
-            float Zplus = (dist - 38) / 6.5f;
-            me->SummonCreature(NPC_DEATH_ORB, me->GetPositionX() + dist * cos(o), me->GetPositionY() + dist * std::sin(o), 327.2 + Zplus, 0, TEMPSUMMON_TIMED_DESPAWN, 20000);
-        }
-    }
-
     void AddPortals()
     {
         _summonSpeed -= 0.1f;
-        Creature* cr = nullptr;
+        Creature* creature = nullptr;
 
         // Spawn Portals
         for (uint8 i = 0; i < RAID_MODE(4, 10); ++i)
         {
-            if ((cr = me->SummonCreature(NPC_DESCEND_INTO_MADNESS, yoggPortalLoc[i].x, yoggPortalLoc[i].y, yoggPortalLoc[i].z, 0, TEMPSUMMON_TIMED_DESPAWN, 25000)))
+            if ((creature = me->SummonCreature(NPC_DESCEND_INTO_MADNESS, yoggPortalLoc[i].x, yoggPortalLoc[i].y, yoggPortalLoc[i].z, 0, TEMPSUMMON_TIMED_DESPAWN, 25000)))
             {
-                cr->SetUnitFlag(UNIT_FLAG_DISABLE_MOVE | UNIT_FLAG_NON_ATTACKABLE);
-                cr->SetArmor(_currentIllusion);
+                creature->SetArmor(_currentIllusion);
+                creature->CastSpell(creature, SPELL_TELEPORT_PORTAL_VISUAL, true);
             }
         }
 
@@ -605,13 +660,6 @@ struct boss_yoggsaron_sara : public ScriptedAI
         {
             Talk(SAY_SARA_KILL);
         }
-    }
-
-    void SpellHitTarget(Unit* target, SpellInfo const* spellInfo) override
-    {
-        if (spellInfo->Id == SPELL_SANITY)
-            if (Aura* aur = target->GetAura(SPELL_SANITY))
-                aur->SetStackAmount(100);
     }
 
     uint32 GetData(uint32 param) const override
@@ -637,6 +685,7 @@ struct boss_yoggsaron_sara : public ScriptedAI
         if (param == ACTION_SARA_UPDATE_SUMMON_KEEPERS)
         {
             UpdateKeeperSpawns();
+            return;
         }
         else if (param == ACTION_BRAIN_DAMAGED)
         {
@@ -648,10 +697,12 @@ struct boss_yoggsaron_sara : public ScriptedAI
             EntryCheckPredicate pred3(NPC_THORIM_KEEPER);
             summons.DoAction(ACTION_THORIM_START_STORM, pred3);
 
-            if (me->GetMap()->Is25ManRaid() && (GetData(DATA_GET_KEEPERS_COUNT) > 0))
+            // Deafening Roar: 25 man with at least one Keeper down
+            if (me->GetMap()->Is25ManRaid() && (GetData(DATA_GET_KEEPERS_COUNT) < 4))
                 summons.DoAction(ACTION_YOGG_SARON_HARD_MODE, pred2);
 
             summons.DespawnEntry(NPC_DEATH_ORB);
+            summons.DespawnEntry(NPC_DEATH_RAY);
             events.SetPhase(EVENT_PHASE_THREE);
 
             me->RemoveAllAuras();
@@ -665,17 +716,14 @@ struct boss_yoggsaron_sara : public ScriptedAI
             summons.DespawnEntry(NPC_CRUSHER_TENTACLE);
             summons.DespawnEntry(NPC_CONSTRICTOR_TENTACLE);
             summons.DespawnEntry(NPC_CORRUPTOR_TENTACLE);
-            summons.DespawnEntry(NPC_VOICE_OF_YOGG_SARON);
             summons.DespawnEntry(NPC_BRAIN_OF_YOGG_SARON);
-            summons.DespawnEntry(NPC_MIMIRON_GOSSIP);
-            summons.DespawnEntry(NPC_HODIR_GOSSIP);
-            summons.DespawnEntry(NPC_FREYA_GOSSIP);
-            summons.DespawnEntry(NPC_THORIM_GOSSIP);
             summons.DespawnEntry(NPC_MIMIRON_KEEPER);
             summons.DespawnEntry(NPC_HODIR_KEEPER);
             summons.DespawnEntry(NPC_FREYA_KEEPER);
             summons.DespawnEntry(NPC_THORIM_KEEPER);
             summons.DespawnEntry(NPC_SANITY_WELL);
+            if (Creature* voice = _instance ? _instance->GetCreature(DATA_VOICE_OF_YOGG_SARON) : nullptr)
+                voice->AI()->DoAction(ACTION_VOICE_STOP);
             me->KillSelf();
             return;
         }
@@ -698,35 +746,86 @@ struct boss_yoggsaron_sara : public ScriptedAI
         me->CastSpell(me, SPELL_SHATTERED_ILLUSION, true);
     }
 
-    void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
+    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
     {
-        if (who && who->GetEntry() == NPC_GUARDIAN_OF_YS && !_secondPhase)
+        // Guardians can be spawned by walking into Ominous Clouds even when InitFight
+        if (!_instance || _instance->GetBossState(BOSS_YOGGSARON) != IN_PROGRESS || !attacker || attacker->GetEntry() != NPC_GUARDIAN_OF_YS || _secondPhase)
         {
-            damage = 25000;
-
-            // START PHASE 2
-            if (me->GetHealth() <= damage)
-            {
-                _secondPhase = true;
-                damage = 0;
-
-                events.SetPhase(EVENT_PHASE_TWO);
-                me->SetHealth(me->GetMaxHealth());
-
-                if (Creature* cr = me->SummonCreature(NPC_YOGG_SARON, me->GetPositionX(), me->GetPositionY(), me->GetPositionZ(), M_PI))
-                    cr->SetVisible(false);
-
-                _p2TalkTimer++;
-                Talk(SAY_SARA_TRANSFORM_1);
-            }
+            damage = 0;
             return;
         }
 
-        damage = 0;
+        // START PHASE 2
+        if (me->GetHealth() <= damage)
+        {
+            _secondPhase = true;
+            // leave her at 1 health through the transformation dialogue, the client treats 0 health as dead
+            damage = me->GetHealth() - 1;
+
+            events.SetPhase(EVENT_PHASE_TWO);
+            me->SetInCombatWithZone();
+            me->SetFaction(FACTION_MONSTER_2);
+
+            if (Creature* creature = me->SummonCreature(NPC_YOGG_SARON, me->GetPositionX(), me->GetPositionY(), me->GetPositionZ(), M_PI))
+                creature->SetVisible(false);
+
+            _p2TalkTimer++;
+            Talk(SAY_SARA_TRANSFORM_1);
+        }
+    }
+
+    // Players who descend into a portal are teleported ~100 yd below to the illusion
+    // realms, out of range of the main-chamber scan in SelectTargetFromPlayerList.
+    // The fight must keep going while any of them is alive, otherwise the boss resets
+    // and traps them underground.
+    bool HasAlivePlayerInIllusion() const
+    {
+        bool found = false;
+        me->GetMap()->DoForAllPlayers([&](Player* player)
+        {
+            if (found || !player->IsAlive() || player->IsGameMaster() || player->HasAura(SPELL_INSANE1))
+                return;
+            if (player->GetPositionZ() < 300.0f && me->IsWithinDist2d(player, 200.0f))
+                found = true;
+        });
+        return found;
     }
 
     void UpdateAI(uint32 diff) override
     {
+        if (_isWipeRecovering)
+        {
+            events.Update(diff);
+            while (uint32 eventId = events.ExecuteEvent())
+            {
+                switch (eventId)
+                {
+                    case EVENT_SARA_WIPE_OPEN_DOOR:
+                        if (_instance)
+                            if (GameObject* go = _instance->GetGameObject(DATA_YOGG_SARON_DOORS))
+                                go->SetGoState(GO_STATE_ACTIVE);
+                        break;
+                    case EVENT_SARA_WIPE_RESPAWN:
+                        if (_instance)
+                        {
+                            if (GameObject* go = _instance->GetGameObject(DATA_YOGG_SARON_DOORS))
+                                go->SetGoState(GO_STATE_ACTIVE);
+
+                            _instance->SetBossState(BOSS_YOGGSARON, NOT_STARTED);
+                        }
+
+                        me->SetVisible(true);
+                        SpawnClouds();
+                        UpdateKeeperSpawns();
+                        events.Reset();
+                        _isWipeRecovering = false;
+                        me->setActive(false);
+                        break;
+                }
+            }
+            return;
+        }
+
         if (_initFight)
         {
             _initFight += diff;
@@ -743,7 +842,7 @@ struct boss_yoggsaron_sara : public ScriptedAI
             return;
         }
 
-        if (!SelectTargetFromPlayerList(90, SPELL_INSANE1))
+        if (!SelectTargetFromPlayerList(90, SPELL_INSANE1) && !HasAlivePlayerInIllusion())
         {
             _instance->DoRemoveAurasDueToSpellOnPlayers(SPELL_INSANE1);
             EnterEvadeMode(EVADE_REASON_OTHER);
@@ -788,9 +887,6 @@ struct boss_yoggsaron_sara : public ScriptedAI
         switch (events.ExecuteEvent())
         {
             case EVENT_SARA_P1_DOORS_CLOSE:
-                // Whispers of YS
-                me->SummonCreature(NPC_VOICE_OF_YOGG_SARON, me->GetPositionX(), me->GetPositionY(), me->GetPositionZ());
-
                 if (_instance)
                     if (GameObject* go = _instance->GetGameObject(DATA_YOGG_SARON_DOORS))
                         go->SetGoState(GO_STATE_READY);
@@ -818,7 +914,8 @@ struct boss_yoggsaron_sara : public ScriptedAI
                     }
 
                     me->CastCustomSpell(spell, SPELLVALUE_MAX_TARGETS, 1, nullptr, false);
-                    events.Repeat(me->GetMap()->Is25ManRaid() ? randtime(0ms, 3s) : randtime(4s, 6s));
+                    // Sniffed: steady ~4.9s start-to-start, the 4s cast plus a ~1s gap
+                    events.Repeat(4900ms);
                     break;
                 }
             case EVENT_SARA_P2_START:
@@ -844,16 +941,16 @@ struct boss_yoggsaron_sara : public ScriptedAI
                 events.Repeat(3500ms);
                 break;
             case EVENT_SARA_P2_DEATH_RAY:
-                Talk(SAY_SARA_DEATH_RAY);
-                SummonDeathOrbs();
-                events.Repeat(20s);
+                // Sniffed: the Death Orb is summoned 3 yd above Sara's head
+                me->CastSpell(me->GetPositionX(), me->GetPositionY(), me->GetPositionZ() + 3.0f, SPELL_DEATH_RAY, false);
+                events.Repeat(22s);
                 break;
             case EVENT_SARA_P2_SUMMON_T1: // CRUSHER
                 SpawnTentacle(NPC_CRUSHER_TENTACLE);
                 events.Repeat(Milliseconds(uint32((50000 + urand(0, 10000)) * _summonSpeed)));
                 break;
             case EVENT_SARA_P2_SUMMON_T2: // CONSTRICTOR
-                SpawnTentacle(NPC_CONSTRICTOR_TENTACLE);
+                me->CastCustomSpell(SPELL_CONSTRICTOR_TENTACLE, SPELLVALUE_MAX_TARGETS, 1, me, false);
                 events.Repeat(Milliseconds(uint32((15000 + urand(0, 5000))* _summonSpeed)));
                 break;
             case EVENT_SARA_P2_SUMMON_T3: // CORRUPTOR
@@ -879,26 +976,31 @@ struct boss_yoggsaron_sara : public ScriptedAI
                     break;
                 }
             case EVENT_SARA_P2_SPAWN_START_TENTACLES:
-                me->SetOrientation(M_PI);
-                me->SetDisplayId(SARA_TRANSFORM_MODEL);
+                {
+                    me->SetFullHealth();
+                    me->SetOrientation(M_PI);
+                    me->SetDisplayId(SARA_TRANSFORM_MODEL);
 
-                me->NearTeleportTo(me->GetPositionX(), me->GetPositionY(), 355, me->GetOrientation());
-                me->SetPosition(me->GetPositionX(), me->GetPositionY(), 355, me->GetOrientation());
+                    // Sniffed: Sara rides Yogg-Saron's vehicle for the rest of the fight
+                    if (Creature* yogg = _instance->GetCreature(BOSS_YOGGSARON))
+                        me->CastSpell(yogg, SPELL_RIDE_YOGG_SARON_VEHICLE, true);
 
-                SpawnTentacle(NPC_CRUSHER_TENTACLE);
-                SpawnTentacle(NPC_CONSTRICTOR_TENTACLE);
-                SpawnTentacle(NPC_CORRUPTOR_TENTACLE);
-                SpawnTentacle(NPC_CORRUPTOR_TENTACLE);
+                    SpawnTentacle(NPC_CRUSHER_TENTACLE);
+                    me->CastCustomSpell(SPELL_CONSTRICTOR_TENTACLE, SPELLVALUE_MAX_TARGETS, 1, me, false);
+                    SpawnTentacle(NPC_CORRUPTOR_TENTACLE);
 
-                events.ScheduleEvent(EVENT_SARA_P2_MALADY, 7s, 0, EVENT_PHASE_TWO);
-                events.ScheduleEvent(EVENT_SARA_P2_PSYCHOSIS, 3s, 0, EVENT_PHASE_TWO);
-                events.ScheduleEvent(EVENT_SARA_P2_DEATH_RAY, 15s, 0, EVENT_PHASE_TWO);
-                events.ScheduleEvent(EVENT_SARA_P2_SUMMON_T1, 50s, 60s, 0, EVENT_PHASE_TWO);
-                events.ScheduleEvent(EVENT_SARA_P2_SUMMON_T2, 15s, 20s, 0, EVENT_PHASE_TWO);
-                events.ScheduleEvent(EVENT_SARA_P2_SUMMON_T3, 30s + randtime(0ms, 10s), 0, EVENT_PHASE_TWO);
-                events.ScheduleEvent(EVENT_SARA_P2_BRAIN_LINK, 0ms, 0, EVENT_PHASE_TWO);
-                events.ScheduleEvent(EVENT_SARA_P2_OPEN_PORTALS, 60s, 0, EVENT_PHASE_TWO);
-                break;
+                    // Sniffed: Psychosis opens with the tentacle wave, Malady follows at 12s, Death Ray at 20s.
+                    // Brain Link at 18s comes from OG/Classic references (needs two players, absent from solo sniffs)
+                    events.ScheduleEvent(EVENT_SARA_P2_MALADY, 12s, 0, EVENT_PHASE_TWO);
+                    events.ScheduleEvent(EVENT_SARA_P2_PSYCHOSIS, 0ms, 0, EVENT_PHASE_TWO);
+                    events.ScheduleEvent(EVENT_SARA_P2_DEATH_RAY, 20s, 0, EVENT_PHASE_TWO);
+                    events.ScheduleEvent(EVENT_SARA_P2_SUMMON_T1, 50s, 60s, 0, EVENT_PHASE_TWO);
+                    events.ScheduleEvent(EVENT_SARA_P2_SUMMON_T2, 15s, 20s, 0, EVENT_PHASE_TWO);
+                    events.ScheduleEvent(EVENT_SARA_P2_SUMMON_T3, 30s + randtime(0ms, 10s), 0, EVENT_PHASE_TWO);
+                    events.ScheduleEvent(EVENT_SARA_P2_BRAIN_LINK, 18s, 0, EVENT_PHASE_TWO);
+                    events.ScheduleEvent(EVENT_SARA_P2_OPEN_PORTALS, 60s, 0, EVENT_PHASE_TWO);
+                    break;
+                }
             case EVENT_SARA_P1_BERSERK:
                 if (me->GetInstanceScript())
                 {
@@ -914,13 +1016,14 @@ struct boss_yoggsaron_sara : public ScriptedAI
     }
 };
 
-struct boss_yoggsaron_cloud : public npc_escortAI
+struct boss_yoggsaron_cloud : public PassiveAI
 {
-    boss_yoggsaron_cloud(Creature* creature) : npc_escortAI(creature)
+    static bool clockwise;
+
+    boss_yoggsaron_cloud(Creature* creature) : PassiveAI(creature)
     {
-        InitWaypoint();
         Reset();
-        Start(false, ObjectGuid::Empty, nullptr, false, true);
+        MoveCircle();
     }
 
     uint32 _checkTimer;
@@ -935,11 +1038,6 @@ struct boss_yoggsaron_cloud : public npc_escortAI
             if (Creature* sara = me->GetInstanceScript()->GetCreature(DATA_SARA))
                 sara->AI()->JustSummoned(cr);
     }
-
-    void MoveInLineOfSight(Unit*  /*who*/) override {}
-    void AttackStart(Unit*  /*who*/) override {}
-    using CreatureAI::WaypointReached;
-    void WaypointReached(uint32  /*point*/) override {}
 
     void Reset() override
     {
@@ -961,28 +1059,14 @@ struct boss_yoggsaron_cloud : public npc_escortAI
         }
     }
 
-    void InitWaypoint()
+    void MoveCircle()
     {
-        float dist = Middle.GetExactDist(me);
-        if (me->GetPositionX() > Middle.GetPositionX())
-        {
-            for (uint8 i = 0; i <= dist; ++i)
-            {
-                float angle = M_PI * 2 / dist * i;
-                AddWaypoint(i, Middle.GetPositionX() + dist * cos(angle), Middle.GetPositionY() + dist * std::sin(angle), me->GetPositionZ(), 0);
-            }
-        }
-        else
-        {
-            for (uint8 i = 0; i <= dist; ++i)
-            {
-                float angle = M_PI * 2 - (M_PI * 2 / dist * i);
-                AddWaypoint(i, Middle.GetPositionX() + dist * cos(angle), Middle.GetPositionY() + dist * std::sin(angle), me->GetPositionZ(), 0);
-            }
-        }
+        me->GetMotionMaster()->MoveCirclePath(Middle.GetPositionX(), Middle.GetPositionY(), me->GetPositionZ(),
+            Middle.GetExactDist2d(me), clockwise, 16);
+        clockwise = !clockwise;
     }
 
-    void UpdateEscortAI(uint32 diff) override
+    void UpdateAI(uint32 diff) override
     {
         _checkTimer += diff;
         if (_checkTimer >= 500 && !_isSummoning)
@@ -1000,6 +1084,8 @@ struct boss_yoggsaron_cloud : public npc_escortAI
     }
 };
 
+bool boss_yoggsaron_cloud::clockwise = true;
+
 struct boss_yoggsaron_guardian_of_ys : public ScriptedAI
 {
     boss_yoggsaron_guardian_of_ys(Creature* creature) : ScriptedAI(creature) { }
@@ -1014,7 +1100,8 @@ struct boss_yoggsaron_guardian_of_ys : public ScriptedAI
 
     void JustDied(Unit*) override
     {
-        me->CastSpell((Unit*)nullptr, SPELL_SHADOW_NOVA, true);
+        DoCastAOE(SPELL_SHADOW_NOVA, true);
+        DoCastAOE(SPELL_SHADOW_NOVA_SARA, true);
     }
 
     void UpdateAI(uint32 diff) override
@@ -1040,6 +1127,7 @@ struct boss_yoggsaron : public ScriptedAI
         _instance = me->GetInstanceScript();
         _thirdPhase = false;
         _usedInsane = false;
+        _defeated = false;
         summons.DespawnAll();
         events.Reset();
 
@@ -1063,6 +1151,7 @@ struct boss_yoggsaron : public ScriptedAI
     SummonList summons;
     bool _thirdPhase;
     bool _usedInsane;
+    bool _defeated;
 
     void AttackStart(Unit*) override { }
 
@@ -1076,6 +1165,32 @@ struct boss_yoggsaron : public ScriptedAI
         me->SummonCreature(NPC_IMMORTAL_GUARDIAN, me->GetPositionX() + dist * cos(o), me->GetPositionY() + dist * std::sin(o), 327.2 + Zplus, 0, TEMPSUMMON_CORPSE_TIMED_DESPAWN, 5000);
     }
 
+    // Never dies from damage: once pushed below 1.5% health he is defeated.
+    // The remaining sliver is not dealt, the death animation plays and the
+    // server kills him half a second later.
+    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damagetype*/, SpellSchoolMask /*damageSchoolMask*/) override
+    {
+        if (_defeated)
+        {
+            damage = 0;
+            return;
+        }
+
+        if (damage >= me->GetHealth())
+            damage = me->GetHealth() - 1;
+
+        if (me->GetHealth() - damage >= CalculatePct(me->GetMaxHealth(), 1.5f))
+            return;
+
+        _defeated = true;
+        me->InterruptNonMeleeSpells(true);
+        DoCastSelf(SPELL_DEATH_ANIMATION, true);
+        me->m_Events.AddEventAtOffset([this]()
+        {
+            me->KillSelf();
+        }, 500ms);
+    }
+
     void JustDied(Unit*  /*who*/) override
     {
         summons.DespawnAll();
@@ -1085,7 +1200,7 @@ struct boss_yoggsaron : public ScriptedAI
 
         if (_instance)
         {
-            _instance->SetData(BOSS_YOGGSARON, DONE);
+            _instance->SetBossState(BOSS_YOGGSARON, DONE);
             if (Creature* sara = _instance->GetCreature(DATA_SARA))
                 sara->AI()->DoAction(ACTION_YOGG_SARON_DEATH);
             if (GameObject* go = _instance->GetGameObject(DATA_YOGG_SARON_DOORS))
@@ -1132,7 +1247,7 @@ struct boss_yoggsaron : public ScriptedAI
             me->RemoveAura(SPELL_SHADOW_BARRIER);
 
             events.ScheduleEvent(EVENT_YS_LUNATIC_GAZE, 7s);
-            events.ScheduleEvent(EVENT_YS_SHADOW_BEACON, 20s);
+            events.ScheduleEvent(EVENT_YS_SHADOW_BEACON, 45s);
             events.ScheduleEvent(EVENT_YS_SUMMON_GUARDIAN, 0ms);
             _thirdPhase = true;
 
@@ -1140,11 +1255,11 @@ struct boss_yoggsaron : public ScriptedAI
         }
         else if (param == ACTION_YOGG_SARON_HARD_MODE)
         {
-            events.ScheduleEvent(EVENT_YS_DEAFENING_ROAR, 50s);
+            events.ScheduleEvent(EVENT_YS_DEAFENING_ROAR, 30s);
         }
         else if (param == ACTION_YOGG_SARON_SHADOW_BEACON)
         {
-            events.RescheduleEvent(EVENT_YS_SHADOW_BEACON, 40s);
+            events.RescheduleEvent(EVENT_YS_SHADOW_BEACON, 45s);
         }
         else if (param == ACTION_REMOVE_STUN)
         {
@@ -1161,6 +1276,12 @@ struct boss_yoggsaron : public ScriptedAI
             return !_usedInsane;
 
         return 0;
+    }
+
+    void SetData(uint32 param, uint32 value) override
+    {
+        if (param == DATA_YOGG_SARON_HEALTH)
+            me->SetHealth(me->GetMaxHealth() * value / 100.0f);
     }
 
     void SpellHit(Unit*  /*caster*/, SpellInfo const* spellInfo) override
@@ -1183,13 +1304,13 @@ struct boss_yoggsaron : public ScriptedAI
             case EVENT_YS_LUNATIC_GAZE:
                 me->PlayDirectSound(YS_P3_LUNATIC_GAZE);
                 me->CastSpell(me, SPELL_LUNATIC_GAZE_YS, true);
-                events.Repeat(12s);
+                events.Repeat(13s, 22s);
                 break;
             case EVENT_YS_DEAFENING_ROAR:
                 Talk(SAY_YOGG_SARON_DEAFENING_ROAR);
                 Talk(EMOTE_YOGG_SARON_DEAFENING_ROAR);
                 me->CastSpell(me, SPELL_DEAFENING_ROAR, false);
-                events.Repeat(50s);
+                events.Repeat(1min);
                 break;
             case EVENT_YS_SHADOW_BEACON:
                 events.Repeat(5s);
@@ -1210,6 +1331,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
     {
         me->SetDisableGravity(true);
         _tentacleCount = 0;
+        _tentacleTotal = 0;
         _activeIllusion = 0;
         _induceTimer = 0;
         _brainDamaged = false;
@@ -1218,6 +1340,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
 
     bool _brainDamaged;
     uint8 _tentacleCount;
+    uint8 _tentacleTotal;
     uint8 _activeIllusion;
     uint32 _induceTimer;
     SummonList summons;
@@ -1227,6 +1350,8 @@ struct boss_yoggsaron_brain : public NullCreatureAI
     {
         if (cr->GetEntry() == NPC_INFLUENCE_TENTACLE)
         {
+            ++_tentacleTotal;
+
             // Dragons Illusion
             if (cr->GetPositionX() > 2000.0f && cr->GetPositionX() < 2150.0f)
                 cr->UpdateEntry(urand(NPC_CONSORT_FIRST, NPC_CONSORT_LAST));
@@ -1248,13 +1373,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
 
     void PrepareChamberIllusion()
     {
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 2126.13f, -65.488f, 239.721f, 1.99171f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 2141.05f, -50.5146f, 239.751f, 2.72998f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 2148.83f, -23.9568f, 239.721f, 3.04807f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 2064.39f, -42.0691f, 239.719f, 0.0949586f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 2064.29f, -7.13128f, 239.756f, 5.96974f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 2117.31f, 14.897f, 239.731f, 4.32041f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 2136.7f, 2.43262f, 239.72f, 3.90023f);
+        me->SummonCreatureGroup(SUMMON_GROUP_CHAMBER_TENTACLES);
 
         // Laughing Skulls
         if (urand(0, 1))
@@ -1297,13 +1416,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
             me->SummonCreature(NPC_LAUGHING_SKULL, 1921, -158, 240, 0);
 
         // Influence
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1958.29f, -128.65f, 239.99f, 3.61293f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1957.78f, -134.368f, 239.99f, 3.35375f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1953.04f, -137.843f, 239.99f, 3.55796f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1900.31f, -93.5241f, 239.99f, 4.50043f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1895.03f, -98.0773f, 239.99f, 4.88135f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1895.19f, -104.587f, 239.99f, 5.02271f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1923.31f, -125.98f, 240, 4.2f);
+        me->SummonCreatureGroup(SUMMON_GROUP_ICECROWN_TENTACLES);
 
         // Others
         me->SummonCreature(NPC_LICH_KING, 1906.98f, -153, 240, 4.2f);
@@ -1328,13 +1441,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
         me->SummonCreature(NPC_LAUGHING_SKULL, 1963.68f, 89.7549f, 239.667f, 3.70571f);
 
         // Influence
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1931.41f, 39.0711f, 239.66f, 1.82467f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1908.67f, 45.5867f, 239.666f, 0.72119f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1897.68f, 66.1274f, 239.666f, 6.27395f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1950.73f, 49.3446f, 239.666f, 2.63756f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1923.16f, 97.5586f, 239.666f, 4.74635f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1956.16f, 72.1403f, 239.666f, 3.19518f);
-        me->SummonCreature(NPC_INFLUENCE_TENTACLE, 1944.81f, 92.3154f, 239.666f, 4.03556f);
+        me->SummonCreatureGroup(SUMMON_GROUP_STORMWIND_TENTACLES);
 
         // Others
         me->SummonCreature(NPC_GARONA, 1928.58f, 65.64f, 242.37f, 2.1f);
@@ -1342,6 +1449,13 @@ struct boss_yoggsaron_brain : public NullCreatureAI
 
         // Yogg Vision
         me->SummonCreature(NPC_YOGG_SARON_VISION, 1929.160f, 67.75694f, 221.7322f, 0);
+    }
+
+    void OnSpellCast(SpellInfo const* spellInfo) override
+    {
+        if (spellInfo->Id == SPELL_INDUCE_MADNESS)
+            if (Creature* yogg = me->GetInstanceScript()->GetCreature(BOSS_YOGGSARON))
+                yogg->AI()->SetData(DATA_YOGG_SARON_HEALTH, static_cast<uint32>(me->GetHealthPct()));
     }
 
     void DoAction(int32 param) override
@@ -1354,7 +1468,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
         else if (param == ACTION_INFLUENCE_TENTACLE_DIED)
         {
             _tentacleCount++;
-            if (_tentacleCount >= 7 /*TENTACLES COUNT*/)
+            if (_tentacleCount >= _tentacleTotal)
             {
                 // Stun
                 if (me->GetInstanceScript())
@@ -1372,6 +1486,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
             return;
 
         summons.DespawnAll();
+        _tentacleTotal = 0;
         switch (param)
         {
             case ACTION_ILLUSION_STORMWIND:
@@ -1406,7 +1521,7 @@ struct boss_yoggsaron_brain : public NullCreatureAI
 
     void DamageTaken(Unit* who, uint32& damage, DamageEffectType, SpellSchoolMask) override
     {
-        if (_tentacleCount < 7) // if all tentacles aren't killed
+        if (!_tentacleTotal || _tentacleCount < _tentacleTotal) // if all tentacles aren't killed
         {
             damage = 0;
             if (who)
@@ -1442,27 +1557,74 @@ struct boss_yoggsaron_death_orb : public NullCreatureAI
 {
     boss_yoggsaron_death_orb(Creature* creature) : NullCreatureAI(creature)
     {
-        me->CastSpell(me, SPELL_DEATH_RAY_WARNING, true);
-        _startTimer = 1;
+        me->CastSpell(me, SPELL_DEATH_RAY_ORIGIN_VISUAL, true);
     }
 
-    uint32 _startTimer;
+    void IsSummonedBy(WorldObject* /*summoner*/) override
+    {
+        // Sniffed: each ray comes from its own serverside summon spell, falls from the orb
+        // to the ground below it, and the orb winks out when their damage phase ends
+        for (uint32 spellId = SPELL_DEATH_RAY_SUMMON_1; spellId <= SPELL_DEATH_RAY_SUMMON_4; ++spellId)
+            me->CastSpell(me, spellId, true);
+
+        me->DespawnOrUnsummon(18400ms);
+    }
+
+    void JustSummoned(Creature* summon) override
+    {
+        if (InstanceScript* instance = me->GetInstanceScript())
+            if (Creature* sara = instance->GetCreature(DATA_SARA))
+                sara->AI()->JustSummoned(summon);
+    }
+};
+
+struct boss_yoggsaron_death_ray : public NullCreatureAI
+{
+    boss_yoggsaron_death_ray(Creature* creature) : NullCreatureAI(creature) { }
+
+    EventMap events;
+    uint8 _movementLegs = 0;
+
+    void IsSummonedBy(WorldObject* /*summoner*/) override
+    {
+        me->GetMotionMaster()->MoveFall(0, true);
+        events.ScheduleEvent(EVENT_DEATH_RAY_WARNING, 1200ms);
+        me->DespawnOrUnsummon(19s);
+    }
 
     void UpdateAI(uint32 diff) override
     {
-        if (_startTimer)
+        events.Update(diff);
+        switch (events.ExecuteEvent())
         {
-            _startTimer += diff;
-            if (_startTimer > 4000)
-            {
-                me->CastSpell(me, SPELL_DEATH_RAY_DAMAGE_VISUAL, true);
+            case EVENT_DEATH_RAY_WARNING:
+                me->CastSpell(me, SPELL_DEATH_RAY_WARNING, false);
+                events.ScheduleEvent(EVENT_DEATH_RAY_ACTIVE, 5s);
+                break;
+            case EVENT_DEATH_RAY_ACTIVE:
                 me->CastSpell(me, SPELL_DEATH_RAY_DAMAGE, true);
+                me->CastSpell((Unit*)nullptr, SPELL_DEATH_RAY_DAMAGE_VISUAL, true);
+                events.ScheduleEvent(EVENT_DEATH_RAY_MOVE, 0ms);
+                break;
+            case EVENT_DEATH_RAY_MOVE:
+                {
+                    // Sniffed: 8 straight 9 yd legs on random cardinal axes, one every ~1.6s
+                    float x = me->GetPositionX();
+                    float y = me->GetPositionY();
+                    switch (urand(0, 3))
+                    {
+                        case 0: x += 9.0f; break;
+                        case 1: x -= 9.0f; break;
+                        case 2: y += 9.0f; break;
+                        case 3: y -= 9.0f; break;
+                    }
+                    float z = me->GetMap()->GetHeight(me->GetPhaseMask(), x, y, me->GetPositionZ() + 5.0f);
+                    me->GetMotionMaster()->MovePoint(0, x, y, z);
 
-                _startTimer = 0;
-                me->SetSpeed(MOVE_WALK, 2);
-                me->SetSpeed(MOVE_RUN, 2);
-                me->GetMotionMaster()->MoveRandom(20.0f);
-            }
+                    if (++_movementLegs < 8)
+                        events.Repeat(1625ms);
+                    break;
+                }
         }
     }
 };
@@ -1474,8 +1636,16 @@ struct boss_yoggsaron_crusher_tentacle : public ScriptedAI
         me->SetCombatMovement(false);
         me->CastSpell(me, SPELL_CRUSH, true);
         me->CastSpell(me, SPELL_FOCUSED_ANGER, true);
-        me->CastSpell(me, SPELL_DIMINISH_POWER, false);
+        me->CastSpell(me, SPELL_DIMINISH_POWER_PROC, true);
+
+        // Sniffed: the first Diminish Power starts ~6s after the tentacle emerges
+        me->m_Events.AddEventAtOffset([this]()
+        {
+            _diminishReady = true;
+        }, 6s);
     }
+
+    bool _diminishReady = false;
 
     void Reset() override
     {
@@ -1489,7 +1659,6 @@ struct boss_yoggsaron_crusher_tentacle : public ScriptedAI
             DoResetThreatList();
             me->AddThreat(who, 100000);
             AttackStart(who);
-            me->InterruptNonMeleeSpells(false);
         }
     }
 
@@ -1499,7 +1668,7 @@ struct boss_yoggsaron_crusher_tentacle : public ScriptedAI
             me->RemoveAura(SPELL_SHATTERED_ILLUSION);
     }
 
-    void UpdateAI(uint32  /*diff*/) override
+    void UpdateAI(uint32 /*diff*/) override
     {
         if (!UpdateVictim())
             return;
@@ -1510,7 +1679,7 @@ struct boss_yoggsaron_crusher_tentacle : public ScriptedAI
             return;
         }
 
-        if (me->HasUnitState(UNIT_STATE_CASTING))
+        if (!_diminishReady || me->HasUnitState(UNIT_STATE_CASTING))
             return;
 
         me->CastSpell(me, SPELL_DIMINISH_POWER, false);
@@ -1569,12 +1738,45 @@ struct boss_yoggsaron_constrictor_tentacle : public ScriptedAI
     boss_yoggsaron_constrictor_tentacle(Creature* creature) : ScriptedAI(creature)
     {
         me->SetCombatMovement(false);
-        _checkTimer = 1;
         _playerGUID.Clear();
     }
 
-    uint32 _checkTimer;
     ObjectGuid _playerGUID;
+
+    void GrabPlayer(Unit* target)
+    {
+        target->CastSpell(me, SPELL_LUNGE, true);
+        target->CastSpell(target, SPELL_SQUEEZE, true);
+        _playerGUID = target->GetGUID();
+    }
+
+    void IsSummonedBy(WorldObject* summoner) override
+    {
+        me->CastSpell(me, SPELL_TENTACLE_ERUPT, true);
+        me->CastSpell(me, SPELL_VOID_ZONE_SMALL, true);
+        me->HandleEmoteCommand(EMOTE_ONESHOT_EMERGE);
+        me->SetInCombatWithZone();
+
+        // The summoner is the marked player (64133 is self-cast); 64132 already
+        // picked a valid enemy, so only re-check that they can still be squeezed.
+        // Fall back to the nearest valid player otherwise.
+        Unit* target = nullptr;
+        if (Player* player = summoner ? summoner->ToPlayer() : nullptr)
+            if (player->IsAlive() && !player->HasAura(sSpellMgr->GetSpellIdForDifficulty(SPELL_SQUEEZE, me)))
+                target = player;
+
+        if (!target)
+            target = SelectConstrictTarget();
+
+        if (target)
+            GrabPlayer(target);
+
+        // Summoned from a player, so register with Sara to keep the encounter's
+        // despawn handling working.
+        if (InstanceScript* instance = me->GetInstanceScript())
+            if (Creature* sara = instance->GetCreature(DATA_SARA))
+                sara->AI()->JustSummoned(me);
+    }
 
     Unit* SelectConstrictTarget()
     {
@@ -1598,37 +1800,30 @@ struct boss_yoggsaron_constrictor_tentacle : public ScriptedAI
         return target;
     }
 
-    void UpdateAI(uint32 diff) override
-    {
-        if (_checkTimer)
-        {
-            _checkTimer += diff;
-            if (_checkTimer >= 1000 && !me->HasUnitState(UNIT_STATE_STUNNED))
-            {
-                if (Unit* target = SelectConstrictTarget())
-                {
-                    target->CastSpell(me, SPELL_LUNGE, true);
-                    target->CastSpell(target, SPELL_SQUEEZE, true);
-                    _playerGUID = target->GetGUID();
-                    _checkTimer = 0;
-                    return;
-                }
-
-                _checkTimer = 1;
-            }
-        }
-    }
-
     void DoAction(int32 param) override
     {
         if (param == ACTION_REMOVE_STUN)
             me->RemoveAura(SPELL_SHATTERED_ILLUSION);
     }
 
+    void PassengerBoarded(Unit* passenger, int8 /*seatId*/, bool apply) override
+    {
+        if (!apply)
+            passenger->RemoveAurasDueToSpell(sSpellMgr->GetSpellIdForDifficulty(SPELL_SQUEEZE, passenger));
+
+        // Prevent players from escaping the tentacle's grasp.
+        constexpr uint32 SPELL_BLINK = 1953;
+        constexpr uint32 SPELL_DEMONIC_CIRCLE_TELEPORT = 48020;
+        passenger->ApplySpellImmune(0, IMMUNITY_ID, SPELL_BLINK, apply);
+        passenger->ApplySpellImmune(0, IMMUNITY_ID, SPELL_DEMONIC_CIRCLE_TELEPORT, apply);
+    }
+
     void JustDied(Unit*) override
     {
         if (Unit* player = ObjectAccessor::GetUnit(*me, _playerGUID))
             player->RemoveAura(sSpellMgr->GetSpellIdForDifficulty(SPELL_SQUEEZE, me));
+
+        me->DespawnOrUnsummon(5s);
     }
 };
 
@@ -1642,6 +1837,8 @@ struct boss_yoggsaron_keeper : public NullCreatureAI
             me->CastSpell(me, SPELL_TITANIC_STORM_PASSIVE, false);
         else if (param == ACTION_DESPAWN_ADDS)
             _summons.DespawnAll();
+        else if (param == ACTION_ACTIVATE_KEEPER)
+            Activate();
     }
 
     void JustSummoned(Creature* summon) override
@@ -1649,7 +1846,7 @@ struct boss_yoggsaron_keeper : public NullCreatureAI
         _summons.Summon(summon);
     }
 
-    void JustEngagedWith(Unit* /*who*/) override
+    void Activate()
     {
         switch (me->GetEntry())
         {
@@ -1738,27 +1935,72 @@ struct boss_yoggsaron_influence_tentacle : public NullCreatureAI
     }
 };
 
+static void ApplyEmpoweredStacks(Unit* target)
+{
+    uint8 stack = std::min(uint8(target->GetHealthPct() / 10), (uint8)9);
+
+    if (!stack)
+    {
+        target->RemoveAura(SPELL_EMPOWERED);
+        target->CastSpell(target, SPELL_WEAKENED, true);
+    }
+    else if (Aura* aur = target->AddAura(SPELL_EMPOWERED, target))
+    {
+        aur->SetStackAmount(stack);
+        target->RemoveAurasDueToSpell(SPELL_WEAKENED);
+    }
+}
+
 struct boss_yoggsaron_immortal_guardian : public ScriptedAI
 {
-    boss_yoggsaron_immortal_guardian(Creature* creature) : ScriptedAI(creature)
+    explicit boss_yoggsaron_immortal_guardian(Creature* creature) : ScriptedAI(creature)
     {
         Reset();
     }
 
-    uint32 _visualTimer;
-    uint32 _spellTimer;
+    static constexpr Milliseconds SPAWN_VISUAL_DELAY = 100ms;
+    static constexpr Milliseconds SPAWN_STASIS_TIME = 4s; // 3.4 sniffs show 800ms, 3.1 footage show 4s
+    static constexpr Milliseconds DRAIN_LIFE_HEALTH_CHECK = 2s;
+    static constexpr Milliseconds DRAIN_LIFE_INTERVAL = 9500ms;
 
     void Reset() override
     {
-        me->CastSpell(me, SPELL_RECENTLY_SPAWNED, true);
-        //me->CastSpell(me, SPELL_EMPOWERED_PASSIVE, true);
+        DoCastSelf(SPELL_RECENTLY_SPAWNED, true);
         if (Aura* aur = me->AddAura(SPELL_EMPOWERED_PASSIVE, me))
             aur->SetStackAmount(9);
 
-        _spellTimer = 0;
-        _visualTimer = 1;
+        ApplyEmpoweredStacks(me);
+
+        events.Reset();
+        events.ScheduleEvent(EVENT_GUARDIAN_SPAWN_VISUAL, SPAWN_VISUAL_DELAY);
+        events.ScheduleEvent(EVENT_GUARDIAN_SPAWN_RELEASE, SPAWN_STASIS_TIME);
+        events.ScheduleEvent(EVENT_GUARDIAN_DRAIN_LIFE, DRAIN_LIFE_HEALTH_CHECK);
         me->SetControlled(true, UNIT_STATE_ROOT);
+        _spawnStasis = true;
+    }
+
+    void EngageFromStasis()
+    {
+        if (!_spawnStasis)
+            return;
+
+        _spawnStasis = false;
+        events.CancelEvent(EVENT_GUARDIAN_SPAWN_RELEASE);
+        me->SetControlled(false, UNIT_STATE_ROOT);
         me->SetInCombatWithZone();
+    }
+
+    void JustEngagedWith(Unit* /*who*/) override
+    {
+        EngageFromStasis();
+    }
+
+    void MoveInLineOfSight(Unit* who) override
+    {
+        if (_spawnStasis)
+            return;
+
+        CreatureAI::MoveInLineOfSight(who);
     }
 
     void DamageTaken(Unit*, uint32& damage, DamageEffectType, SpellSchoolMask) override
@@ -1775,44 +2017,51 @@ struct boss_yoggsaron_immortal_guardian : public ScriptedAI
 
     void UpdateAI(uint32 diff) override
     {
+        events.Update(diff);
+
+        if (me->HasUnitState(UNIT_STATE_CASTING))
+        {
+            events.DelayEvents(Milliseconds(diff));
+            return;
+        }
+
+        while (uint32 eventId = events.ExecuteEvent())
+        {
+            switch (eventId)
+            {
+                case EVENT_GUARDIAN_SPAWN_VISUAL:
+                    DoCastSelf(SPELL_SIMPLE_TELEPORT, false);
+                    break;
+                case EVENT_GUARDIAN_SPAWN_RELEASE:
+                    EngageFromStasis();
+                    break;
+                case EVENT_GUARDIAN_DRAIN_LIFE:
+                {
+                    Unit* target = me->HealthBelowPct(85) ? SelectTargetFromPlayerList(40.0f) : nullptr;
+                    if (target)
+                    {
+                        DoCast(target, SPELL_DRAIN_LIFE, false);
+                        events.Repeat(DRAIN_LIFE_INTERVAL);
+                    }
+                    else
+                        events.Repeat(DRAIN_LIFE_HEALTH_CHECK);
+
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+
         if (!UpdateVictim())
             return;
 
-        if (_visualTimer)
-        {
-            _visualTimer += diff;
-            if (_visualTimer >= 100 && _visualTimer < 10000)
-            {
-                me->CastSpell(me, SPELL_SIMPLE_TELEPORT, false);
-                _visualTimer = 10000;
-            }
-            else if (_visualTimer >= 11000)
-            {
-                me->SetControlled(false, UNIT_STATE_ROOT);
-                _visualTimer = 0;
-            }
-        }
-
-        if (me->HasUnitState(UNIT_STATE_CASTING))
-            return;
-
-        _spellTimer += diff;
-        if (_spellTimer >= 9500)
-        {
-            if (me->HealthBelowPct(85))
-            {
-                if (Unit* target = SelectTargetFromPlayerList(40.0f))
-                {
-                    me->CastSpell(target, SPELL_DRAIN_LIFE, false);
-                    _spellTimer = 0;
-                }
-            }
-            else
-                _spellTimer = 7500;
-        }
-
-        DoMeleeAttackIfReady();
+        if (!_spawnStasis)
+            DoMeleeAttackIfReady();
     }
+
+private:
+    bool _spawnStasis{};
 };
 
 struct boss_yoggsaron_lich_king : public NullCreatureAI
@@ -1843,7 +2092,6 @@ struct boss_yoggsaron_lich_king : public NullCreatureAI
             return;
 
         creature->AI()->Talk(text);
-            return;
     }
 
     void UpdateAI(uint32 diff) override
@@ -1919,7 +2167,6 @@ struct boss_yoggsaron_llane : public NullCreatureAI
             return;
 
         creature->AI()->Talk(text);
-            return;
     }
 
     void UpdateAI(uint32 diff) override
@@ -2061,7 +2308,21 @@ struct boss_yoggsaron_voice : public NullCreatureAI
 
     void Reset() override
     {
-        me->CastSpell(me, SPELL_INSANE_PERIODIC, true);
+        events.Reset();
+        _targets.clear();
+        _current = 0;
+        me->RemoveAllAuras();
+    }
+
+    void DoAction(int32 param) override
+    {
+        if (param == ACTION_VOICE_START)
+        {
+            DoCastSelf(SPELL_INSANE_PERIODIC, true);
+            DoCastSelf(SPELL_SANITY_BASE, true);
+        }
+        else if (param == ACTION_VOICE_STOP)
+            Reset();
     }
 
     void SpellHitTarget(Unit* target, SpellInfo const* spellInfo) override
@@ -2105,24 +2366,39 @@ class spell_yogg_saron_malady_of_the_mind_aura : public AuraScript
 
     bool Validate(SpellInfo const* /*spellInfo*/) override
     {
-        return ValidateSpellInfo({ SPELL_DEATH_RAY_DAMAGE_REAL, SPELL_MALADY_OF_THE_MIND_TRIGGER });
-    }
-
-    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
-    {
-        GetUnitOwner()->ApplySpellImmune(SPELL_DEATH_RAY_DAMAGE_REAL, IMMUNITY_ID, SPELL_DEATH_RAY_DAMAGE_REAL, true);
+        return ValidateSpellInfo({ SPELL_MALADY_OF_THE_MIND_TRIGGER });
     }
 
     void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
     {
-        GetUnitOwner()->ApplySpellImmune(SPELL_DEATH_RAY_DAMAGE_REAL, IMMUNITY_ID, SPELL_DEATH_RAY_DAMAGE_REAL, false);
         GetUnitOwner()->CastCustomSpell(SPELL_MALADY_OF_THE_MIND_TRIGGER, SPELLVALUE_MAX_TARGETS, 1, GetUnitOwner(), true);
     }
 
     void Register() override
     {
-        OnEffectApply += AuraEffectApplyFn(spell_yogg_saron_malady_of_the_mind_aura::OnApply, EFFECT_1, SPELL_AURA_MOD_FEAR, AURA_EFFECT_HANDLE_REAL);
         OnEffectRemove += AuraEffectRemoveFn(spell_yogg_saron_malady_of_the_mind_aura::OnRemove, EFFECT_1, SPELL_AURA_MOD_FEAR, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 64148 - Diminsh Power
+class spell_yogg_saron_diminish_power_aura : public AuraScript
+{
+    PrepareAuraScript(spell_yogg_saron_diminish_power_aura);
+
+    // Serverside proc (no triggered spell in DBC): taken melee hits and melee
+    // abilities break the Diminish Power channel. Sniffed: only the active
+    // channel breaks, the initial 1.5s cast is not interruptible by damage
+    void HandleProc(AuraEffect const* /*aurEff*/, ProcEventInfo& /*eventInfo*/)
+    {
+        PreventDefaultAction();
+        if (Spell* spell = GetTarget()->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+            if (spell->getState() == SPELL_STATE_CASTING)
+                GetTarget()->InterruptSpell(CURRENT_CHANNELED_SPELL);
+    }
+
+    void Register() override
+    {
+        OnEffectProc += AuraEffectProcFn(spell_yogg_saron_diminish_power_aura::HandleProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
     }
 };
 
@@ -2325,14 +2601,17 @@ class spell_yogg_saron_lunatic_gaze : public SpellScript
 
     void FilterTargets(std::list<WorldObject*>& targets)
     {
-        std::list<WorldObject*> tmplist;
-        for (std::list<WorldObject*>::iterator itr = targets.begin(); itr != targets.end(); ++itr)
-            if ((*itr)->HasInArc(M_PI, GetCaster()))
-                tmplist.push_back(*itr);
+        Unit* caster = GetCaster();
+        // 64168 inherits SPELL_ATTR2_IGNORE_LINE_OF_SIGHT from the aura triggering it, so the illusion room walls have to be checked here
+        bool ignoreLos = GetSpellInfo()->HasAttribute(SPELL_ATTR2_IGNORE_LINE_OF_SIGHT);
 
-        targets.clear();
-        for (std::list<WorldObject*>::iterator itr = tmplist.begin(); itr != tmplist.end(); ++itr)
-            targets.push_back(*itr);
+        targets.remove_if([caster, ignoreLos](WorldObject* target)
+        {
+            if (!target->HasInArc(M_PI, caster))
+                return true;
+
+            return !ignoreLos && !caster->IsWithinLOSInMap(target, VMAP::ModelIgnoreFlags::M2);
+        });
     }
 
     void Register() override
@@ -2387,19 +2666,7 @@ class spell_yogg_saron_empowered_aura : public AuraScript
 
     void OnPeriodic(AuraEffect const*  /*aurEff*/)
     {
-        Unit* target = GetUnitOwner();
-        uint8 stack = std::min(uint8(target->GetHealthPct() / 10), (uint8)9);
-
-        if (!stack)
-        {
-            target->RemoveAura(SPELL_EMPOWERED);
-            target->CastSpell(target, SPELL_WEAKENED, true);
-        }
-        else if (Aura* aur = target->AddAura(SPELL_EMPOWERED, target))
-        {
-            aur->SetStackAmount(stack);
-            target->RemoveAurasDueToSpell(SPELL_WEAKENED);
-        }
+        ApplyEmpoweredStacks(GetUnitOwner());
     }
 
     void Register() override
@@ -2462,6 +2729,22 @@ class spell_yogg_saron_insane_aura : public AuraScript
     void Register() override
     {
         OnEffectRemove += AuraEffectRemoveFn(spell_yogg_saron_insane_aura::OnRemove, EFFECT_0, SPELL_AURA_AOE_CHARM, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 63050 - Sanity
+class spell_yogg_saron_sanity : public SpellScript
+{
+    PrepareSpellScript(spell_yogg_saron_sanity);
+
+    void ModSanityStacks()
+    {
+        GetSpell()->SetSpellValue(SPELLVALUE_AURA_STACK, 100);
+    }
+
+    void Register() override
+    {
+        BeforeCast += SpellCastFn(spell_yogg_saron_sanity::ModSanityStacks);
     }
 };
 
@@ -2593,9 +2876,27 @@ class spell_yogg_saron_sanity_reduce : public SpellScript
         }
     }
 
+    // Psychosis and Malady of the Mind skip anyone at 40 Sanity or less, so that their random
+    // targeting evens out across the raid instead of finishing off the lowest players.
+    void FilterTargets(std::list<WorldObject*>& targets)
+    {
+        targets.remove_if([](WorldObject* target)
+        {
+            Unit* unit = target->ToUnit();
+            if (!unit)
+                return true;
+
+            Aura* sanity = unit->GetAura(SPELL_SANITY);
+            return !sanity || sanity->GetStackAmount() <= 40;
+        });
+    }
+
     void Register() override
     {
         OnEffectHitTarget += SpellEffectFn(spell_yogg_saron_sanity_reduce::HandleScriptEffect, EFFECT_FIRST_FOUND, SPELL_EFFECT_SCRIPT_EFFECT);
+
+        if (m_scriptSpellId == SPELL_SARA_PSYCHOSIS_10 || m_scriptSpellId == SPELL_SARA_PSYCHOSIS_25 || m_scriptSpellId == SPELL_MALADY_OF_THE_MIND)
+            OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(spell_yogg_saron_sanity_reduce::FilterTargets, EFFECT_ALL, TARGET_UNIT_SRC_AREA_ENEMY);
     }
 };
 
@@ -2677,6 +2978,66 @@ class spell_yogg_saron_target_selectors : public SpellScript
     }
 };
 
+// 64132 - Constrictor Tentacle
+class spell_yogg_saron_constrictor_tentacle : public SpellScript
+{
+    PrepareSpellScript(spell_yogg_saron_constrictor_tentacle);
+
+    void FilterTargets(std::list<WorldObject*>& targets)
+    {
+        // The tentacle erupts at the marked player's feet, so skip players below
+        // the platform (illusion realms and brain room).
+        targets.remove_if([](WorldObject* target) { return target->GetPositionZ() <= 300.0f; });
+    }
+
+    void Register() override
+    {
+        OnObjectAreaTargetSelect += SpellObjectAreaTargetSelectFn(spell_yogg_saron_constrictor_tentacle::FilterTargets, EFFECT_0, TARGET_UNIT_SRC_AREA_ENEMY);
+    }
+};
+
+// 64132 - Constrictor Tentacle
+class spell_yogg_saron_constrictor_tentacle_aura : public AuraScript
+{
+    PrepareAuraScript(spell_yogg_saron_constrictor_tentacle_aura);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_CONSTRICTOR_TENTACLE_SUMMON });
+    }
+
+    void OnApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        // Spawns the tentacle on the marked player so it grabs them on the spot.
+        GetTarget()->CastSpell(GetTarget(), SPELL_CONSTRICTOR_TENTACLE_SUMMON, true);
+    }
+
+    void Register() override
+    {
+        AfterEffectApply += AuraEffectApplyFn(spell_yogg_saron_constrictor_tentacle_aura::OnApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 64125, 64126 - Squeeze
+class spell_yogg_saron_squeeze_aura : public AuraScript
+{
+    PrepareAuraScript(spell_yogg_saron_squeeze_aura);
+
+    // Immunities (Divine Shield, Ice Block, ...) purge this aura; killing the
+    // tentacle on removal is what actually frees the player from the vehicle.
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        if (Unit* vehicle = GetTarget()->GetVehicleBase())
+            if (vehicle->IsAlive())
+                vehicle->KillSelf();
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_yogg_saron_squeeze_aura::OnRemove, EFFECT_0, SPELL_AURA_PERIODIC_DAMAGE, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
 // 63305 - Grim Reprisal
 class spell_yogg_saron_grim_reprisal_aura : public AuraScript
 {
@@ -2692,12 +3053,14 @@ class spell_yogg_saron_grim_reprisal_aura : public AuraScript
         DamageInfo* damageInfo = eventInfo.GetDamageInfo();
 
         if (!damageInfo || !damageInfo->GetDamage())
-        {
             return;
-        }
+
+        Unit* attacker = damageInfo->GetAttacker();
+        if (!attacker || attacker->IsTotem())
+            return;
 
         int32 damage = CalculatePct(static_cast<int32>(damageInfo->GetDamage()), 60);
-        GetTarget()->CastCustomSpell(SPELL_GRIM_REPRISAL_DAMAGE, SPELLVALUE_BASE_POINT0, damage, damageInfo->GetAttacker(), true, nullptr, aurEff);
+        GetTarget()->CastCustomSpell(SPELL_GRIM_REPRISAL_DAMAGE, SPELLVALUE_BASE_POINT0, damage, attacker, true, nullptr, aurEff);
     }
 
     void Register() override
@@ -2778,6 +3141,7 @@ void AddSC_boss_yoggsaron()
     RegisterUlduarCreatureAI(boss_yoggsaron_guardian_of_ys);
     RegisterUlduarCreatureAI(boss_yoggsaron_brain);
     RegisterUlduarCreatureAI(boss_yoggsaron_death_orb);
+    RegisterUlduarCreatureAI(boss_yoggsaron_death_ray);
     RegisterUlduarCreatureAI(boss_yoggsaron_crusher_tentacle);
     RegisterUlduarCreatureAI(boss_yoggsaron_corruptor_tentacle);
     RegisterUlduarCreatureAI(boss_yoggsaron_constrictor_tentacle);
@@ -2792,6 +3156,7 @@ void AddSC_boss_yoggsaron()
 
     // SPELLS
     RegisterSpellScript(spell_yogg_saron_malady_of_the_mind_aura);
+    RegisterSpellScript(spell_yogg_saron_diminish_power_aura);
     RegisterSpellAndAuraScriptPair(spell_yogg_saron_brain_link, spell_yogg_saron_brain_link_aura);
     RegisterSpellScript(spell_yogg_saron_shadow_beacon_aura);
     RegisterSpellScript(spell_yogg_saron_destabilization_matrix);
@@ -2801,12 +3166,15 @@ void AddSC_boss_yoggsaron()
     RegisterSpellScript(spell_yogg_saron_empowered_aura);
     RegisterSpellScript(spell_yogg_saron_insane_periodic_trigger);
     RegisterSpellScript(spell_yogg_saron_insane_aura);
+    RegisterSpellScript(spell_yogg_saron_sanity);
     RegisterSpellScript(spell_yogg_saron_sanity_well_aura);
     RegisterSpellScript(spell_keeper_freya_summon_sanity_well);
     RegisterSpellScript(spell_yogg_saron_sanity_reduce);
     RegisterSpellScript(spell_yogg_saron_empowering_shadows);
     RegisterSpellScript(spell_yogg_saron_in_the_maws_of_the_old_god);
     RegisterSpellScript(spell_yogg_saron_target_selectors);
+    RegisterSpellAndAuraScriptPair(spell_yogg_saron_constrictor_tentacle, spell_yogg_saron_constrictor_tentacle_aura);
+    RegisterSpellScript(spell_yogg_saron_squeeze_aura);
     RegisterSpellScript(spell_yogg_saron_grim_reprisal_aura);
 
     // ACHIEVEMENTS

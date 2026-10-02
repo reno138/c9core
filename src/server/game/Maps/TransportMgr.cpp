@@ -23,6 +23,8 @@
 #include "NatsBus.h"
 #include "QueryResult.h"
 #include "Transport.h"
+#include "TaskScheduler.h"
+#include "Config.h"
 #include <chrono>
 
 TransportTemplate::~TransportTemplate()

@@ -23,8 +23,8 @@
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
 #include "AddonMgr.h"
-#include "ArenaTeamMgr.h"
 #include "ArenaSeasonMgr.h"
+#include "ArenaTeamMgr.h"
 #include "AuctionHouseMgr.h"
 #include "AutobroadcastMgr.h"
 #include "BattlefieldMgr.h"
@@ -42,6 +42,7 @@
 #include "CreatureGroups.h"
 #include "CreatureTextMgr.h"
 #include "DBCStores.h"
+#include "DBUpdater.h"
 #include "DatabaseEnv.h"
 #include "DisableMgr.h"
 #include "DynamicVisibility.h"
@@ -52,14 +53,16 @@
 #include "GridNotifiersImpl.h"
 #include "GroupMgr.h"
 #include "GuildMgr.h"
-#include "IPLocation.h"
 #include "InstanceSaveMgr.h"
+#include "IPLocation.h"
 #include "ItemEnchantmentMgr.h"
 #include "LFGMgr.h"
+#include "Language.h"
 #include "Log.h"
 #include "LootItemStorage.h"
 #include "LootMgr.h"
 #include "M2Stores.h"
+#include "MailMgr.h"
 #include "MapMgr.h"
 #include "Metric.h"
 #include "MotdMgr.h"
@@ -79,6 +82,7 @@
 #include "SmartAI.h"
 #include "SpellMgr.h"
 #include "TaskScheduler.h"
+#include "TC9Sidecar.h"
 #include "TicketMgr.h"
 #include "Transport.h"
 #include "TransportMgr.h"
@@ -102,9 +106,11 @@
 #include "WorldStateDefines.h"
 #include <boost/asio/ip/address.hpp>
 #include <cmath>
+#include <ctime>
 
 std::atomic_long World::_stopEvent = false;
-uint8 World::_exitCode = SHUTDOWN_EXIT_CODE;
+std::atomic<uint8> World::_exitCode = SHUTDOWN_EXIT_CODE;
+std::atomic<bool> World::_stoppedByStopNow = false;
 uint32 World::m_worldLoopCounter = 0;
 
 float World::_maxVisibleDistanceOnContinents = DEFAULT_VISIBILITY_DISTANCE;
@@ -120,6 +126,7 @@ World::World()
     _allowMovement = true;
     _shutdownMask = 0;
     _shutdownTimer = 0;
+    _lifetimeMaxPlayerCount = 0;
     _nextDailyQuestReset = 0s;
     _nextWeeklyQuestReset = 0s;
     _nextMonthlyQuestReset = 0s;
@@ -185,9 +192,8 @@ void World::LoadConfigSettings(bool reload)
     // load update time related configs
     sWorldUpdateTime.LoadFromConfig();
 
-    ///- Read the player limit and the Message of the day from the config file
-    if (!reload)
-        sWorldSessionMgr->SetPlayerAmountLimit(sConfigMgr->GetOption<int32>("PlayerLimit", 1000));
+    ///- Read the player limit from the config file
+    sWorldSessionMgr->SetPlayerAmountLimit(sConfigMgr->GetOption<int32>("PlayerLimit", 1000));
 
     _worldConfig.Initialize(reload);
 
@@ -267,7 +273,7 @@ void World::LoadConfigSettings(bool reload)
 #if C9_PLATFORM == C9_PLATFORM_UNIX || C9_PLATFORM == C9_PLATFORM_APPLE
     if (dataPath[0] == '~')
     {
-        const char* home = getenv("HOME");
+        char const* home = getenv("HOME");
         if (home)
             dataPath.replace(0, 1, home);
     }
@@ -703,6 +709,9 @@ void World::SetInitialWorldSettings()
     LOG_INFO("server.loading", "Loading Spell Target Coordinates...");
     sSpellMgr->LoadSpellTargetPositions();
 
+    LOG_INFO("server.loading", "Loading Spell Cone definitions...");
+    sSpellMgr->LoadSpellCones();
+
     LOG_INFO("server.loading", "Loading Enchant Custom Attributes...");
     sSpellMgr->LoadEnchantCustomAttr();
 
@@ -781,6 +790,9 @@ void World::SetInitialWorldSettings()
     LOG_INFO("server.loading", "Loading Profanity Names...");
     sObjectMgr->LoadProfanityNamesFromDB();
     sObjectMgr->LoadProfanityNamesFromDBC(); // Needs to be after LoadProfanityNamesFromDB()
+
+    LOG_INFO("server.loading", "Loading Chat Filter...");
+    sObjectMgr->LoadChatFilter();
 
     LOG_INFO("server.loading", "Loading GameObjects for Quests...");
     sObjectMgr->LoadGameObjectForQuests();
@@ -861,7 +873,7 @@ void World::SetInitialWorldSettings()
     ///- Handle outdated emails (delete/return)
     LOG_INFO("server.loading", "Returning Old Mails...");
     LOG_INFO("server.loading", " ");
-    sObjectMgr->ReturnOrDeleteOldMails(false);
+    sMailMgr->ReturnOrDeleteOldMails(false);
 
     ///- Load AutoBroadCast
     LOG_INFO("server.loading", "Loading Autobroadcasts...");
@@ -882,6 +894,9 @@ void World::SetInitialWorldSettings()
 
     LOG_INFO("server.loading", "Loading Creature Texts...");
     sCreatureTextMgr->LoadCreatureTexts();
+
+    LOG_INFO("server.loading", "Loading Creature Text Options...");
+    sCreatureTextMgr->LoadCreatureTextOptions();
 
     LOG_INFO("server.loading", "Loading Creature Text Locales...");
     sCreatureTextMgr->LoadCreatureTextLocales();
@@ -909,11 +924,21 @@ void World::SetInitialWorldSettings()
     LOG_INFO("server.loading", "Initialize Game Time and Timers");
     LOG_INFO("server.loading", " ");
 
-    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_INS_UPTIME);
-    stmt->SetData(0, realm.Id.Realm);
-    stmt->SetData(1, uint32(GameTime::GetStartTime().count()));
-    stmt->SetData(2, GitRevision::GetFullVersion());
-    LoginDatabase.Execute(stmt);
+    // A dry run exits below without unwinding main(), so its row would never be marked as cleanly ended
+    if (!sConfigMgr->isDryRun())
+    {
+        // Must run before this session's row is inserted. Cluster nodes share the realm id, so the newest
+        // row may be another node's live session. The sidecar isn't initialized yet, so read the config.
+        if (!sConfigMgr->GetOption<bool>("Cluster.Enabled", false))
+            LoadPreviousSessionInfo();
+
+        LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_INS_UPTIME);
+        stmt->SetData(0, realm.Id.Realm);
+        stmt->SetData(1, uint32(GameTime::GetStartTime().count()));
+        stmt->SetData(2, GitRevision::GetFullVersion());
+        // Synchronous so it can't land after the shutdown UPDATEs, which run on the synchronous connection
+        LoginDatabase.DirectExecute(stmt);
+    }
 
     _timers[WUPDATE_UPTIME].SetInterval(getIntConfig(CONFIG_UPTIME_UPDATE)*MINUTE * IN_MILLISECONDS);
     //Update "uptime" table based on configuration entry in minutes.
@@ -1074,6 +1099,13 @@ void World::SetInitialWorldSettings()
     if (sConfigMgr->isDryRun())
     {
         sMapMgr->UnloadAll();
+
+        if (uint32 failed = DBUpdaterUtil::GetFailedUpdateCount())
+        {
+            LOG_FATAL("server.loading", "C9Core Dry Run Completed With {} Failed Database Update(s), Terminating.", failed);
+            exit(1);
+        }
+
         LOG_INFO("server.loading", "C9Core Dry Run Completed, Terminating.");
         exit(0);
     }
@@ -1219,7 +1251,7 @@ void World::Update(uint32 diff)
 
     if (currentGameTime > _mail_expire_check_timer)
     {
-        sObjectMgr->ReturnOrDeleteOldMails(true);
+        sMailMgr->ReturnOrDeleteOldMails(true);
         _mail_expire_check_timer = currentGameTime + 6h;
     }
 
@@ -1421,6 +1453,12 @@ void World::Update(uint32 diff)
         stmt->SetData(2, realm.Id.Realm);
         stmt->SetData(3, uint32(GameTime::GetStartTime().count()));
         LoginDatabase.Execute(stmt);
+
+        // Re-assert this realm as online in case the offline flag was set externally (e.g. an authserver restart).
+        LoginDatabasePreparedStatement* onlineStmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_REALM_ONLINE);
+        onlineStmt->SetData(0, uint8(REALM_FLAG_OFFLINE));
+        onlineStmt->SetData(1, realm.Id.Realm);
+        LoginDatabase.Execute(onlineStmt);
     }
 
     ///- Process Game events when necessary
@@ -1442,6 +1480,7 @@ void World::Update(uint32 diff)
         CharacterDatabase.KeepAlive();
         LoginDatabase.KeepAlive();
         WorldDatabase.KeepAlive();
+        sScriptMgr->OnModuleDatabasesKeepAlive();
     }
 
     {
@@ -1465,6 +1504,24 @@ void World::Update(uint32 diff)
     {
         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update world scripts"));
         sScriptMgr->OnWorldUpdate(diff);
+    }
+
+    if (sToCloud9Sidecar->ClusterModeEnabled())
+    {
+        {
+            METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process TC9 async tasks"));
+            sToCloud9Sidecar->ProcessAsyncTasks();
+        }
+
+        {
+            METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process TC9 hooks"));
+            sToCloud9Sidecar->ProcessHooks();
+        }
+
+        {
+            METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process TC9 gRPC and HTTP requests"));
+            sToCloud9Sidecar->ProcessGrpcOrHttpRequests();
+        }
     }
 
     {
@@ -1595,10 +1652,15 @@ void World::_UpdateGameTime()
         ///- ... and it is overdue, stop the world (set m_stopEvent)
         if (_shutdownTimer <= elapsed.count())
         {
-            if (!(_shutdownMask & SHUTDOWN_MASK_IDLE) || sWorldSessionMgr->GetActiveAndQueuedSessionCount() == 0)
-                _stopEvent = true;                         // exist code already set
-            else
-                _shutdownTimer = 1;                        // minimum timer value to wait idle state
+            ///- ... unless a Wintergrasp battle is running and deferral is enabled, in which case the
+            ///  shutdown/restart is pushed past the end of the current battle and the world keeps running
+            if (!RescheduleShutdownForWintergrasp())
+            {
+                if (!(_shutdownMask & SHUTDOWN_MASK_IDLE) || sWorldSessionMgr->GetActiveAndQueuedSessionCount() == 0)
+                    _stopEvent = true;                     // exist code already set
+                else
+                    _shutdownTimer = 1;                    // minimum timer value to wait idle state
+            }
         }
         ///- ... else decrease it and if necessary display a shutdown countdown to the users
         else
@@ -1608,6 +1670,38 @@ void World::_UpdateGameTime()
             ShutdownMsg();
         }
     }
+}
+
+/// Defer a pending shutdown/restart if a Wintergrasp battle is currently running.
+/// Returns true when the shutdown timer was extended (world should keep running).
+bool World::RescheduleShutdownForWintergrasp()
+{
+    uint32 const bufferMinutes = getIntConfig(CONFIG_WINTERGRASP_DEFER_SHUTDOWN);
+    if (!bufferMinutes)
+        return false;
+
+    // Idle shutdowns wait for an empty server anyway; don't interfere with them
+    if (_shutdownMask & SHUTDOWN_MASK_IDLE)
+        return false;
+
+    Battlefield* wg = sBattlefieldMgr->GetBattlefieldByBattleId(BATTLEFIELD_BATTLEID_WG);
+    if (!wg || !wg->IsEnabled() || !wg->IsWarTime())
+        return false;
+
+    // GetTimer() is the battle time remaining in milliseconds
+    _shutdownTimer = wg->GetTimer() / IN_MILLISECONDS + bufferMinutes * MINUTE;
+
+    LOG_INFO("server.worldserver", "Server {} deferred: Wintergrasp battle in progress, rescheduled in {}",
+        (_shutdownMask & SHUTDOWN_MASK_RESTART ? "restart" : "shutdown"), secsToTimeString(_shutdownTimer));
+
+    sWorldSessionMgr->DoForAllOnlinePlayers([](Player* player)
+    {
+        LocaleConstant locale = player->GetSession()->GetSessionDbLocaleIndex();
+        sWorldSessionMgr->SendServerMessage(SERVER_MSG_STRING, sObjectMgr->GetAcoreString(LANG_WG_SHUTDOWN_DEFERRED, locale), player);
+    });
+
+    ShutdownMsg(true);
+    return true;
 }
 
 /// Shutdown the server
@@ -1709,6 +1803,78 @@ void World::ProcessPendingCallbacks()
         cb();
 }
 
+void World::SaveSessionEnd(bool finished)
+{
+    // Fixed by the first call: main() has picked its exit code by the final call, and a later StopNow
+    // (e.g. the CLI thread failing its read during teardown) no longer reflects how the session ended
+    if (!_sessionOutcome)
+    {
+        SessionOutcome& outcome = _sessionOutcome.emplace();
+        outcome.ExitCode = _exitCode;
+
+        bool restartScheduled = false;
+        if (!_stoppedByStopNow)
+        {
+            restartScheduled = (_shutdownMask & SHUTDOWN_MASK_RESTART) != 0;
+            outcome.Reason = _shutdownReason;
+        }
+
+        outcome.Type = SHUTDOWN_TYPE_SHUTDOWN;
+        if (outcome.ExitCode == ERROR_EXIT_CODE)
+            outcome.Type = SHUTDOWN_TYPE_ERROR;
+        else if (outcome.ExitCode == RESTART_EXIT_CODE || restartScheduled)
+            outcome.Type = SHUTDOWN_TYPE_RESTART;
+
+        // Column limit; strict SQL mode rejects the whole UPDATE on overflow
+        utf8truncate(outcome.Reason, 255);
+    }
+
+    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_UPD_UPTIME_SHUTDOWN);
+    stmt->SetData(0, uint32(GameTime::GetUptime().count()));
+    stmt->SetData(1, uint16(sWorldSessionMgr->GetMaxPlayerCount()));
+    if (finished)
+        stmt->SetData(2, uint32(std::time(nullptr)));
+    else
+        stmt->SetData(2);
+    stmt->SetData(3, uint8(_sessionOutcome->Type));
+    stmt->SetData(4, _sessionOutcome->ExitCode);
+    stmt->SetData(5, _sessionOutcome->Reason);
+    stmt->SetData(6, realm.Id.Realm);
+    stmt->SetData(7, uint32(GameTime::GetStartTime().count()));
+    LoginDatabase.DirectExecute(stmt);
+}
+
+void World::LoadPreviousSessionInfo()
+{
+    LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_UPTIME_PREVIOUS);
+    stmt->SetData(0, realm.Id.Realm);
+    PreparedQueryResult result = LoginDatabase.Query(stmt);
+    if (!result)
+        return;
+
+    Field* fields = result->Fetch();
+    PreviousSessionInfo& previous = _previousSession.emplace();
+    previous.StartTime = Seconds(fields[0].Get<uint32>());
+    previous.Uptime = Seconds(fields[1].Get<uint32>());
+    previous.Crashed = fields[2].IsNull();
+    previous.Type = SessionShutdownType(fields[3].Get<uint8>());
+    previous.Reason = fields[4].Get<std::string>();
+
+    if (previous.Crashed)
+        LOG_WARN("server.loading", "Previous session did not shut down cleanly. Last online {}.",
+            Acore::Time::TimeToTimestampStr(previous.StartTime + previous.Uptime));
+
+    stmt = LoginDatabase.GetPreparedStatement(LOGIN_SEL_UPTIME_MAXPLAYERS);
+    stmt->SetData(0, realm.Id.Realm);
+    if (PreparedQueryResult maxResult = LoginDatabase.Query(stmt))
+        _lifetimeMaxPlayerCount = (*maxResult)[0].Get<uint16>();
+}
+
+uint32 World::GetLifetimeMaxPlayerCount() const
+{
+    return std::max(_lifetimeMaxPlayerCount, sWorldSessionMgr->GetMaxPlayerCount());
+}
+
 // This handles the issued and queued CLI commands
 void World::ProcessCliCommands()
 {
@@ -1791,7 +1957,7 @@ void World::InitMonthlyQuestResetTime()
 void World::InitRandomBGResetTime()
 {
     Seconds wstime = Seconds(sWorldState->getWorldState(WORLD_STATE_CUSTOM_BG_DAILY_RESET_TIME));
-    _nextRandomBGReset = wstime > 0s ? wstime : Seconds(Acore::Time::GetNextTimeWithDayAndHour(-1, 6));
+    _nextRandomBGReset = wstime > 0s ? wstime : Seconds(Acore::Time::GetNextTimeWithDayAndHour(-1, getIntConfig(CONFIG_RANDOM_BG_RESET_HOUR)));
 
     if (wstime == 0s)
     {
@@ -1924,7 +2090,7 @@ void World::ResetRandomBG()
         if (itr->second->GetPlayer())
             itr->second->GetPlayer()->SetRandomWinner(false);
 
-    _nextRandomBGReset = Seconds(Acore::Time::GetNextTimeWithDayAndHour(-1, 6));
+    _nextRandomBGReset = Seconds(Acore::Time::GetNextTimeWithDayAndHour(-1, getIntConfig(CONFIG_RANDOM_BG_RESET_HOUR)));
     sWorldState->setWorldState(WORLD_STATE_CUSTOM_BG_DAILY_RESET_TIME, _nextRandomBGReset.count());
 }
 

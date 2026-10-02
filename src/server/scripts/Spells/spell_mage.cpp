@@ -123,16 +123,21 @@ class spell_mage_burning_determination : public AuraScript
         if (!(eventInfo.GetSpellInfo()->GetAllEffectsMechanicMask() & ((1ULL << MECHANIC_INTERRUPT) | (1ULL << MECHANIC_SILENCE))))
             return false;
 
+        Unit* target = eventInfo.GetActionTarget();
+
+        // This hook runs while the proc engine iterates the target's aura map; removing an
+        // aura inline would invalidate the live iterator (aura containers are flat_multimaps).
+        // Defer removals to the target's event queue so they run outside the proc walk.
         // Xinef: immuned effect should just eat charge
         if (eventInfo.GetHitMask() & PROC_EX_IMMUNE)
         {
-            eventInfo.GetActionTarget()->RemoveAurasDueToSpell(54748);
+            target->m_Events.AddEventAtOffset([target]() { target->RemoveAurasDueToSpell(54748); }, 1ms);
             return false;
         }
-        if (Aura* aura = eventInfo.GetActionTarget()->GetAura(54748))
+        if (Aura* aura = target->GetAura(54748))
         {
             if (aura->GetDuration() < aura->GetMaxDuration())
-                eventInfo.GetActionTarget()->RemoveAurasDueToSpell(54748);
+                target->m_Events.AddEventAtOffset([target]() { target->RemoveAurasDueToSpell(54748); }, 1ms);
             return false;
         }
 
@@ -584,20 +589,29 @@ class spell_mage_focus_magic : public AuraScript
 
     bool Load() override
     {
-        _procTarget = nullptr;
+        _procTargetGUID.Clear();
         return true;
     }
 
     bool CheckProc(ProcEventInfo& /*eventInfo*/)
     {
-        _procTarget = GetCaster();
-        return _procTarget && _procTarget->IsAlive();
+        Unit* caster = GetCaster();
+        if (caster && caster->IsAlive())
+        {
+            _procTargetGUID = caster->GetGUID();
+            return true;
+        }
+        return false;
     }
 
     void HandleProc(AuraEffect const* aurEff, ProcEventInfo& /*eventInfo*/)
     {
         PreventDefaultAction();
-        GetTarget()->CastSpell(_procTarget, SPELL_MAGE_FOCUS_MAGIC_PROC, true, nullptr, aurEff);
+        Unit* procTarget = ObjectAccessor::GetUnit(*GetTarget(), _procTargetGUID);
+        if (!procTarget)
+            return;
+
+        GetTarget()->CastSpell(procTarget, SPELL_MAGE_FOCUS_MAGIC_PROC, true, nullptr, aurEff);
     }
 
     void Register() override
@@ -607,7 +621,7 @@ class spell_mage_focus_magic : public AuraScript
     }
 
 private:
-    Unit* _procTarget;
+    ObjectGuid _procTargetGUID;
 };
 
 // -11426 - Ice Barrier
@@ -616,7 +630,7 @@ class spell_mage_ice_barrier_aura : public spell_mage_incanters_absorbtion_base_
     PrepareAuraScript(spell_mage_ice_barrier_aura);
 
     /// @todo: Rework
-    static int32 CalculateSpellAmount(Unit* caster, int32 amount, SpellInfo const* spellInfo, const AuraEffect* aurEff)
+    static int32 CalculateSpellAmount(Unit* caster, int32 amount, SpellInfo const* spellInfo, AuraEffect const* aurEff)
     {
         // +80.68% from sp bonus
         float bonus = 0.8068f;
@@ -652,7 +666,7 @@ class spell_mage_ice_barrier : public SpellScript
     PrepareSpellScript(spell_mage_ice_barrier);
 
     /// @todo: Rework
-    static int32 CalculateSpellAmount(Unit* caster, int32 amount, SpellInfo const* spellInfo, const AuraEffect* aurEff)
+    static int32 CalculateSpellAmount(Unit* caster, int32 amount, SpellInfo const* spellInfo, AuraEffect const* aurEff)
     {
         // +80.68% from sp bonus
         float bonus = 0.8068f;
@@ -1045,7 +1059,14 @@ class spell_mage_combustion : public AuraScript
         // Do not take charges, add a stack of crit buff
         if (!(eventInfo.GetHitMask() & PROC_HIT_CRITICAL))
         {
-            eventInfo.GetActor()->CastSpell(static_cast<Unit*>(nullptr), SPELL_MAGE_COMBUSTION_PROC, true);
+            // Applying the stack mutates the actor's aura map while the proc engine iterates
+            // it (this hook runs from Aura::GetProcEffectMask); defer it so the insert can't
+            // invalidate the live iterator (aura containers are flat_multimaps).
+            Unit* actor = eventInfo.GetActor();
+            actor->m_Events.AddEventAtOffset([actor]()
+            {
+                actor->CastSpell(static_cast<Unit*>(nullptr), SPELL_MAGE_COMBUSTION_PROC, true);
+            }, 1ms);
             return false;
         }
 
@@ -1114,7 +1135,7 @@ class spell_mage_gen_extra_effects : public AuraScript
     bool CheckProc(ProcEventInfo& eventInfo)
     {
         Unit* caster = eventInfo.GetActor();
-        // T8 4P bonus: prevent double proc on Arcane Missiles
+        // prevent double proc on Arcane Missiles
         if (GetSpellInfo()->Id == SPELL_MAGE_HOT_STREAK_PROC && caster->HasAura(SPELL_MAGE_T8_4P_BONUS))
         {
             SpellInfo const* spellInfo = eventInfo.GetSpellInfo();
@@ -1122,6 +1143,12 @@ class spell_mage_gen_extra_effects : public AuraScript
                 (spellInfo->SpellFamilyFlags[0] & 0x00000800)) // Arcane Missiles
                 return false;
         }
+
+        // T8 4P bonus: chance to not consume the proc
+        if (AuraEffect const* aurEff = caster->GetAuraEffect(SPELL_MAGE_T8_4P_BONUS, EFFECT_0))
+            if (roll_chance_i(aurEff->GetAmount()))
+                return false;
+
         return true;
     }
 
@@ -1588,6 +1615,25 @@ class spell_mage_missile_barrage_proc : public AuraScript
     }
 };
 
+// 71761 - Deep Freeze Immunity State
+class spell_mage_deep_freeze_immunity_state : public AuraScript
+{
+    PrepareAuraScript(spell_mage_deep_freeze_immunity_state);
+
+    bool CheckEffectProc(AuraEffect const* /*aurEff*/, ProcEventInfo& eventInfo)
+    {
+        if (!eventInfo.GetProcTarget() || !eventInfo.GetProcTarget()->IsCreature())
+            return false;
+
+        return eventInfo.GetProcTarget()->ToCreature()->HasMechanicTemplateImmunity(1ULL << MECHANIC_STUN);
+    }
+
+    void Register() override
+    {
+        DoCheckEffectProc += AuraCheckEffectProcFn(spell_mage_deep_freeze_immunity_state::CheckEffectProc, EFFECT_0, SPELL_AURA_PROC_TRIGGER_SPELL);
+    }
+};
+
 void AddSC_mage_spell_scripts()
 {
     RegisterSpellScript(spell_mage_arcane_blast);
@@ -1632,4 +1678,5 @@ void AddSC_mage_spell_scripts()
     RegisterSpellScript(spell_mage_summon_water_elemental);
     RegisterSpellScript(spell_mage_fingers_of_frost);
     RegisterSpellScript(spell_mage_magic_absorption);
+    RegisterSpellScript(spell_mage_deep_freeze_immunity_state);
 }
