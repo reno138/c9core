@@ -15,7 +15,8 @@ auctions and guilds are consistent everywhere. The processes coordinate over a
 [NATS](https://nats.io/) message bus.
 
 > **Not related to ToCloud9.** c9core is an independent project and has
-> nothing to do with [ToCloud9](https://github.com/walkline/ToCloud9).
+> nothing to do with [ToCloud9](https://github.com/walkline/ToCloud9). The
+> similar names are a coincidence: "c9" doesn't come from ToCloud9.
 > Upstream AzerothCore merged ToCloud9's clustering hooks in 2026; c9core
 > removes them when merging from upstream, so none of ToCloud9's code or
 > `Cluster.*` settings are present here.
