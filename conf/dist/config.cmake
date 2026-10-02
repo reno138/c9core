@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2016+ c9core <github.com/reno138/c9core>
+# Copyright (C) 2016+ AzerothCore <www.azerothcore.org>
 # Copyright (C) 2021+ WarheadCore <https://github.com/WarheadCore>
 #
 # This file is free software; as a special exception the author gives
