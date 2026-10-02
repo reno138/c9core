@@ -55,8 +55,7 @@ target_link_libraries(game
     acore-core-interface
     nats_static
   PUBLIC
-    game-interface
-    libsidecar)
+    game-interface)
 
 set_target_properties(game
   PROPERTIES

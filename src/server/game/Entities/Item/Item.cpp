@@ -26,7 +26,6 @@
 #include "SpellInfo.h"
 #include "SpellMgr.h"
 #include "StringConvert.h"
-#include "TC9Sidecar.h"
 #include "Tokenize.h"
 #include "WorldPacket.h"
 
@@ -349,7 +348,7 @@ void Item::SaveToDB(CharacterDatabaseTransaction trans)
                 uint8 index = 0;
                 CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(uState == ITEM_NEW ? CHAR_REP_ITEM_INSTANCE : CHAR_UPD_ITEM_INSTANCE);
                 stmt->SetData(  index, GetEntry());
-                stmt->SetData(++index, GetOwnerGUID().GetRawValue());
+                stmt->SetData(++index, GetOwnerGUID().GetCounter());
                 stmt->SetData(++index, GetGuidValue(ITEM_FIELD_CREATOR).GetCounter());
                 stmt->SetData(++index, GetGuidValue(ITEM_FIELD_GIFTCREATOR).GetCounter());
                 stmt->SetData(++index, GetCount());
@@ -382,7 +381,7 @@ void Item::SaveToDB(CharacterDatabaseTransaction trans)
                 if ((uState == ITEM_CHANGED) && IsWrapped())
                 {
                     stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_GIFT_OWNER);
-                    stmt->SetData(0, GetOwnerGUID().GetRawValue());
+                    stmt->SetData(0, GetOwnerGUID().GetCounter());
                     stmt->SetData(1, guid);
                     trans->Append(stmt);
                 }
@@ -1097,32 +1096,29 @@ Item* Item::CreateItem(uint32 item, uint32 count, Player const* player, bool clo
         return nullptr;                                        //don't create item at zero count
 
     ItemTemplate const* pProto = sObjectMgr->GetItemTemplate(item);
-    if (!pProto)
-        ABORT();
-
-    if (count > pProto->GetMaxStackSize())
-        count = pProto->GetMaxStackSize();
-
-    ASSERT_NODEBUGINFO(count != 0 && "pProto->Stackable == 0 but checked at loading already");
-
-    uint16 realmId = DEFAULT_NON_CROSSREALM_REALM_ID;
-    if (sToCloud9Sidecar->IsCrossrealm() && player)
-        realmId = player->GetGUID().GetRealmID();
-
-    Item* pItem = NewItemOrBag(pProto);
-    if (!pItem->Create(sObjectMgr->GetGenerator<HighGuid::Item>().Generate(realmId), item, player))
+    if (pProto)
     {
-        delete pItem;
-        return nullptr;
+        if (count > pProto->GetMaxStackSize())
+            count = pProto->GetMaxStackSize();
+
+        ASSERT_NODEBUGINFO(count != 0 && "pProto->Stackable == 0 but checked at loading already");
+
+        Item* pItem = NewItemOrBag(pProto);
+        if (pItem->Create(sObjectMgr->GetGenerator<HighGuid::Item>().Generate(), item, player))
+        {
+            pItem->SetCount(count);
+            if (!clone)
+                pItem->SetItemRandomProperties(randomPropertyId ? randomPropertyId : Item::GenerateItemRandomPropertyId(item));
+            else if (randomPropertyId)
+                pItem->SetItemRandomProperties(randomPropertyId);
+            return pItem;
+        }
+        else
+            delete pItem;
     }
-
-    pItem->SetCount(count);
-    if (!clone)
-        pItem->SetItemRandomProperties(randomPropertyId ? randomPropertyId : Item::GenerateItemRandomPropertyId(item));
-    else if (randomPropertyId)
-        pItem->SetItemRandomProperties(randomPropertyId);
-
-    return pItem;
+    else
+        ABORT();
+    return nullptr;
 }
 
 Item* Item::CloneItem(uint32 count, Player const* player) const

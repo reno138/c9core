@@ -23,8 +23,8 @@
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
 #include "AddonMgr.h"
-#include "ArenaSeasonMgr.h"
 #include "ArenaTeamMgr.h"
+#include "ArenaSeasonMgr.h"
 #include "AuctionHouseMgr.h"
 #include "AutobroadcastMgr.h"
 #include "BattlefieldMgr.h"
@@ -53,8 +53,8 @@
 #include "GridNotifiersImpl.h"
 #include "GroupMgr.h"
 #include "GuildMgr.h"
-#include "InstanceSaveMgr.h"
 #include "IPLocation.h"
+#include "InstanceSaveMgr.h"
 #include "ItemEnchantmentMgr.h"
 #include "LFGMgr.h"
 #include "Language.h"
@@ -82,7 +82,6 @@
 #include "SmartAI.h"
 #include "SpellMgr.h"
 #include "TaskScheduler.h"
-#include "TC9Sidecar.h"
 #include "TicketMgr.h"
 #include "Transport.h"
 #include "TransportMgr.h"
@@ -927,10 +926,9 @@ void World::SetInitialWorldSettings()
     // A dry run exits below without unwinding main(), so its row would never be marked as cleanly ended
     if (!sConfigMgr->isDryRun())
     {
-        // Must run before this session's row is inserted. Cluster nodes share the realm id, so the newest
-        // row may be another node's live session. The sidecar isn't initialized yet, so read the config.
-        if (!sConfigMgr->GetOption<bool>("Cluster.Enabled", false))
-            LoadPreviousSessionInfo();
+        // c9core: every node of a distributed server shares the realm id, so the newest uptime row
+        // may be another node's live session and would be misreported as a crash. Previous-session
+        // info (LoadPreviousSessionInfo) is therefore not loaded; .server info simply omits it.
 
         LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_INS_UPTIME);
         stmt->SetData(0, realm.Id.Realm);
@@ -1504,24 +1502,6 @@ void World::Update(uint32 diff)
     {
         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update world scripts"));
         sScriptMgr->OnWorldUpdate(diff);
-    }
-
-    if (sToCloud9Sidecar->ClusterModeEnabled())
-    {
-        {
-            METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process TC9 async tasks"));
-            sToCloud9Sidecar->ProcessAsyncTasks();
-        }
-
-        {
-            METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process TC9 hooks"));
-            sToCloud9Sidecar->ProcessHooks();
-        }
-
-        {
-            METRIC_TIMER("world_update_time", METRIC_TAG("type", "Process TC9 gRPC and HTTP requests"));
-            sToCloud9Sidecar->ProcessGrpcOrHttpRequests();
-        }
     }
 
     {

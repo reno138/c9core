@@ -19,7 +19,6 @@
     \ingroup u2w
 */
 
-#include "TC9Sidecar.h"
 #include "WorldSession.h"
 #include "AccountMgr.h"
 #include "BattlegroundMgr.h"
@@ -689,7 +688,7 @@ void WorldSession::SendPlayTimeWarning(PlayTimeFlag flag, int32 playTimeRemainin
 }
 
 /// %Log the player out
-void WorldSession::LogoutPlayer(bool save, bool redirecting)
+void WorldSession::LogoutPlayer(bool save)
 {
     // ── Redirect-out fast path ──────────────────────────────────────────────
     // The player was redirected to another node. This is a session migration,
@@ -816,26 +815,23 @@ void WorldSession::LogoutPlayer(bool save, bool redirecting)
         // there are some positive auras from boss encounters that can be kept by logging out and logging in after boss is dead, and may be used on next bosses
         _player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CHANGE_MAP);
 
-        if (!redirecting)
-        {
-            if (Group *group = _player->GetGroupInvite())
-                sWorld->getBoolConfig(CONFIG_LEAVE_GROUP_ON_LOGOUT)
-                    ? _player->UninviteFromGroup()  // Can disband group.
-                    : group->RemoveInvite(_player); // Just removes invite.
+        if (Group *group = _player->GetGroupInvite())
+            sWorld->getBoolConfig(CONFIG_LEAVE_GROUP_ON_LOGOUT)
+                ? _player->UninviteFromGroup()  // Can disband group.
+                : group->RemoveInvite(_player); // Just removes invite.
 
-            // remove player from the group if he is:
-            // a) in group; b) not in raid group; c) logging out normally (not being kicked or disconnected) d) LeaveGroupOnLogout is enabled
-            if (!sToCloud9Sidecar->ClusterModeEnabled() && _player->GetGroup() && !_player->GetGroup()->isRaidGroup() && !_player->GetGroup()->isLFGGroup() && m_Socket && sWorld->getBoolConfig(CONFIG_LEAVE_GROUP_ON_LOGOUT))
-                _player->RemoveFromGroup();
-            // Remove player from active loot rolls in LFG groups (player stays in group but should not block rolls)
-            else if (Group* group = _player->GetGroup())
-                if (group->isLFGGroup())
-                    group->RemovePlayerFromRolls(_player->GetGUID());
+        // remove player from the group if he is:
+        // a) in group; b) not in raid group; c) logging out normally (not being kicked or disconnected) d) LeaveGroupOnLogout is enabled
+        if (_player->GetGroup() && !_player->GetGroup()->isRaidGroup() && !_player->GetGroup()->isLFGGroup() && m_Socket && sWorld->getBoolConfig(CONFIG_LEAVE_GROUP_ON_LOGOUT))
+            _player->RemoveFromGroup();
+        // Remove player from active loot rolls in LFG groups (player stays in group but should not block rolls)
+        else if (Group* group = _player->GetGroup())
+            if (group->isLFGGroup())
+                group->RemovePlayerFromRolls(_player->GetGUID());
 
-            // pussywizard: checked second time after being removed from a group
-            if (!_player->IsBeingTeleportedFar() && !_player->m_InstanceValid && !_player->IsGameMaster())
-                _player->RepopAtGraveyard();
-        }
+        // pussywizard: checked second time after being removed from a group
+        if (!_player->IsBeingTeleportedFar() && !_player->m_InstanceValid && !_player->IsGameMaster())
+            _player->RepopAtGraveyard();
 
         // Repop at Graveyard or other player far teleport will prevent saving player because of not present map
         // Teleport player immediately for correct player save
@@ -880,17 +876,14 @@ void WorldSession::LogoutPlayer(bool save, bool redirecting)
             }
         }
 
-        if (!redirecting)
-        {
-            //! Broadcast a logout message to the player's friends
-            if (sNatsBus.IsConnected())
-                sNatsBus.AnnounceOffline(_player->GetGUID().GetRawValue());
-            sSocialMgr->SendFriendStatus(_player, FRIEND_OFFLINE, _player->GetGUID(), true);
-            sSocialMgr->RemovePlayerSocial(_player->GetGUID());
+        //! Broadcast a logout message to the player's friends
+        if (sNatsBus.IsConnected())
+            sNatsBus.AnnounceOffline(_player->GetGUID().GetRawValue());
+        sSocialMgr->SendFriendStatus(_player, FRIEND_OFFLINE, _player->GetGUID(), true);
+        sSocialMgr->RemovePlayerSocial(_player->GetGUID());
 
-            //! Call script hook before deletion
-            sScriptMgr->OnPlayerLogout(_player);
-        }
+        //! Call script hook before deletion
+        sScriptMgr->OnPlayerLogout(_player);
 
         METRIC_EVENT("player_events", "Logout", _player->GetName());
 
@@ -927,7 +920,7 @@ void WorldSession::LogoutPlayer(bool save, bool redirecting)
         LOG_DEBUG("network", "SESSION: Sent SMSG_LOGOUT_COMPLETE Message");
 
         //! Mark all characters of the account offline, unless a script running several per account handles it instead
-        if (!redirecting && sScriptMgr->OnPlayerCanMarkAccountOffline(playerGuid, GetAccountId()))
+        if (sScriptMgr->OnPlayerCanMarkAccountOffline(playerGuid, GetAccountId()))
         {
             CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_ACCOUNT_ONLINE);
             stmt->SetData(0, GetAccountId());
@@ -1651,27 +1644,21 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
     LoadAccountData(realmHolder.GetPreparedResult(AccountInfoQueryHolderPerRealm::GLOBAL_ACCOUNT_DATA), GLOBAL_CACHE_MASK);
     LoadTutorialsData(realmHolder.GetPreparedResult(AccountInfoQueryHolderPerRealm::TUTORIALS));
 
-    if (!sToCloud9Sidecar->ClusterModeEnabled())
+    if (!m_inQueue)
     {
-        if (!m_inQueue)
-        {
-            SendAuthResponse(AUTH_OK, true);
-        }
-        else
-        {
-            SendAuthWaitQueue(0);
-        }
+        SendAuthResponse(AUTH_OK, true);
+    }
+    else
+    {
+        SendAuthWaitQueue(0);
     }
 
     SetInQueue(false);
     ResetTimeOutTime(false);
 
-    if (!sToCloud9Sidecar->ClusterModeEnabled())
-    {
-        SendAddonsInfo();
-        SendClientCacheVersion(clientCacheVersion);
-        SendTutorialsData();
-    }
+    SendAddonsInfo();
+    SendClientCacheVersion(clientCacheVersion);
+    SendTutorialsData();
 
     // Auto-login for redirect transfers: fire CMSG_PLAYER_LOGIN internally
     // so the client never sees the character select screen.
@@ -1688,48 +1675,6 @@ void WorldSession::InitializeSessionCallback(CharacterDatabaseQueryHolder const&
         // queues the DB load, and HandlePlayerLoginFromDB (several ticks later)
         // is what reads the flag. It is cleared at the end of that function.
     }
-}
-
-void WorldSession::HandleTC9PrepareForRedirect(WorldPacket& /*recvData*/)
-{
-    if (!sToCloud9Sidecar->ClusterModeEnabled())
-        return;
-
-    Player* player = this->GetPlayer();
-    if (player == nullptr)
-    {
-        WorldPacket data(TC9_SMSG_READY_FOR_REDIRECT, 1);
-        data << uint8(1); // 1 - Failed.
-        SendPacket(&data);
-        return;
-    }
-
-    LOG_DEBUG("network", "Starting saving, AccountId = {}", GetAccountId());
-
-    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
-    player->SaveToDB(trans, false, true);
-    AddTransactionCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete([this](bool success)
-    {
-        WorldPacket data(TC9_SMSG_READY_FOR_REDIRECT, 1);
-        data << uint8(!success); // 0 - Success, 1 - Failed.
-        SendPacket(&data);
-
-        if (!success)
-        {
-            LOG_ERROR("network", "Failed to save player, AccountId = {}", GetAccountId());
-            return;
-        }
-
-        LOG_DEBUG("network", "Saved, AccountId = {}", GetAccountId());
-
-        Player* player = GetPlayer();
-        if (!player)
-            return;
-
-        player->m_Events.AddEventAtOffset([this](){
-            KickPlayer("HandlePrepareForRedirect client redirected");
-        }, 100ms);
-    });
 }
 
 void WorldSession::SetPacketLogging(bool state)

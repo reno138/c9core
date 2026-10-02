@@ -77,5 +77,3 @@ if (BUILD_APPLICATION_WORLDSERVER)
   # ${CMAKE_INSTALL_PREFIX}/bin/nats-server with a starter config in etc/.
   add_subdirectory(nats-server)
 endif()
-
-add_subdirectory(libsidecar)
