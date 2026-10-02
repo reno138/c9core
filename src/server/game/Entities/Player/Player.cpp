@@ -1758,6 +1758,15 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
                     // only SMSG_FORCE_SEND_QUEUED_PACKETS (0x511) to complete the switch.
                     ClientRedirect::SuspendClient(GetSession());
 
+                    // Same as the zone and cold-login paths: from here on this
+                    // session is a migration in progress, not a player. Nothing
+                    // more is sent on the suspended connection, nothing the
+                    // client still sends here is processed, the stale-session
+                    // cleanup leaves it alone when the destination announces
+                    // the player, and logout takes the redirect-out teardown
+                    // (no second save, no offline announcement).
+                    GetSession()->SetRedirectedOut();
+
                     // For group/raid cross-node entry: relay reroute to remote member nodes
                     // so the whole group lands on the same instance node together.
                     // Must be inside the destNode block — no point relaying if we couldn't
