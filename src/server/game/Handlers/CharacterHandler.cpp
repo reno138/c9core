@@ -1115,17 +1115,12 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
                 }
             }
 
-            // Apply cached auras
-            pCurrChar->RemoveAllAuras();
-            for (auto const& ca : cachedState->auras)
-            {
-                pCurrChar->AddAura(ca.spellId, pCurrChar);
-                if (Aura* a = pCurrChar->GetAura(ca.spellId))
-                {
-                    if (ca.stacks > 1) a->SetStackAmount(ca.stacks);
-                    if (ca.duration >= 0) a->SetDuration(ca.duration);
-                }
-            }
+            // Auras are not taken from the cache either (see the transfer
+            // block above): the committed pre-handoff save is exact, whereas
+            // stripping and re-adding cached auras with the player as caster
+            // lost amounts, charges and casters, removed talent/equipment
+            // passives for good, and re-applied area auras such as the paladin
+            // auras with their apply visual on every single hop.
 
             // Update cache ownership to this node
             sSharedPlayerCache.UpdateFromPlayer(playerGuid.GetRawValue(), [](SharedPlayerState& s) {
