@@ -1111,7 +1111,7 @@ class InstallerApp:
             self.ui.scr.erase(); self.ui.title_bar()
             self.ui.put(2, 2, f"Configure Node {i+1} of {n}", C_HIGHLIGHT)
             ip   = self.ui.prompt_text(4, 2, f"Node {i+1} IP address", "127.0.0.1" if i==0 else "")
-            user = self.ui.prompt_text(5, 2, "SSH username", "reno")
+            user = self.ui.prompt_text(5, 2, "SSH username", "wow")
             key  = self.ui.prompt_text(6, 2, "SSH key path (blank = password)", str(Path.home()/".ssh"/"id_rsa"))
             pw   = self.ui.prompt_text(7, 2, "SSH password (blank = use key)", "", password=True) if not key else ""
 

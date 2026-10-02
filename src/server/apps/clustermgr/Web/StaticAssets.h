@@ -133,7 +133,7 @@ header h1{font-size:16px;font-weight:600;color:#e6edf3;letter-spacing:.4px}
     <div class="modal-title">Deploy Wizard</div>
     <div class="form-row">
       <div class="form-group"><label>SSH Host</label><input id="d-host" placeholder="192.0.2.71"></div>
-      <div class="form-group"><label>SSH User</label><input id="d-user" value="reno"></div>
+      <div class="form-group"><label>SSH User</label><input id="d-user" value="wow"></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>SSH Port</label><input id="d-port" type="number" value="22"></div>

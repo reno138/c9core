@@ -114,3 +114,7 @@ local.properties
 #  !modules/yourmodule
 #
 # ==================
+
+# Python bytecode
+__pycache__/
+*.pyc

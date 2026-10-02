@@ -20,9 +20,9 @@
 #    ClusterServer.NatsUrl
 #        Description: NATS server URL.  Must point to the same NATS broker used by worldservers.
 #                     clustermgr subscribes to cluster.mgmt.status and cluster.mgmt.players.
-#        Default:     "nats://192.0.2.70:4222"
+#        Default:     "nats://127.0.0.1:4222"
 
-ClusterServer.NatsUrl = "nats://192.0.2.70:4222"
+ClusterServer.NatsUrl = "nats://127.0.0.1:4222"
 
 #
 #    ClusterServer.NodeDeadThreshold
@@ -154,10 +154,10 @@ Deploy.WorldserverBin  = "./worldserver"
 Deploy.NodemgrBin      = "./nodemgr"
 Deploy.WorldserverConf = "./worldserver.conf"
 Deploy.NodemgrConf     = "./nodemgr.conf"
-Deploy.DefaultSSHUser  = "reno"
+Deploy.DefaultSSHUser  = "wow"
 Deploy.DefaultSSHPort  = 22
 Deploy.DefaultSSHKey   = "~/.ssh/id_rsa"
-Deploy.DefaultRemotePath = "/home/wow/wowcluster"
+Deploy.DefaultRemotePath = "/home/wow/335"
 
 #
 ###################################################################################################

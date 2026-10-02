@@ -9,7 +9,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=reno
+User=wow
 WorkingDirectory=/home/wow/335/bin
 ExecStart=/home/wow/335/bin/clustermgr -c /home/wow/335/etc/clustermgr.conf
 Restart=always
