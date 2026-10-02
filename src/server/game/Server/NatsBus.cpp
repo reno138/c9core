@@ -994,8 +994,14 @@ void NatsBus::HandleRemotePlayerOnline(std::vector<uint8> const& payload)
     sWorld->QueueCallback([remoteGuid, remoteZoneId, remoteLevel, remoteClass]()
     {
         // Cross-node session cleanup: kick any stale session for this GUID.
+        // Not the session that just redirected this player out: the client is
+        // mid-switch and still holds that connection open. Closing it here
+        // is what the client sees as a disconnect. It goes away on its own
+        // when the client closes it (WorldSession::Update drops the session
+        // once its socket is gone).
         if (Player* ghost = ObjectAccessor::FindConnectedPlayer(ObjectGuid(remoteGuid)))
-            ghost->GetSession()->KickPlayer("cross-node reconnect");
+            if (WorldSession* s = ghost->GetSession(); s && !s->IsRedirectedOut())
+                s->KickPlayer("cross-node reconnect");
 
         // Friend notification: tell local friends this player came online.
         sSocialMgr->NotifyRemoteFriendOnline(ObjectGuid(remoteGuid),

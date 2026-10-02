@@ -317,6 +317,15 @@ void WorldSession::SendPacket(WorldPacket const* packet)
     if (!m_Socket)
         return;
 
+    // Distributed server: once the client has been redirected to another node,
+    // this connection is suspended (map path) or abandoned (zone path). Anything
+    // sent on it after SMSG_REDIRECT_CLIENT/SMSG_SUSPEND_COMMS corrupts the
+    // client's redirect: tearing down a talented, buffed character streams
+    // hundreds of aura and spell-modifier packets here and the client never
+    // completes the switch. Drop everything.
+    if (_redirectedOut)
+        return;
+
 #if defined(C9CORE_DEBUG)
     // Code for network use statistic
     static uint64 sendPacketCount = 0;
@@ -416,7 +425,16 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
 
     constexpr uint32 MAX_PROCESSED_PACKETS_IN_SAME_WORLDSESSION_UPDATE = 150;
 
-    while (m_Socket && _recvQueue.next(packet, updater))
+    // Distributed server: a redirected-out session only lingers until the
+    // client closes the old connection. Whatever the client still sends here
+    // belongs to the destination node; handling it (or letting AntiDOS kick
+    // the session and close the socket under the client) only disturbs the
+    // switch. Discard it.
+    if (_redirectedOut)
+        while (_recvQueue.next(packet, updater))
+            delete packet;
+
+    while (m_Socket && !_redirectedOut && _recvQueue.next(packet, updater))
     {
         OpcodeClient opcode = static_cast<OpcodeClient>(packet->GetOpcode());
         ClientOpcodeHandler const* opHandle = opcodeTable[opcode];

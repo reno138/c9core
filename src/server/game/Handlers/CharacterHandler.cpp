@@ -923,9 +923,13 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 
             // Clean up — client will disconnect and reconnect to dest node.
             // Mark as redirected so the session teardown skips AnnounceOffline/SaveToDB.
+            // Nothing may reach the client on this connection from here on
+            // (SendPacket drops it once redirected out); the aura/talent
+            // teardown below would otherwise stream hundreds of packets to the
+            // suspended connection and break the redirect.
             SetRedirectedOut();
-            pCurrChar->RemoveAllAuras();
             SetPlayer(nullptr);
+            pCurrChar->RemoveAllAuras();
             delete pCurrChar;
             m_playerLoading = false;
             return;
@@ -956,6 +960,11 @@ void WorldSession::HandlePlayerLoginFromDB(LoginQueryHolder const& holder)
 
             // Vitals
             pCurrChar->SetHealth(std::min(transfer->health, pCurrChar->GetMaxHealth()));
+            // The transfer carries no death state. A player handed over with 0 HP
+            // is dead; without this the session stays "alive" with 0 HP, the
+            // release request is ignored and the next hit kills them again.
+            if (transfer->health == 0 && pCurrChar->IsAlive())
+                pCurrChar->KillPlayer();
             if (transfer->power <= pCurrChar->GetMaxPower(Powers(transfer->powerType)))
                 pCurrChar->SetPower(Powers(transfer->powerType), transfer->power);
 

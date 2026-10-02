@@ -596,8 +596,9 @@ void Player::Update(uint32 p_time)
         {
             m_zoneTransferDwellTimer = 0;
 
-            // If cooldown is still active, restart the dwell timer (wait for cooldown)
-            if (m_zoneTransferCooldown > 0)
+            // If cooldown is still active, or the player died while dwelling,
+            // restart the dwell timer (wait)
+            if (m_zoneTransferCooldown > 0 || !IsAlive())
             {
                 m_zoneTransferDwellTimer = ZONE_TRANSFER_DWELL_MS;
                 // Don't clear dwellZone — keep waiting
@@ -1566,8 +1567,14 @@ void Player::UpdateClusterZoneRouting(uint32 zoneId)
     // Start the dwell timer when entering a non-local zone. The cooldown check
     // is done when the dwell EXPIRES (in Player::Update), not here — because
     // UpdateZone only fires on zone change and won't retry if cooldown was active.
+    // Dead players and ghosts stay where they are: the corpse lives on this
+    // node's map, and the transfer carries hit points but no death state, so a
+    // dead player would arrive "alive" with 0 HP (release ignored) and a ghost
+    // would arrive alive with 1 HP. The periodic zone tick re-evaluates once
+    // the player is alive again.
     if (sClusterMgr.IsEnabled() && !sClusterMgr.IsZoneLocal(zoneId)
         && sNatsBus.IsConnected() && sClusterMgr.IsMapLocal(GetMapId())
+        && IsAlive()
         && !IsInCombat() && !IsInFlight() && !HasUnitState(UNIT_STATE_CASTING)
         && !GetVehicle() && !IsBeingTeleportedFar())
     {
