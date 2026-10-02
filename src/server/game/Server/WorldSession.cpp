@@ -326,6 +326,25 @@ void WorldSession::SendPacket(WorldPacket const* packet)
     if (_redirectedOut)
         return;
 
+    // Handoff arrival, character still loading (not yet in the world): casts
+    // made while loading (passive talents are cast when learned, for one)
+    // must not reach the client. On a real login the client has no character
+    // yet and discards them; on a handoff it still shows the character from
+    // the previous node and plays the cast's visual on it, once per hop.
+    if (_redirectAutoLoginGuid != 0 && (!_player || !_player->IsInWorld()))
+    {
+        switch (packet->GetOpcode())
+        {
+            case SMSG_SPELL_START:
+            case SMSG_SPELL_GO:
+            case SMSG_PLAY_SPELL_VISUAL:
+            case SMSG_PLAY_SPELL_IMPACT:
+                return;
+            default:
+                break;
+        }
+    }
+
 #if defined(C9CORE_DEBUG)
     // Code for network use statistic
     static uint64 sendPacketCount = 0;
